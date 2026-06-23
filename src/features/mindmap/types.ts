@@ -1,6 +1,7 @@
 export type MindmapNode = {
   id: string;
   text: string;
+  remark: string;
   children: MindmapNode[];
 };
 

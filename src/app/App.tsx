@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
+import { RemarkPanel } from '../features/mindmap/RemarkPanel';
 import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
 import type { MindmapNode } from '../features/mindmap/types';
 
 const createCenterNode = (): MindmapNode => ({
   id: 'root',
   text: '中心主题',
+  remark: '',
   children: [],
 });
 
 const createNode = (): MindmapNode => ({
   id: crypto.randomUUID(),
   text: '新节点',
+  remark: '',
   children: [],
 });
 
@@ -53,6 +56,25 @@ const deleteNodeById = (node: MindmapNode, nodeId: string): MindmapNode => ({
     .filter((child) => child.id !== nodeId)
     .map((child) => deleteNodeById(child, nodeId)),
 });
+
+const findNodeById = (
+  node: MindmapNode,
+  nodeId: string,
+): MindmapNode | null => {
+  if (node.id === nodeId) {
+    return node;
+  }
+
+  for (const child of node.children) {
+    const matchedNode = findNodeById(child, nodeId);
+
+    if (matchedNode) {
+      return matchedNode;
+    }
+  }
+
+  return null;
+};
 
 type MindmapTreeProps = {
   node: MindmapNode;
@@ -140,8 +162,10 @@ export function App() {
   const [selectedNodeId, setSelectedNodeId] = useState('root');
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
+  const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
   const [message, setMessage] = useState('');
   const messageTimerRef = useRef<number | undefined>(undefined);
+  const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
 
   useEffect(() => {
     return () => {
@@ -225,6 +249,15 @@ export function App() {
     setEditingNodeId(null);
   };
 
+  const handleRemarkChange = (remark: string) => {
+    setMindmap((currentMindmap) =>
+      updateNodeById(currentMindmap, selectedNode.id, (node) => ({
+        ...node,
+        remark,
+      })),
+    );
+  };
+
   const handleStartEdit = (node: MindmapNode) => {
     setSelectedNodeId(node.id);
     setEditingNodeId(node.id);
@@ -304,21 +337,30 @@ export function App() {
         ) : null}
       </section>
 
-      <section className="mindmap-canvas" aria-label="思维导图画布">
-        <div className="canvas-grid" aria-hidden="true" />
-        <div className="mindmap-tree">
-          <MindmapTree
-            node={mindmap}
-            selectedNodeId={selectedNodeId}
-            editingNodeId={editingNodeId}
-            editingText={editingText}
-            onSelectNode={setSelectedNodeId}
-            onStartEdit={handleStartEdit}
-            onEditingTextChange={setEditingText}
-            onCommitEdit={handleCommitEdit}
-          />
-        </div>
-      </section>
+      <div className="workspace-layout">
+        <section className="mindmap-canvas" aria-label="思维导图画布">
+          <div className="canvas-grid" aria-hidden="true" />
+          <div className="mindmap-tree">
+            <MindmapTree
+              node={mindmap}
+              selectedNodeId={selectedNodeId}
+              editingNodeId={editingNodeId}
+              editingText={editingText}
+              onSelectNode={setSelectedNodeId}
+              onStartEdit={handleStartEdit}
+              onEditingTextChange={setEditingText}
+              onCommitEdit={handleCommitEdit}
+            />
+          </div>
+        </section>
+
+        <RemarkPanel
+          selectedNode={selectedNode}
+          mode={remarkMode}
+          onModeChange={setRemarkMode}
+          onRemarkChange={handleRemarkChange}
+        />
+      </div>
     </main>
   );
 }
