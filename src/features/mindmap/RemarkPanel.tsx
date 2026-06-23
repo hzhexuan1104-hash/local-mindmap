@@ -19,7 +19,7 @@ export function RemarkPanel({
   return (
     <aside className="remark-panel" aria-labelledby="remark-panel-title">
       <div className="remark-panel-header">
-        <div>
+        <div className="remark-title-block">
           <p className="eyebrow">Remark</p>
           <h2 id="remark-panel-title">{selectedNode.text}</h2>
         </div>

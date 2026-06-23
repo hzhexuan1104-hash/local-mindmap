@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createMindmapLayoutStyle } from '../features/mindmap/layout';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
 import { RemarkPanel } from '../features/mindmap/RemarkPanel';
 import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
@@ -117,9 +118,10 @@ function MindmapTree({
         }}
       >
         {isEditing ? (
-          <input
+          <textarea
             className="node-editor"
             value={editingText}
+            rows={1}
             autoFocus
             onClick={(event) => event.stopPropagation()}
             onDoubleClick={(event) => event.stopPropagation()}
@@ -127,6 +129,7 @@ function MindmapTree({
             onBlur={onCommitEdit}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
+                event.preventDefault();
                 onCommitEdit();
               }
             }}
@@ -166,6 +169,7 @@ export function App() {
   const [message, setMessage] = useState('');
   const messageTimerRef = useRef<number | undefined>(undefined);
   const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
+  const mindmapLayoutStyle = createMindmapLayoutStyle();
 
   useEffect(() => {
     return () => {
@@ -245,7 +249,7 @@ export function App() {
     }
 
     setMindmap((currentMindmap) => deleteNodeById(currentMindmap, selectedNodeId));
-    setSelectedNodeId('root');
+    setSelectedNodeId(mindmap.id);
     setEditingNodeId(null);
   };
 
@@ -340,7 +344,7 @@ export function App() {
       <div className="workspace-layout">
         <section className="mindmap-canvas" aria-label="思维导图画布">
           <div className="canvas-grid" aria-hidden="true" />
-          <div className="mindmap-tree">
+          <div className="mindmap-tree" style={mindmapLayoutStyle}>
             <MindmapTree
               node={mindmap}
               selectedNodeId={selectedNodeId}
