@@ -1,4 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+import { exportMindmapExcel } from '../features/mindmap/exportExcel';
+import { exportMindmapJson } from '../features/mindmap/exportJson';
+import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
+import {
+  ExcelImportError,
+  importMindmapExcel,
+} from '../features/mindmap/importExcel';
+import { importMindmapJson } from '../features/mindmap/importJson';
+import { importMindmapMarkdown } from '../features/mindmap/importMarkdown';
 import { createMindmapLayoutStyle } from '../features/mindmap/layout';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
 import { RemarkPanel } from '../features/mindmap/RemarkPanel';
@@ -196,6 +205,13 @@ export function App() {
     showMessage('已生成 mindmap.lmind 文件');
   };
 
+  const applyImportedMindmap = (importedMindmap: MindmapNode) => {
+    setMindmap(importedMindmap);
+    setSelectedNodeId(importedMindmap.id);
+    setEditingNodeId(null);
+    setEditingText('');
+  };
+
   const handleOpenMindmap = async () => {
     try {
       const openedMindmap = await openMindmapFromLocalFile();
@@ -204,13 +220,75 @@ export function App() {
         return;
       }
 
-      setMindmap(openedMindmap);
-      setSelectedNodeId(openedMindmap.id);
-      setEditingNodeId(null);
-      setEditingText('');
+      applyImportedMindmap(openedMindmap);
       showMessage('已打开 .lmind 文件');
     } catch {
       showMessage('文件格式不正确，无法打开');
+    }
+  };
+
+  const handleExportMarkdown = () => {
+    exportMindmapMarkdown(mindmap);
+    showMessage('已导出 mindmap.md');
+  };
+
+  const handleExportExcel = () => {
+    exportMindmapExcel(mindmap);
+    showMessage('已导出 mindmap.xlsx');
+  };
+
+  const handleExportJson = () => {
+    exportMindmapJson(mindmap);
+    showMessage('已导出 mindmap.json');
+  };
+
+  const handleImportJson = async () => {
+    try {
+      const importedMindmap = await importMindmapJson();
+
+      if (!importedMindmap) {
+        return;
+      }
+
+      applyImportedMindmap(importedMindmap);
+      showMessage('已导入 JSON');
+    } catch {
+      showMessage('JSON 格式不正确，无法导入');
+    }
+  };
+
+  const handleImportMarkdown = async () => {
+    try {
+      const importedMindmap = await importMindmapMarkdown();
+
+      if (!importedMindmap) {
+        return;
+      }
+
+      applyImportedMindmap(importedMindmap);
+      showMessage('已导入 Markdown');
+    } catch {
+      showMessage('Markdown 格式不正确，无法导入');
+    }
+  };
+
+  const handleImportExcel = async () => {
+    try {
+      const importedMindmap = await importMindmapExcel();
+
+      if (!importedMindmap) {
+        return;
+      }
+
+      applyImportedMindmap(importedMindmap);
+      showMessage('已导入 Excel');
+    } catch (error) {
+      if (error instanceof ExcelImportError) {
+        showMessage(error.message);
+        return;
+      }
+
+      showMessage('Excel 格式不正确，无法导入');
     }
   };
 
@@ -312,6 +390,48 @@ export function App() {
           onClick={handleOpenMindmap}
         >
           打开 .lmind
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleExportMarkdown}
+        >
+          导出 Markdown
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleExportExcel}
+        >
+          导出 Excel
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleExportJson}
+        >
+          导出 JSON
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleImportJson}
+        >
+          导入 JSON
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleImportMarkdown}
+        >
+          导入 Markdown
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleImportExcel}
+        >
+          导入 Excel
         </button>
       </header>
 

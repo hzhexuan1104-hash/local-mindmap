@@ -1,4 +1,5 @@
 import type { LmindDocument, MindmapNode } from './types';
+import { downloadTextFile } from './fileUtils';
 
 const DEFAULT_FILE_NAME = 'mindmap.lmind';
 
@@ -24,18 +25,9 @@ export function saveMindmapAsLmind(
   rootNode: MindmapNode,
   fileName = DEFAULT_FILE_NAME,
 ) {
-  const fileContent = serializeLmindDocument(rootNode);
-  const blob = new Blob([fileContent], {
-    type: 'application/json;charset=utf-8',
-  });
-  const objectUrl = URL.createObjectURL(blob);
-  const downloadLink = document.createElement('a');
-
-  downloadLink.href = objectUrl;
-  downloadLink.download = fileName;
-  downloadLink.style.display = 'none';
-  document.body.appendChild(downloadLink);
-  downloadLink.click();
-  downloadLink.remove();
-  URL.revokeObjectURL(objectUrl);
+  downloadTextFile(
+    serializeLmindDocument(rootNode),
+    fileName,
+    'application/json;charset=utf-8',
+  );
 }

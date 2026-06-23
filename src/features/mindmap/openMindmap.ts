@@ -1,4 +1,5 @@
 import type { LmindDocument, MindmapNode } from './types';
+import { selectLocalFile } from './fileUtils';
 
 const OPEN_FILE_ACCEPT = '.lmind,application/json';
 
@@ -79,30 +80,8 @@ export function parseLmindDocument(fileContent: string): MindmapNode {
   return normalizeMindmapNode(parsedContent.rootNode);
 }
 
-function selectLocalLmindFile(): Promise<File | null> {
-  return new Promise((resolve) => {
-    const fileInput = document.createElement('input');
-
-    fileInput.type = 'file';
-    fileInput.accept = OPEN_FILE_ACCEPT;
-    fileInput.style.display = 'none';
-
-    fileInput.addEventListener(
-      'change',
-      () => {
-        resolve(fileInput.files?.[0] ?? null);
-        fileInput.remove();
-      },
-      { once: true },
-    );
-
-    document.body.appendChild(fileInput);
-    fileInput.click();
-  });
-}
-
 export async function openMindmapFromLocalFile(): Promise<MindmapNode | null> {
-  const selectedFile = await selectLocalLmindFile();
+  const selectedFile = await selectLocalFile(OPEN_FILE_ACCEPT);
 
   if (!selectedFile) {
     return null;
