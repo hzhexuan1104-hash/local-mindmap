@@ -44,3 +44,7 @@ npm run build
 - 导入导出
 - 插件系统
 - 完整思维导图编辑能力
+
+## 在线预览
+
+https://hzhexuan1104-hash.github.io/local-mindmap/
