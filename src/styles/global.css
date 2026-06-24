@@ -452,7 +452,7 @@ h3 {
   z-index: 1;
   min-width: max-content;
   min-height: 100%;
-  transform-origin: top center;
+  transform-origin: top left;
 }
 
 .mindmap-tree {
@@ -460,8 +460,8 @@ h3 {
   min-width: max-content;
   min-height: 100%;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  align-items: center;
+  justify-content: flex-start;
   padding: var(--mindmap-canvas-padding, 80px);
 }
 
@@ -469,15 +469,27 @@ h3 {
   position: relative;
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   min-width: max-content;
 }
 
 .mindmap-node-wrap {
   position: relative;
+  flex: 0 0 auto;
   display: flex;
   justify-content: center;
+}
+
+.mindmap-node-wrap:has(+ .child-branches)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: calc(var(--mindmap-child-horizontal-gap, 96px) / -2);
+  width: calc(var(--mindmap-child-horizontal-gap, 96px) / 2);
+  height: 2px;
+  background: var(--line-color, #b7c5d8);
+  transform: translateY(-50%);
 }
 
 .mindmap-node {
@@ -554,7 +566,7 @@ h3 {
 .collapse-toggle {
   position: absolute;
   right: -14px;
-  bottom: -14px;
+  top: 50%;
   z-index: 2;
   width: 28px;
   height: 28px;
@@ -568,6 +580,7 @@ h3 {
   box-shadow: 0 4px 12px rgb(23 32 51 / 14%);
   cursor: pointer;
   font-weight: 700;
+  transform: translateY(-50%);
 }
 
 .mindmap-node.has-node-type.is-selected {
@@ -600,47 +613,47 @@ h3 {
 .child-branches {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: var(--mindmap-child-horizontal-gap, 52px);
-  margin-top: var(--mindmap-child-vertical-gap, 64px);
+  gap: var(--mindmap-child-vertical-gap, 80px);
+  margin-left: var(--mindmap-child-horizontal-gap, 96px);
 }
 
 .child-branches::before {
   content: "";
   position: absolute;
-  top: calc(var(--mindmap-child-vertical-gap, 64px) / -2);
-  left: 50%;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--mindmap-child-horizontal-gap, 96px) / -2);
   width: 2px;
-  height: calc(var(--mindmap-child-vertical-gap, 64px) / 2);
   background: var(--line-color, #b7c5d8);
 }
 
 .child-branches::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: calc(var(--mindmap-node-max-width, 220px) / 2);
-  right: calc(var(--mindmap-node-max-width, 220px) / 2);
-  height: 2px;
-  background: var(--line-color, #b7c5d8);
+  display: none;
 }
 
 .child-branches > .mindmap-branch::before {
   content: "";
   position: absolute;
-  top: calc(var(--mindmap-child-vertical-gap, 64px) * -1);
-  left: 50%;
-  width: 2px;
-  height: var(--mindmap-child-vertical-gap, 64px);
+  top: 50%;
+  left: calc(var(--mindmap-child-horizontal-gap, 96px) / -2);
+  width: calc(var(--mindmap-child-horizontal-gap, 96px) / 2);
+  height: 2px;
   background: var(--line-color, #b7c5d8);
+  transform: translateY(-50%);
 }
 
 .child-branches > .mindmap-branch:only-child::before {
-  top: calc(var(--mindmap-child-vertical-gap, 64px) * -1);
-  height: var(--mindmap-child-vertical-gap, 64px);
+  left: calc(var(--mindmap-child-horizontal-gap, 96px) / -2);
+  width: calc(var(--mindmap-child-horizontal-gap, 96px) / 2);
 }
 
 .child-branches:has(> .mindmap-branch:only-child)::after {
+  display: none;
+}
+
+.child-branches:has(> .mindmap-branch:only-child)::before {
   display: none;
 }
 

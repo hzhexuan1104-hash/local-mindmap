@@ -2,8 +2,8 @@ import type { CSSProperties } from 'react';
 
 const MINDMAP_LAYOUT = {
   canvasPadding: 80,
-  childHorizontalGap: 52,
-  childVerticalGap: 64,
+  childHorizontalGap: 96,
+  childVerticalGap: 80,
   nodeMinWidth: 144,
   nodeMaxWidth: 220,
 } as const;
