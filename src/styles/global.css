@@ -905,6 +905,148 @@ h2 {
   padding: 4px;
 }
 
+.excel-mapping-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgb(15 23 42 / 48%);
+}
+
+.excel-mapping-dialog {
+  width: min(920px, 100%);
+  max-width: calc(100vw - 64px);
+  max-height: min(780px, calc(100vh - 64px));
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgb(15 23 42 / 28%);
+}
+
+.excel-mapping-header,
+.excel-mapping-actions {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.excel-header-mode {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #172033;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.excel-header-mode input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.excel-mapping-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.excel-mapping-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: #5e6d82;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.excel-mapping-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #c7d2e2;
+  border-radius: 6px;
+  color: #172033;
+  background: #ffffff;
+}
+
+.excel-header-preview {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.excel-header-list {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.excel-header-list span {
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: #14315f;
+  background: #eef5ff;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 13px;
+}
+
+.excel-sample-table-wrap {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+}
+
+.excel-sample-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.excel-sample-table th,
+.excel-sample-table td {
+  max-width: 220px;
+  padding: 8px;
+  border: 1px solid #dce3ee;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: left;
+}
+
+.excel-sample-table th {
+  background: #f1f5fa;
+}
+
+.excel-mapping-warning {
+  margin: 0;
+  color: #9a3412;
+  font-size: 14px;
+}
+
+.primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 @media (max-width: 640px) {
   .app-shell {
     padding: 16px;
@@ -938,6 +1080,10 @@ h2 {
 
   .template-thumbnail {
     width: 100%;
+  }
+
+  .excel-mapping-grid {
+    grid-template-columns: 1fr;
   }
 
   .mindmap-tree {

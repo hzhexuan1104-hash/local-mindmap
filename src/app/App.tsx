@@ -14,6 +14,7 @@ import {
   zoomCanvasView,
   type CanvasViewState,
 } from '../features/mindmap/canvasControls';
+import { ExcelImportMappingDialog } from '../features/mindmap/ExcelImportMappingDialog';
 import { exportMindmapExcel } from '../features/mindmap/exportExcel';
 import { exportMindmapAsImage } from '../features/mindmap/exportImage';
 import { exportMindmapJson } from '../features/mindmap/exportJson';
@@ -27,7 +28,11 @@ import {
 } from '../features/mindmap/history';
 import {
   ExcelImportError,
-  importMindmapExcel,
+  parseExcelRowsToMindmap,
+  selectExcelImportPreview,
+  type ExcelImportMapping,
+  type ExcelImportPreview,
+  type RawExcelRow,
 } from '../features/mindmap/importExcel';
 import { importMindmapJson } from '../features/mindmap/importJson';
 import { importMindmapMarkdown } from '../features/mindmap/importMarkdown';
@@ -289,6 +294,8 @@ export function App() {
   const [editingText, setEditingText] = useState('');
   const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
   const [message, setMessage] = useState('');
+  const [excelImportPreview, setExcelImportPreview] =
+    useState<ExcelImportPreview | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [replacementText, setReplacementText] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('all');
@@ -513,14 +520,41 @@ export function App() {
 
   const handleImportExcel = async () => {
     try {
-      const importedMindmap = await importMindmapExcel();
+      const preview = await selectExcelImportPreview();
 
-      if (!importedMindmap) {
+      if (!preview) {
         return;
       }
 
+      setExcelImportPreview(preview);
+    } catch (error) {
+      if (error instanceof ExcelImportError) {
+        showMessage(error.message);
+        return;
+      }
+
+      showMessage('Excel 格式不正确，无法导入');
+    }
+  };
+
+  const handleConfirmExcelImport = (
+    mapping: ExcelImportMapping,
+    rows: RawExcelRow[],
+  ) => {
+    if (!excelImportPreview) {
+      return;
+    }
+
+    try {
+      const importedMindmap = parseExcelRowsToMindmap(
+        rows,
+        mapping,
+        nodeTypes,
+      );
+
       recordHistory();
-      applyProject({ rootNode: importedMindmap, nodeTypes: [], themeId });
+      applyProject({ rootNode: importedMindmap, nodeTypes, themeId });
+      setExcelImportPreview(null);
       showMessage('已导入 Excel');
     } catch (error) {
       if (error instanceof ExcelImportError) {
@@ -1393,6 +1427,14 @@ export function App() {
           onRemarkChange={handleRemarkChange}
         />
       </div>
+
+      {excelImportPreview ? (
+        <ExcelImportMappingDialog
+          preview={excelImportPreview}
+          onCancel={() => setExcelImportPreview(null)}
+          onConfirm={handleConfirmExcelImport}
+        />
+      ) : null}
     </main>
   );
 }
