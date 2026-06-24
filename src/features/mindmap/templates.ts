@@ -8,6 +8,7 @@ export type MindmapTemplate = {
   createTime: string;
   rootNode: MindmapNode;
   nodeTypes: MindmapNodeType[];
+  themeId: string;
 };
 
 function cloneNode<T>(value: T): T {
@@ -37,6 +38,7 @@ export function createTemplateFromMindmap(
   name: string,
   rootNode: MindmapNode,
   nodeTypes: MindmapNodeType[],
+  themeId = 'default-blue',
 ): MindmapTemplate {
   return {
     id: crypto.randomUUID(),
@@ -44,6 +46,7 @@ export function createTemplateFromMindmap(
     createTime: new Date().toISOString(),
     rootNode: cloneNode(rootNode),
     nodeTypes: cloneNode(nodeTypes),
+    themeId,
   };
 }
 
@@ -66,5 +69,6 @@ export function cloneTemplateProject(template: MindmapTemplate) {
   return {
     rootNode: cloneNode(template.rootNode),
     nodeTypes: cloneNode(template.nodeTypes ?? []),
+    themeId: template.themeId ?? 'default-blue',
   };
 }

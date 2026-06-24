@@ -6,6 +6,7 @@ const DEFAULT_FILE_NAME = 'mindmap.lmind';
 export function createLmindDocument(
   rootNode: MindmapNode,
   nodeTypes: MindmapNodeType[] = [],
+  themeId = 'default-blue',
 ): LmindDocument {
   const currentTime = new Date().toISOString();
 
@@ -14,7 +15,7 @@ export function createLmindDocument(
     meta: {
       createTime: currentTime,
       updateTime: currentTime,
-      theme: 'default',
+      theme: themeId,
     },
     nodeTypes,
     rootNode,
@@ -24,17 +25,19 @@ export function createLmindDocument(
 export function serializeLmindDocument(
   rootNode: MindmapNode,
   nodeTypes: MindmapNodeType[] = [],
+  themeId = 'default-blue',
 ): string {
-  return JSON.stringify(createLmindDocument(rootNode, nodeTypes), null, 2);
+  return JSON.stringify(createLmindDocument(rootNode, nodeTypes, themeId), null, 2);
 }
 
 export function saveMindmapAsLmind(
   rootNode: MindmapNode,
   fileName = DEFAULT_FILE_NAME,
   nodeTypes: MindmapNodeType[] = [],
+  themeId = 'default-blue',
 ) {
   downloadTextFile(
-    serializeLmindDocument(rootNode, nodeTypes),
+    serializeLmindDocument(rootNode, nodeTypes, themeId),
     fileName,
     'application/json;charset=utf-8',
   );

@@ -17,6 +17,7 @@ function isRawMindmapNode(value: unknown): value is {
   text: string;
   remark?: unknown;
   nodeTypeId?: unknown;
+  collapsed?: unknown;
   children: unknown[];
 } {
   if (!isRecord(value)) {
@@ -30,6 +31,7 @@ function isRawMindmapNode(value: unknown): value is {
     Array.isArray(value.children) &&
     (value.remark === undefined || typeof value.remark === 'string') &&
     (value.nodeTypeId === undefined || typeof value.nodeTypeId === 'string') &&
+    (value.collapsed === undefined || typeof value.collapsed === 'boolean') &&
     value.children.every(isRawMindmapNode)
   );
 }
@@ -39,6 +41,7 @@ function normalizeMindmapNode(node: {
   text: string;
   remark?: unknown;
   nodeTypeId?: unknown;
+  collapsed?: unknown;
   children: unknown[];
 }): MindmapNode {
   return {
@@ -48,6 +51,7 @@ function normalizeMindmapNode(node: {
     ...(typeof node.nodeTypeId === 'string' && node.nodeTypeId
       ? { nodeTypeId: node.nodeTypeId }
       : {}),
+    ...(typeof node.collapsed === 'boolean' ? { collapsed: node.collapsed } : {}),
     children: node.children.map((child) =>
       normalizeMindmapNode(
         child as {
@@ -55,6 +59,7 @@ function normalizeMindmapNode(node: {
           text: string;
           remark?: unknown;
           nodeTypeId?: unknown;
+          collapsed?: unknown;
           children: unknown[];
         },
       ),
@@ -116,6 +121,7 @@ export function parseLmindProject(fileContent: string): MindmapProject {
   return {
     rootNode: normalizeMindmapNode(parsedContent.rootNode),
     nodeTypes: normalizeNodeTypes(parsedContent.nodeTypes),
+    themeId: parsedContent.meta.theme || 'default-blue',
   };
 }
 
