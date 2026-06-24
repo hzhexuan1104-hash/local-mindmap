@@ -22,6 +22,14 @@
 - 主题系统：内置默认蓝、清新绿、活力橙、暗色黑、简洁灰。
 - 插件管理基础版：支持本地 JSON 插件安装、启用、禁用、卸载，内置主题包、图标包和 TXT 导出示例插件。
 - 操作历史：支持撤销 / 重做，历史记录不少于 50 步。
+- 自动化测试基础：使用 Vitest 覆盖 Markdown 导入导出、JSON 校验、Excel 导入核心解析、TXT 导出和插件 manifest 校验。
+
+## 当前完成度
+
+- P0/P1 核心能力已覆盖主要编辑、备注、保存打开、导入导出、模板、查找替换、主题和基础画布操作。
+- P2 能力已实现自定义节点类型增强和插件管理基础版。
+- 桌面端真实打包尚未完成，当前已补充打包准备方案和信创适配说明。
+- 复制 / 剪切 / 粘贴、拖拽调整层级、框选批量操作、官方模板库仍属于后续任务。
 
 ## 本地运行
 
@@ -62,6 +70,23 @@ npm run build
 npm run preview
 ```
 
+## 自动化测试
+
+运行单元测试：
+
+```bash
+npm run test
+```
+
+当前测试覆盖：
+
+- Markdown 导出：节点标题、层级、`LMIND_NODE` 标记、备注标题保留。
+- Markdown 导入：标记模式、普通 Markdown、代码块标题忽略。
+- JSON 导入校验：合法 `.lmind` 解析、非法 JSON/结构拒绝。
+- Excel 导入核心解析：列视图、有表头/无表头、层级树生成、错误层级提示。
+- TXT 导出：层级缩进和备注输出。
+- 插件 manifest 校验：合法 manifest 与缺失必填字段。
+
 ## GitHub Pages 部署说明
 
 项目是静态前端应用，可将 `npm run build` 生成的 `dist/` 目录部署到 GitHub Pages。
@@ -77,6 +102,33 @@ npm run preview
 
 ```text
 https://hzhexuan1104-hash.github.io/local-mindmap/
+```
+
+## 桌面端打包准备
+
+当前阶段没有强行接入 Electron 或 Tauri，Web 版和 GitHub Pages 部署方式保持不变。
+
+桌面端后续方向：
+
+- 保留当前 Vite Web 应用作为核心 UI。
+- 后续优先评估 Tauri 或 Electron 的最小桌面壳。
+- 桌面端继续满足纯本地运行、不上传用户数据、支持 `.lmind` 打开和保存。
+- 先验证 Windows、macOS、Linux / 信创系统及国产 CPU 架构兼容，再进入正式打包。
+
+详细方案见：
+
+```text
+docs/desktop-packaging-plan.md
+```
+
+## 信创适配说明
+
+信创适配文档覆盖统信 UOS、银河麒麟、Windows 10+、macOS 11+，以及 x86/x64、ARM64、飞腾、鲲鹏、龙芯等目标架构的适配注意事项。
+
+文档见：
+
+```text
+docs/xinchuang-compatibility.md
 ```
 
 ## 文件格式说明
@@ -173,13 +225,21 @@ docs/plugin-development-guide.md
 docs/acceptance-test-checklist.md
 ```
 
+插件开发文档见：
+
+```text
+docs/plugin-development-guide.md
+```
+
 ## 后续计划
 
 - 节点复制 / 剪切 / 粘贴。
 - 拖拽节点调整层级与顺序。
 - 框选多个节点和批量操作。
 - 更完整的主题和线条样式配置。
-- Excel 导入更复杂的列映射规则。
 - 官方模板库。
+- 更完整自动化测试。
+- 性能优化。
+- UI 细节打磨。
 - 插件签名、插件目录和沙箱执行能力。
-- 桌面端打包。
+- 桌面端真实打包。

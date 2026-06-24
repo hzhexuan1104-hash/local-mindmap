@@ -23,8 +23,14 @@ function nodeToTxtLines(node: MindmapNode, level = 0): string[] {
   return lines;
 }
 
-export function exportMindmapTxt(rootNode: MindmapNode) {
-  const content = `${nodeToTxtLines(rootNode).join('\n')}\n`;
-  downloadTextFile(content, 'mindmap.txt', 'text/plain;charset=utf-8');
+export function serializeMindmapTxt(rootNode: MindmapNode) {
+  return `${nodeToTxtLines(rootNode).join('\n')}\n`;
 }
 
+export function exportMindmapTxt(rootNode: MindmapNode) {
+  downloadTextFile(
+    serializeMindmapTxt(rootNode),
+    'mindmap.txt',
+    'text/plain;charset=utf-8',
+  );
+}

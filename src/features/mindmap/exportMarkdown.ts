@@ -17,9 +17,13 @@ function renderNodeToMarkdown(node: MindmapNode, depth: number): string {
   return [marker, heading, remark, ...children].filter(Boolean).join('\n\n');
 }
 
+export function serializeMindmapMarkdown(rootNode: MindmapNode) {
+  return `${renderNodeToMarkdown(rootNode, 1)}\n`;
+}
+
 export function exportMindmapMarkdown(rootNode: MindmapNode) {
   downloadTextFile(
-    `${renderNodeToMarkdown(rootNode, 1)}\n`,
+    serializeMindmapMarkdown(rootNode),
     'mindmap.md',
     'text/markdown;charset=utf-8',
   );
