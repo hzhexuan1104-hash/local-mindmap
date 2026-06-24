@@ -10,6 +10,7 @@ type RemarkPanelProps = {
   mode: RemarkMode;
   onModeChange: (mode: RemarkMode) => void;
   onRemarkChange: (remark: string) => void;
+  onCollapse: () => void;
 };
 
 export function RemarkPanel({
@@ -17,6 +18,7 @@ export function RemarkPanel({
   mode,
   onModeChange,
   onRemarkChange,
+  onCollapse,
 }: RemarkPanelProps) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
@@ -26,30 +28,39 @@ export function RemarkPanel({
         <div className="remark-panel-header">
           <div className="remark-header-top">
             <p className="eyebrow">Remark</p>
-            <div className="remark-panel-actions">
+            <button
+              type="button"
+              className="remark-collapse-button secondary-action"
+              onClick={onCollapse}
+              aria-label="收起备注面板"
+              title="收起备注"
+            >
+              ›
+            </button>
+          </div>
+          <div className="remark-panel-actions">
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setIsPreviewOpen(true)}
+            >
+              放大预览
+            </button>
+            <div className="remark-mode-switch" aria-label="备注显示模式">
               <button
                 type="button"
-                className="secondary-action"
-                onClick={() => setIsPreviewOpen(true)}
+                className={`mode-button${mode === 'edit' ? ' is-active' : ''}`}
+                onClick={() => onModeChange('edit')}
               >
-                放大预览
+                编辑模式
               </button>
-              <div className="remark-mode-switch" aria-label="备注显示模式">
-                <button
-                  type="button"
-                  className={`mode-button${mode === 'edit' ? ' is-active' : ''}`}
-                  onClick={() => onModeChange('edit')}
-                >
-                  编辑模式
-                </button>
-                <button
-                  type="button"
-                  className={`mode-button${mode === 'preview' ? ' is-active' : ''}`}
-                  onClick={() => onModeChange('preview')}
-                >
-                  预览模式
-                </button>
-              </div>
+              <button
+                type="button"
+                className={`mode-button${mode === 'preview' ? ' is-active' : ''}`}
+                onClick={() => onModeChange('preview')}
+              >
+                预览模式
+              </button>
             </div>
           </div>
           <h2 id="remark-panel-title">{selectedNode.text}</h2>

@@ -2117,24 +2117,19 @@ export function App() {
                 type="button"
                 className="secondary-action"
                 onClick={() => setIsRemarkPanelCollapsed(false)}
+                aria-label="展开备注面板"
               >
-                展开备注
+                ‹ 备注
               </button>
             </aside>
           ) : (
             <div className="remark-panel-shell">
-              <button
-                type="button"
-                className="remark-collapse-button secondary-action"
-                onClick={() => setIsRemarkPanelCollapsed(true)}
-              >
-                收起备注
-              </button>
               <RemarkPanel
                 selectedNode={selectedNode}
                 mode={remarkMode}
                 onModeChange={setRemarkMode}
                 onRemarkChange={handleRemarkChange}
+                onCollapse={() => setIsRemarkPanelCollapsed(true)}
               />
             </div>
           )

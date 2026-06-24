@@ -960,17 +960,19 @@ h3 {
 }
 
 .remark-panel-shell {
-  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
 .remark-collapse-button {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 8;
+  flex: 0 0 auto;
+  min-width: 34px;
+  width: 34px;
+  min-height: 32px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .remark-collapsed-bar {
@@ -986,10 +988,12 @@ h3 {
 }
 
 .remark-collapsed-bar .secondary-action {
-  writing-mode: vertical-rl;
-  min-width: 34px;
+  width: 38px;
+  min-width: 38px;
   min-height: 98px;
   padding: 10px 0;
+  white-space: normal;
+  writing-mode: vertical-rl;
 }
 
 .context-menu {
@@ -1066,9 +1070,9 @@ h3 {
   width: 100%;
   min-width: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
 .remark-header-top .eyebrow {
@@ -1078,12 +1082,13 @@ h3 {
 }
 
 .remark-panel-actions {
-  display: inline-flex;
-  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: flex;
   align-items: center;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 .remark-title-block {
@@ -1111,19 +1116,22 @@ h3 {
 
 .remark-mode-switch {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid #c7d2e2;
   border-radius: 6px;
 }
 
 .mode-button {
+  min-width: 0;
   min-height: 34px;
   padding: 0 10px;
   border: 0;
   color: #5e6d82;
   background: #ffffff;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .mode-button + .mode-button {
@@ -1743,6 +1751,7 @@ h3 {
     width: 100%;
     min-height: 34px;
     padding: 0 12px;
+    white-space: nowrap;
   }
 
   .template-save-form {
