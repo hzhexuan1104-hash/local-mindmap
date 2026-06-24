@@ -14,6 +14,14 @@ import {
   zoomCanvasView,
   type CanvasViewState,
 } from '../features/mindmap/canvasControls';
+import {
+  collectNodeIds,
+  collectSelectedSubtrees,
+  cutNodesSafely,
+  duplicateNodeAsSibling,
+  pasteNodesAsChildren,
+  validateTreeIntegrity,
+} from '../features/mindmap/clipboard';
 import { ExcelImportMappingDialog } from '../features/mindmap/ExcelImportMappingDialog';
 import { exportMindmapExcel } from '../features/mindmap/exportExcel';
 import { exportMindmapAsImage } from '../features/mindmap/exportImage';
@@ -205,6 +213,14 @@ const setNodePositionById = (
     position,
   }));
 
+const isEditableShortcutTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+};
+
 type DragState = {
   nodeId: string;
   pointerStart: { x: number; y: number };
@@ -233,6 +249,12 @@ type ContextMenuInput =
   | {
       type: 'canvas';
     };
+
+type InternalClipboardState = {
+  mode: 'copy' | 'cut';
+  nodes: MindmapNode[];
+  sourceNodeIds: string[];
+};
 
 type ToolDrawer =
   | 'templates'
@@ -430,6 +452,8 @@ export function App() {
   const [activeDrawer, setActiveDrawer] = useState<ToolDrawer | null>(null);
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
+  const [internalClipboard, setInternalClipboard] =
+    useState<InternalClipboardState | null>(null);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const isPanningRef = useRef(false);
@@ -573,6 +597,16 @@ export function App() {
         return;
       }
 
+      if (isEditableShortcutTarget(event.target)) {
+        return;
+      }
+
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        handleDeleteNode();
+        return;
+      }
+
       if (!event.ctrlKey) {
         return;
       }
@@ -580,11 +614,36 @@ export function App() {
       if (event.key.toLowerCase() === 'z') {
         event.preventDefault();
         handleUndo();
+        return;
       }
 
       if (event.key.toLowerCase() === 'y') {
         event.preventDefault();
         handleRedo();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        handleCopyNodes();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'x') {
+        event.preventDefault();
+        handleCutNodes();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        handlePasteNodes();
+        return;
+      }
+
+      if (event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        handleDuplicateNodeAsSibling();
       }
     };
 
@@ -946,6 +1005,161 @@ export function App() {
     );
   };
 
+  const getPastedRootPosition = ({
+    targetNode,
+    index,
+    existingChildCount,
+  }: {
+    targetNode: MindmapNode;
+    index: number;
+    existingChildCount: number;
+  }) =>
+    targetNode.position
+      ? {
+          x: targetNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
+          y: targetNode.position.y + (existingChildCount + index) * 96,
+        }
+      : undefined;
+
+  const getSafePasteTargetId = (clipboard: InternalClipboardState) => {
+    const targetNode = findNodeById(mindmap, selectedNodeId);
+
+    if (!targetNode) {
+      return mindmap.id;
+    }
+
+    if (clipboard.mode !== 'cut') {
+      return targetNode.id;
+    }
+
+    const sourceSubtreeIds = new Set<string>();
+    clipboard.nodes.forEach((node) => {
+      collectNodeIds(node).forEach((nodeId) => sourceSubtreeIds.add(nodeId));
+    });
+
+    return sourceSubtreeIds.has(targetNode.id) ? mindmap.id : targetNode.id;
+  };
+
+  const handleCopyNodes = () => {
+    const copiedNodes = collectSelectedSubtrees(mindmap, selectedNodeIds);
+
+    if (copiedNodes.length === 0) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    setInternalClipboard({
+      mode: 'copy',
+      nodes: copiedNodes,
+      sourceNodeIds: [],
+    });
+    showMessage(
+      copiedNodes.length > 1
+        ? `已复制 ${copiedNodes.length} 个节点`
+        : '已复制 1 个节点',
+    );
+  };
+
+  const handleCutNodes = () => {
+    const cutResult = cutNodesSafely(mindmap, selectedNodeIds, mindmap.id);
+
+    if (cutResult.cutNodes.length === 0) {
+      showMessage(
+        cutResult.skippedRoot ? '中心主题不能剪切' : '请先选择可剪切节点',
+      );
+      return;
+    }
+
+    setInternalClipboard({
+      mode: 'cut',
+      nodes: cutResult.cutNodes,
+      sourceNodeIds: cutResult.cutNodeIds,
+    });
+    showMessage(
+      cutResult.cutNodes.length > 1
+        ? `已剪切 ${cutResult.cutNodes.length} 个节点`
+        : '已剪切 1 个节点',
+    );
+  };
+
+  const handlePasteNodes = (targetNodeId?: string) => {
+    if (!internalClipboard || internalClipboard.nodes.length === 0) {
+      showMessage('内部剪贴板为空');
+      return;
+    }
+
+    const pasteTargetId = targetNodeId ?? getSafePasteTargetId(internalClipboard);
+    const existingTargetNode = findNodeById(mindmap, pasteTargetId);
+    const safeTargetId = existingTargetNode ? pasteTargetId : mindmap.id;
+
+    recordHistory();
+    const sourceNodeIds = new Set(
+      internalClipboard.mode === 'cut' ? internalClipboard.sourceNodeIds : [],
+    );
+    const baseMindmap =
+      sourceNodeIds.size > 0
+        ? deleteNodesByIds(mindmap, sourceNodeIds)
+        : mindmap;
+    const targetStillExists = findNodeById(baseMindmap, safeTargetId);
+    const result = pasteNodesAsChildren(
+      baseMindmap,
+      targetStillExists ? safeTargetId : baseMindmap.id,
+      internalClipboard.nodes,
+      { getRootPosition: getPastedRootPosition },
+    );
+    const integrity = validateTreeIntegrity(result.rootNode);
+
+    if (!integrity.valid) {
+      showMessage('粘贴失败：节点结构异常');
+      return;
+    }
+
+    setMindmap(result.rootNode);
+    setSelectedNodeId(result.pastedNodeIds[0] ?? result.rootNode.id);
+    setSelectedNodeIds(result.pastedNodeIds.length > 0 ? result.pastedNodeIds : [result.rootNode.id]);
+    setEditingNodeId(null);
+    setEditingText('');
+    if (internalClipboard.mode === 'cut') {
+      setInternalClipboard(null);
+    }
+    showMessage(
+      result.pastedNodeIds.length > 1
+        ? `已粘贴 ${result.pastedNodeIds.length} 个节点`
+        : '已粘贴 1 个节点',
+    );
+  };
+
+  const handleDuplicateNodeAsSibling = () => {
+    const result = duplicateNodeAsSibling(mindmap, selectedNodeId, {
+      getRootPosition: getPastedRootPosition,
+    });
+
+    if (!result) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    const integrity = validateTreeIntegrity(result.rootNode);
+
+    if (!integrity.valid) {
+      showMessage('复制失败：节点结构异常');
+      return;
+    }
+
+    recordHistory();
+    setMindmap(result.rootNode);
+    setSelectedNodeId(result.pastedNodeIds[0] ?? mindmap.id);
+    setSelectedNodeIds(result.pastedNodeIds.length > 0 ? result.pastedNodeIds : [mindmap.id]);
+    setEditingNodeId(null);
+    setEditingText('');
+    showMessage('已复制为同级节点');
+  };
+
+  const handleClearInternalClipboard = () => {
+    setInternalClipboard(null);
+    showMessage('已清空内部剪贴板');
+  };
+
   const handleRemarkChange = (remark: string) => {
     recordHistory();
     setMindmap((currentMindmap) =>
@@ -1254,7 +1468,7 @@ export function App() {
     event.preventDefault();
     event.stopPropagation();
     const menuWidth = 220;
-    const menuHeight = nextContextMenu.type === 'node' ? 360 : 280;
+    const menuHeight = nextContextMenu.type === 'node' ? 480 : 360;
     setContextMenu({
       ...nextContextMenu,
       x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
@@ -1394,6 +1608,18 @@ export function App() {
                   </button>
                   <button type="button" onClick={handleRedo}>
                     重做
+                  </button>
+                  <button type="button" onClick={handleCopyNodes}>
+                    复制节点
+                  </button>
+                  <button type="button" onClick={handleCutNodes}>
+                    剪切节点
+                  </button>
+                  <button type="button" onClick={() => handlePasteNodes()}>
+                    粘贴节点
+                  </button>
+                  <button type="button" onClick={handleDuplicateNodeAsSibling}>
+                    复制为同级节点
                   </button>
                   <button type="button" onClick={handleAddChild}>
                     新增子节点
@@ -1977,8 +2203,13 @@ export function App() {
                 <div className="shortcut-list">
                   <span>Ctrl + Z：撤销</span>
                   <span>Ctrl + Y：重做</span>
+                  <span>Ctrl + C：复制选中节点</span>
+                  <span>Ctrl + X：剪切选中节点</span>
+                  <span>Ctrl + V：粘贴到当前节点下</span>
+                  <span>Ctrl + D：复制为同级节点</span>
                   <span>Ctrl / Shift + 点击节点：多选</span>
                   <span>Ctrl + 鼠标滚轮：缩放画布</span>
+                  <span>Delete / Backspace：删除选中节点</span>
                   <span>Esc：关闭右键菜单</span>
                 </div>
               </section>
@@ -2208,6 +2439,36 @@ export function App() {
               <button
                 type="button"
                 role="menuitem"
+                onClick={() => runContextMenuAction(handleCopyNodes)}
+              >
+                复制节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleCutNodes)}
+              >
+                剪切节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() =>
+                  runContextMenuAction(() => handlePasteNodes(selectedNode.id))
+                }
+              >
+                粘贴为子节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleDuplicateNodeAsSibling)}
+              >
+                复制为同级节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
                 onClick={() => runContextMenuAction(() => handleToggleCollapse(selectedNode.id))}
               >
                 {selectedNode.collapsed ? '展开' : '折叠'}
@@ -2262,6 +2523,20 @@ export function App() {
                 onClick={() => runContextMenuAction(handleResetAutoLayout)}
               >
                 重新自动布局
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(() => handlePasteNodes(mindmap.id))}
+              >
+                粘贴到中心主题
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleClearInternalClipboard)}
+              >
+                清空内部剪贴板
               </button>
               <button
                 type="button"
