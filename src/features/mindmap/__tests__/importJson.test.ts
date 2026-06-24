@@ -25,6 +25,37 @@ describe('parseLmindProject', () => {
     expect(project.themeId).toBe('default-blue');
   });
 
+  it('preserves v1.1 node positions while accepting old nodes without positions', () => {
+    const project = parseLmindProject(
+      JSON.stringify({
+        version: '1.0',
+        meta: {
+          createTime: '2026-06-24T00:00:00.000Z',
+          updateTime: '2026-06-24T00:00:00.000Z',
+          theme: 'default-blue',
+        },
+        nodeTypes: [],
+        rootNode: {
+          id: 'root',
+          text: '中心主题',
+          remark: '',
+          position: { x: 120, y: 80 },
+          children: [
+            {
+              id: 'old-child',
+              text: '旧节点',
+              remark: '',
+              children: [],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(project.rootNode.position).toEqual({ x: 120, y: 80 });
+    expect(project.rootNode.children[0].position).toBeUndefined();
+  });
+
   it('rejects invalid JSON documents', () => {
     expect(() => parseLmindProject('{bad json')).toThrow('Invalid JSON');
     expect(() => parseLmindProject(JSON.stringify({ version: '1.0' }))).toThrow(
@@ -32,4 +63,3 @@ describe('parseLmindProject', () => {
     );
   });
 });
-

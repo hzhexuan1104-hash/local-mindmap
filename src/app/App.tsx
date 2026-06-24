@@ -37,7 +37,12 @@ import {
 } from '../features/mindmap/importExcel';
 import { importMindmapJson } from '../features/mindmap/importJson';
 import { importMindmapMarkdown } from '../features/mindmap/importMarkdown';
-import { createMindmapLayoutStyle } from '../features/mindmap/layout';
+import {
+  clearMindmapPositions,
+  createMindmapLayout,
+  POSITIONED_LAYOUT,
+  type MindmapLayoutNode,
+} from '../features/mindmap/layout';
 import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
@@ -73,6 +78,12 @@ import {
   replaceMatchInMindmap,
   type SearchScope,
 } from '../features/mindmap/searchReplace';
+import {
+  applyNodeTypeToNodes,
+  deleteNodesByIds,
+  getDeletableSelectedNodeIds,
+  updateSelection,
+} from '../features/mindmap/selection';
 import {
   addMindmapTemplate,
   cloneTemplateProject,
@@ -165,24 +176,88 @@ const findNodeById = (
   return null;
 };
 
+const findParentNodeById = (
+  node: MindmapNode,
+  nodeId: string,
+): MindmapNode | null => {
+  if (node.children.some((child) => child.id === nodeId)) {
+    return node;
+  }
+
+  for (const child of node.children) {
+    const parent = findParentNodeById(child, nodeId);
+
+    if (parent) {
+      return parent;
+    }
+  }
+
+  return null;
+};
+
+const setNodePositionById = (
+  node: MindmapNode,
+  nodeId: string,
+  position: { x: number; y: number },
+): MindmapNode =>
+  updateNodeById(node, nodeId, (targetNode) => ({
+    ...targetNode,
+    position,
+  }));
+
+type DragState = {
+  nodeId: string;
+  pointerStart: { x: number; y: number };
+  nodeStart: { x: number; y: number };
+  hasRecordedHistory: boolean;
+};
+
+type ContextMenuState =
+  | {
+      type: 'node';
+      nodeId: string;
+      x: number;
+      y: number;
+    }
+  | {
+      type: 'canvas';
+      x: number;
+      y: number;
+    };
+
+type ContextMenuInput =
+  | {
+      type: 'node';
+      nodeId: string;
+    }
+  | {
+      type: 'canvas';
+    };
+
 type MindmapTreeProps = {
-  node: MindmapNode;
+  layoutNode: MindmapLayoutNode;
   nodeTypes: MindmapNodeType[];
   selectedNodeId: string;
+  selectedNodeIds: Set<string>;
+  draggingNodeId: string | null;
   editingNodeId: string | null;
   editingText: string;
   searchMatchNodeIds: Set<string>;
   onToggleCollapse: (nodeId: string) => void;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string, append: boolean) => void;
   onStartEdit: (node: MindmapNode) => void;
   onEditingTextChange: (text: string) => void;
   onCommitEdit: () => void;
+  onStartDrag: (nodeId: string, event: MouseEvent<HTMLElement>) => void;
+  onOpenContextMenu: (node: MindmapNode, event: MouseEvent<HTMLElement>) => void;
 };
 
 function MindmapTree({
-  node,
+  layoutNode,
   nodeTypes,
   selectedNodeId,
+  selectedNodeIds,
+  draggingNodeId,
   editingNodeId,
   editingText,
   searchMatchNodeIds,
@@ -191,8 +266,12 @@ function MindmapTree({
   onStartEdit,
   onEditingTextChange,
   onCommitEdit,
+  onStartDrag,
+  onOpenContextMenu,
 }: MindmapTreeProps) {
-  const isSelected = node.id === selectedNodeId;
+  const node = layoutNode.node;
+  const isSelected = selectedNodeIds.has(node.id);
+  const isPrimarySelected = node.id === selectedNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
   const hasChildren = node.children.length > 0;
@@ -208,14 +287,23 @@ function MindmapTree({
     : undefined;
 
   return (
-    <div className="mindmap-branch">
-      <div className="mindmap-node-wrap">
+    <div
+      className="mindmap-node-wrap positioned-node-wrap"
+      style={{
+        left: layoutNode.x,
+        top: layoutNode.y,
+        width: POSITIONED_LAYOUT.nodeWidth,
+        minHeight: POSITIONED_LAYOUT.nodeHeight,
+      }}
+    >
         <div
           role="button"
           tabIndex={0}
           className={[
             'mindmap-node',
             isSelected ? 'is-selected' : '',
+            isPrimarySelected ? 'is-primary-selected' : '',
+            draggingNodeId === node.id ? 'is-dragging' : '',
             isSearchMatch ? 'is-search-match' : '',
             nodeType ? 'has-node-type' : '',
             nodeType ? `shape-${nodeType.shape}` : '',
@@ -223,13 +311,31 @@ function MindmapTree({
             .filter(Boolean)
             .join(' ')}
           style={nodeStyle}
-          aria-pressed={isSelected}
-          onClick={() => onSelectNode(node.id)}
-          onDoubleClick={() => onStartEdit(node)}
+          aria-pressed={isSelected || isPrimarySelected}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectNode(node.id, event.ctrlKey || event.shiftKey);
+          }}
+          onMouseDown={(event) => {
+            if (event.button !== 0 || isEditing) {
+              return;
+            }
+
+            event.stopPropagation();
+            onStartDrag(node.id, event);
+          }}
+          onContextMenu={(event) => {
+            event.stopPropagation();
+            onOpenContextMenu(node, event);
+          }}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            onStartEdit(node);
+          }}
           onKeyDown={(event) => {
             if (!isEditing && (event.key === 'Enter' || event.key === ' ')) {
               event.preventDefault();
-              onSelectNode(node.id);
+              onSelectNode(node.id, false);
             }
           }}
         >
@@ -275,28 +381,6 @@ function MindmapTree({
           </button>
         ) : null}
       </div>
-
-      {hasChildren && !node.collapsed ? (
-        <div className="child-branches">
-          {node.children.map((child) => (
-            <MindmapTree
-              key={child.id}
-              node={child}
-              nodeTypes={nodeTypes}
-              selectedNodeId={selectedNodeId}
-              editingNodeId={editingNodeId}
-              editingText={editingText}
-              searchMatchNodeIds={searchMatchNodeIds}
-              onToggleCollapse={onToggleCollapse}
-              onSelectNode={onSelectNode}
-              onStartEdit={onStartEdit}
-              onEditingTextChange={onEditingTextChange}
-              onCommitEdit={onCommitEdit}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
   );
 }
 
@@ -308,6 +392,7 @@ export function App() {
   const [canvasView, setCanvasView] =
     useState<CanvasViewState>(DEFAULT_CANVAS_VIEW);
   const [selectedNodeId, setSelectedNodeId] = useState('root');
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(['root']);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
@@ -340,8 +425,22 @@ export function App() {
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef({ x: 0, y: 0 });
+  const dragStateRef = useRef<DragState | null>(null);
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
-  const mindmapLayoutStyle = createMindmapLayoutStyle();
+  const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
+  const layoutNodeById = useMemo(
+    () =>
+      new Map(
+        mindmapLayout.nodes.map((layoutNode) => [layoutNode.id, layoutNode]),
+      ),
+    [mindmapLayout.nodes],
+  );
+  const selectedNodeIdSet = useMemo(
+    () => new Set(selectedNodeIds),
+    [selectedNodeIds],
+  );
   const pluginThemes = useMemo(() => getPluginThemes(plugins), [plugins]);
   const availableThemes = useMemo(
     () =>
@@ -388,6 +487,8 @@ export function App() {
   );
   const themeStyle = createThemeStyle(themeId, availableThemes);
   const panLayerStyle = {
+    width: mindmapLayout.width,
+    height: mindmapLayout.height,
     transform: `translate(${canvasView.offsetX}px, ${canvasView.offsetY}px) scale(${canvasView.scale})`,
   };
   const searchMatches = useMemo(
@@ -450,6 +551,11 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextMenu(null);
+        return;
+      }
+
       if (!event.ctrlKey) {
         return;
       }
@@ -469,6 +575,16 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyboardShortcut);
   });
 
+  useEffect(() => {
+    const stopDrag = () => {
+      dragStateRef.current = null;
+      setDraggingNodeId(null);
+    };
+
+    window.addEventListener('mouseup', stopDrag);
+    return () => window.removeEventListener('mouseup', stopDrag);
+  }, []);
+
   const showMessage = (text: string) => {
     window.clearTimeout(messageTimerRef.current);
     setMessage(text);
@@ -477,6 +593,20 @@ export function App() {
 
   const recordHistory = () => {
     setHistory((currentHistory) => pushHistory(currentHistory, currentProject));
+  };
+
+  const selectNode = (nodeId: string, append: boolean) => {
+    setSelectedNodeId(nodeId);
+    setSelectedNodeIds((currentSelectedIds) =>
+      updateSelection(currentSelectedIds, nodeId, { append }),
+    );
+    setContextMenu(null);
+  };
+
+  const clearSelectionToRoot = () => {
+    setSelectedNodeId(mindmap.id);
+    setSelectedNodeIds([mindmap.id]);
+    setContextMenu(null);
   };
 
   const applyProject = (project: MindmapProject, nextSelectedNodeId?: string) => {
@@ -491,13 +621,16 @@ export function App() {
     if (project.themeId && project.themeId !== nextThemeId) {
       showMessage('文件使用的插件主题未启用，已切回默认主题');
     }
-    setSelectedNodeId(
+    const nextPrimaryNodeId =
       nextSelectedNodeId && findNodeById(project.rootNode, nextSelectedNodeId)
         ? nextSelectedNodeId
-        : project.rootNode.id,
-    );
+        : project.rootNode.id;
+
+    setSelectedNodeId(nextPrimaryNodeId);
+    setSelectedNodeIds([nextPrimaryNodeId]);
     setEditingNodeId(null);
     setEditingText('');
+    setContextMenu(null);
   };
 
   const handleUndo = () => {
@@ -532,6 +665,7 @@ export function App() {
     setNodeTypes([]);
     setThemeId('default-blue');
     setSelectedNodeId('root');
+    setSelectedNodeIds(['root']);
     setEditingNodeId(null);
     setEditingText('');
     showMessage('已新建空白思维导图');
@@ -701,11 +835,28 @@ export function App() {
     }
   };
 
-  const createTypedNode = () =>
-    createNodeFromType(findNodeTypeById(availableNodeTypes, childNodeTypeId));
+  const createTypedNode = (position?: MindmapNode['position']) => {
+    const node = createNodeFromType(findNodeTypeById(availableNodeTypes, childNodeTypeId));
+
+    return {
+      ...node,
+      ...(position ? { position } : {}),
+    };
+  };
+
+  const createChildNodeForParent = (parent: MindmapNode) =>
+    createTypedNode(
+      parent.position
+        ? {
+            x: parent.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
+            y: parent.position.y + parent.children.length * 96,
+          }
+        : undefined,
+    );
 
   const handleAddChild = () => {
-    const newNode = createTypedNode();
+    const parentNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
+    const newNode = createChildNodeForParent(parentNode);
 
     recordHistory();
     setMindmap((currentMindmap) =>
@@ -715,6 +866,7 @@ export function App() {
       })),
     );
     setSelectedNodeId(newNode.id);
+    setSelectedNodeIds([newNode.id]);
     setEditingNodeId(null);
   };
 
@@ -724,26 +876,57 @@ export function App() {
       return;
     }
 
-    const newNode = createTypedNode();
+    const parentNode = findParentNodeById(mindmap, selectedNodeId);
+    const selectedLayoutNode = layoutNodeById.get(selectedNodeId);
+    const siblingPosition =
+      parentNode?.position && selectedLayoutNode
+        ? {
+            x: parentNode.position.x,
+            y:
+              selectedLayoutNode.y - POSITIONED_LAYOUT.canvasPadding + 96,
+          }
+        : undefined;
+    const newNode = createTypedNode(siblingPosition);
 
     recordHistory();
     setMindmap((currentMindmap) =>
       addSiblingById(currentMindmap, selectedNodeId, newNode),
     );
     setSelectedNodeId(newNode.id);
+    setSelectedNodeIds([newNode.id]);
     setEditingNodeId(null);
   };
 
   const handleDeleteNode = () => {
-    if (selectedNodeId === mindmap.id) {
+    if (selectedNodeIds.length === 0) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    const deletableIds = getDeletableSelectedNodeIds(selectedNodeIds, mindmap.id);
+
+    if (deletableIds.length === 0) {
       showMessage('中心主题不能删除');
       return;
     }
 
+    if (
+      selectedNodeIds.length > 1 &&
+      !window.confirm(`将删除 ${deletableIds.length} 个节点及其子节点，是否继续？`)
+    ) {
+      return;
+    }
+
     recordHistory();
-    setMindmap((currentMindmap) => deleteNodeById(currentMindmap, selectedNodeId));
+    setMindmap((currentMindmap) =>
+      deleteNodesByIds(currentMindmap, new Set(deletableIds)),
+    );
     setSelectedNodeId(mindmap.id);
+    setSelectedNodeIds([mindmap.id]);
     setEditingNodeId(null);
+    showMessage(
+      deletableIds.length > 1 ? `已删除 ${deletableIds.length} 个节点` : '已删除节点',
+    );
   };
 
   const handleRemarkChange = (remark: string) => {
@@ -758,6 +941,7 @@ export function App() {
 
   const handleStartEdit = (node: MindmapNode) => {
     setSelectedNodeId(node.id);
+    setSelectedNodeIds([node.id]);
     setEditingNodeId(node.id);
     setEditingText(node.text);
   };
@@ -790,6 +974,7 @@ export function App() {
       (nextIndex + searchMatches.length) % searchMatches.length;
     setActiveMatchIndex(normalizedIndex);
     setSelectedNodeId(searchMatches[normalizedIndex].nodeId);
+    setSelectedNodeIds([searchMatches[normalizedIndex].nodeId]);
   };
 
   const handleReplaceCurrent = () => {
@@ -886,12 +1071,21 @@ export function App() {
   };
 
   const handleSelectedNodeTypeChange = (nodeTypeId: string) => {
+    if (selectedNodeIds.length === 0) {
+      showMessage('请先选择节点');
+      return;
+    }
+
     recordHistory();
+    const targetNodeIds = selectedNodeIdSet;
+
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
-        ...node,
-        ...(nodeTypeId ? { nodeTypeId } : { nodeTypeId: undefined }),
-      })),
+      applyNodeTypeToNodes(currentMindmap, targetNodeIds, nodeTypeId),
+    );
+    showMessage(
+      targetNodeIds.size > 1
+        ? `已为 ${targetNodeIds.size} 个节点切换类型`
+        : '已切换当前节点类型',
     );
   };
 
@@ -923,6 +1117,12 @@ export function App() {
     showMessage('已折叠全部');
   };
 
+  const handleResetAutoLayout = () => {
+    recordHistory();
+    setMindmap((currentMindmap) => clearMindmapPositions(currentMindmap));
+    showMessage('已重新自动布局');
+  };
+
   const handleExportImage = async (format: 'png' | 'jpg') => {
     if (!exportTreeRef.current) {
       showMessage('当前没有可导出的画布内容');
@@ -940,12 +1140,17 @@ export function App() {
   const handleCanvasPointerDown = (
     event: MouseEvent<HTMLElement>,
   ) => {
+    if (event.button !== 0) {
+      return;
+    }
+
     const target = event.target as HTMLElement;
 
     if (target.closest('.mindmap-node, .collapse-toggle, button, input, textarea, select')) {
       return;
     }
 
+    clearSelectionToRoot();
     isPanningRef.current = true;
     lastPanPointRef.current = { x: event.clientX, y: event.clientY };
   };
@@ -953,6 +1158,32 @@ export function App() {
   const handleCanvasPointerMove = (
     event: MouseEvent<HTMLElement>,
   ) => {
+    if (dragStateRef.current) {
+      const dragState = dragStateRef.current;
+      const pointerDeltaX = event.clientX - dragState.pointerStart.x;
+      const pointerDeltaY = event.clientY - dragState.pointerStart.y;
+
+      if (!dragState.hasRecordedHistory) {
+        if (Math.hypot(pointerDeltaX, pointerDeltaY) < 3) {
+          return;
+        }
+
+        recordHistory();
+        dragState.hasRecordedHistory = true;
+        setDraggingNodeId(dragState.nodeId);
+      }
+
+      const nextPosition = {
+        x: dragState.nodeStart.x + pointerDeltaX / canvasView.scale,
+        y: dragState.nodeStart.y + pointerDeltaY / canvasView.scale,
+      };
+
+      setMindmap((currentMindmap) =>
+        setNodePositionById(currentMindmap, dragState.nodeId, nextPosition),
+      );
+      return;
+    }
+
     if (!isPanningRef.current) {
       return;
     }
@@ -967,6 +1198,29 @@ export function App() {
     isPanningRef.current = false;
   };
 
+  const handleStartNodeDrag = (
+    nodeId: string,
+    event: MouseEvent<HTMLElement>,
+  ) => {
+    const layoutNode = layoutNodeById.get(nodeId);
+    const node = findNodeById(mindmap, nodeId);
+
+    if (!layoutNode || !node) {
+      return;
+    }
+
+    isPanningRef.current = false;
+    dragStateRef.current = {
+      nodeId,
+      pointerStart: { x: event.clientX, y: event.clientY },
+      nodeStart: node.position ?? {
+        x: layoutNode.x - POSITIONED_LAYOUT.canvasPadding,
+        y: layoutNode.y - POSITIONED_LAYOUT.canvasPadding,
+      },
+      hasRecordedHistory: false,
+    };
+  };
+
   const handleCanvasWheel = (event: WheelEvent<HTMLElement>) => {
     if (!event.ctrlKey) {
       return;
@@ -976,110 +1230,178 @@ export function App() {
     setCanvasView((view) => zoomCanvasView(view, event.deltaY < 0 ? 'in' : 'out'));
   };
 
+  const openContextMenu = (
+    nextContextMenu: ContextMenuInput,
+    event: MouseEvent<HTMLElement>,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 220;
+    const menuHeight = nextContextMenu.type === 'node' ? 360 : 280;
+    setContextMenu({
+      ...nextContextMenu,
+      x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
+      y: Math.min(event.clientY, window.innerHeight - menuHeight - 12),
+    } as ContextMenuState);
+  };
+
+  const handleNodeContextMenu = (
+    node: MindmapNode,
+    event: MouseEvent<HTMLElement>,
+  ) => {
+    selectNode(node.id, event.ctrlKey || event.shiftKey);
+    openContextMenu({ type: 'node', nodeId: node.id }, event);
+  };
+
+  const handleCanvasContextMenu = (event: MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+
+    if (target.closest('.mindmap-node, .collapse-toggle')) {
+      return;
+    }
+
+    openContextMenu({ type: 'canvas' }, event);
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  const runContextMenuAction = (action: () => void) => {
+    action();
+    closeContextMenu();
+  };
+
+  const handleCopySelectedNodeText = async () => {
+    const text = selectedNode.text;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      showMessage('已复制节点文本');
+    } catch {
+      window.prompt('复制失败，请手动复制节点文本', text);
+      showMessage('浏览器限制了自动复制');
+    }
+  };
+
   return (
-    <main className="app-shell" style={themeStyle}>
+    <main
+      className="app-shell"
+      style={themeStyle}
+      onMouseDown={() => setContextMenu(null)}
+    >
       <header className="app-header" aria-labelledby="app-title">
         <div className="app-title-group">
           <p className="eyebrow">Local Mindmap</p>
           <h1 id="app-title">本地化思维导图工具</h1>
         </div>
-        <button
-          type="button"
-          className="primary-action"
-          onClick={handleCreateMindmap}
-        >
-          新建思维导图
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleSaveMindmap}
-        >
-          保存 .lmind
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleOpenMindmap}
-        >
-          打开 .lmind
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleExportMarkdown}
-        >
-          导出 Markdown
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleExportExcel}
-        >
-          导出 Excel
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleExportJson}
-        >
-          导出 JSON
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={() => handleExportImage('png')}
-        >
-          导出 PNG
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={() => handleExportImage('jpg')}
-        >
-          导出 JPG
-        </button>
-        {canExportTxt ? (
+        <div className="toolbar-group" aria-label="文件">
+          <span className="toolbar-label">文件</span>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={handleCreateMindmap}
+          >
+            新建思维导图
+          </button>
           <button
             type="button"
             className="secondary-action"
-            onClick={handleExportTxt}
+            onClick={handleSaveMindmap}
           >
-            导出 TXT
+            保存 .lmind
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleImportJson}
-        >
-          导入 JSON
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleImportMarkdown}
-        >
-          导入 Markdown
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleImportExcel}
-        >
-          导入 Excel
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={() => setIsPluginManagerVisible(true)}
-        >
-          插件管理
-        </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleOpenMindmap}
+          >
+            打开 .lmind
+          </button>
+        </div>
+        <div className="toolbar-group" aria-label="导入导出">
+          <span className="toolbar-label">导入导出</span>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleExportMarkdown}
+          >
+            导出 Markdown
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleExportExcel}
+          >
+            导出 Excel
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleExportJson}
+          >
+            导出 JSON
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => handleExportImage('png')}
+          >
+            导出 PNG
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => handleExportImage('jpg')}
+          >
+            导出 JPG
+          </button>
+          {canExportTxt ? (
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={handleExportTxt}
+            >
+              导出 TXT
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleImportJson}
+          >
+            导入 JSON
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleImportMarkdown}
+          >
+            导入 Markdown
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleImportExcel}
+          >
+            导入 Excel
+          </button>
+        </div>
+        <div className="toolbar-group" aria-label="工具">
+          <span className="toolbar-label">工具</span>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => setIsPluginManagerVisible(true)}
+          >
+            插件管理
+          </button>
+        </div>
       </header>
 
       <section className="node-toolbar" aria-label="节点操作">
         <span className="toolbar-label">节点操作</span>
+        <span className="selection-count">
+          已选 {selectedNodeIds.length} 个
+        </span>
         <button type="button" className="secondary-action" onClick={handleUndo}>
           撤销
         </button>
@@ -1173,7 +1495,14 @@ export function App() {
             className="secondary-action"
             onClick={() => setCanvasView(centerCanvasView())}
           >
-            一键居中
+          一键居中
+          </button>
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleResetAutoLayout}
+          >
+            重新自动布局
           </button>
           <label className="inline-control">
             主题
@@ -1615,27 +1944,55 @@ export function App() {
           onMouseUp={stopCanvasPan}
           onMouseLeave={stopCanvasPan}
           onWheel={handleCanvasWheel}
+          onContextMenu={handleCanvasContextMenu}
         >
           <div className="canvas-grid" aria-hidden="true" />
           <div className="mindmap-pan-layer" style={panLayerStyle}>
             <div
               className="mindmap-tree"
-              style={mindmapLayoutStyle}
+              style={{
+                width: mindmapLayout.width,
+                height: mindmapLayout.height,
+              }}
               ref={exportTreeRef}
             >
-              <MindmapTree
-                node={mindmap}
-                nodeTypes={availableNodeTypes}
-                selectedNodeId={selectedNodeId}
-                editingNodeId={editingNodeId}
-                editingText={editingText}
-                searchMatchNodeIds={searchMatchNodeIds}
-                onToggleCollapse={handleToggleCollapse}
-                onSelectNode={setSelectedNodeId}
-                onStartEdit={handleStartEdit}
-                onEditingTextChange={setEditingText}
-                onCommitEdit={handleCommitEdit}
-              />
+              <svg
+                className="mindmap-lines"
+                width={mindmapLayout.width}
+                height={mindmapLayout.height}
+                aria-hidden="true"
+              >
+                {mindmapLayout.lines.map((line) => {
+                  const middleX = (line.from.x + line.to.x) / 2;
+
+                  return (
+                    <path
+                      key={line.id}
+                      d={`M ${line.from.x} ${line.from.y} C ${middleX} ${line.from.y}, ${middleX} ${line.to.y}, ${line.to.x} ${line.to.y}`}
+                    />
+                  );
+                })}
+              </svg>
+              {mindmapLayout.nodes.map((layoutNode) => (
+                <MindmapTree
+                  key={layoutNode.id}
+                  layoutNode={layoutNode}
+                  nodeTypes={availableNodeTypes}
+                  selectedNodeId={selectedNodeId}
+                  selectedNodeIds={selectedNodeIdSet}
+                  draggingNodeId={draggingNodeId}
+                  editingNodeId={editingNodeId}
+                  editingText={editingText}
+                  searchMatchNodeIds={searchMatchNodeIds}
+                  onToggleCollapse={handleToggleCollapse}
+                  onSelectNode={selectNode}
+                  onStartEdit={handleStartEdit}
+                  onEditingTextChange={setEditingText}
+                  onCommitEdit={handleCommitEdit}
+                  onStartDrag={handleStartNodeDrag}
+                  onOpenContextMenu={handleNodeContextMenu}
+                />
+              ))}
             </div>
           </div>
         </section>
@@ -1664,6 +2021,142 @@ export function App() {
           onToggle={handleTogglePlugin}
           onUninstall={handleUninstallPlugin}
         />
+      ) : null}
+
+      {contextMenu ? (
+        <div
+          className="context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {contextMenu.type === 'node' ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleAddChild)}
+              >
+                新增子节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleAddSibling)}
+              >
+                新增同级节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(() => handleStartEdit(selectedNode))}
+              >
+                编辑节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger-menu-item"
+                onClick={() => runContextMenuAction(handleDeleteNode)}
+              >
+                删除节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleCopySelectedNodeText)}
+              >
+                复制节点文本
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(() => handleToggleCollapse(selectedNode.id))}
+              >
+                {selectedNode.collapsed ? '展开' : '折叠'}
+              </button>
+              <label className="context-menu-select">
+                切换节点类型
+                <select
+                  value={selectedNode.nodeTypeId ?? ''}
+                  onChange={(event) =>
+                    runContextMenuAction(() =>
+                      handleSelectedNodeTypeChange(event.target.value),
+                    )
+                  }
+                >
+                  <option value="">普通节点</option>
+                  {availableNodeTypes.map((nodeType) => (
+                    <option key={nodeType.id} value={nodeType.id}>
+                      {nodeType.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleResetAutoLayout)}
+              >
+                重新自动布局
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleCreateMindmap)}
+              >
+                新建思维导图
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() =>
+                  runContextMenuAction(() => setCanvasView(centerCanvasView()))
+                }
+              >
+                一键居中
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleResetAutoLayout)}
+              >
+                重新自动布局
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleExpandAll)}
+              >
+                展开全部
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleCollapseAll)}
+              >
+                折叠全部
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(() => void handleExportImage('png'))}
+              >
+                导出 PNG
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(() => void handleExportImage('jpg'))}
+              >
+                导出 JPG
+              </button>
+            </>
+          )}
+        </div>
       ) : null}
     </main>
   );

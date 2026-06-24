@@ -12,12 +12,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isRawNodePosition(value: unknown): value is { x: number; y: number } {
+  return (
+    isRecord(value) &&
+    typeof value.x === 'number' &&
+    Number.isFinite(value.x) &&
+    typeof value.y === 'number' &&
+    Number.isFinite(value.y)
+  );
+}
+
 function isRawMindmapNode(value: unknown): value is {
   id: string;
   text: string;
   remark?: unknown;
   nodeTypeId?: unknown;
   collapsed?: unknown;
+  position?: unknown;
   children: unknown[];
 } {
   if (!isRecord(value)) {
@@ -32,6 +43,7 @@ function isRawMindmapNode(value: unknown): value is {
     (value.remark === undefined || typeof value.remark === 'string') &&
     (value.nodeTypeId === undefined || typeof value.nodeTypeId === 'string') &&
     (value.collapsed === undefined || typeof value.collapsed === 'boolean') &&
+    (value.position === undefined || isRawNodePosition(value.position)) &&
     value.children.every(isRawMindmapNode)
   );
 }
@@ -42,6 +54,7 @@ function normalizeMindmapNode(node: {
   remark?: unknown;
   nodeTypeId?: unknown;
   collapsed?: unknown;
+  position?: unknown;
   children: unknown[];
 }): MindmapNode {
   return {
@@ -52,6 +65,9 @@ function normalizeMindmapNode(node: {
       ? { nodeTypeId: node.nodeTypeId }
       : {}),
     ...(typeof node.collapsed === 'boolean' ? { collapsed: node.collapsed } : {}),
+    ...(isRawNodePosition(node.position)
+      ? { position: { x: node.position.x, y: node.position.y } }
+      : {}),
     children: node.children.map((child) =>
       normalizeMindmapNode(
         child as {
@@ -60,6 +76,7 @@ function normalizeMindmapNode(node: {
           remark?: unknown;
           nodeTypeId?: unknown;
           collapsed?: unknown;
+          position?: unknown;
           children: unknown[];
         },
       ),

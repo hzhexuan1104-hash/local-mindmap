@@ -58,6 +58,18 @@ textarea {
   background: #ffffff;
 }
 
+.toolbar-group {
+  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
 .app-title-group {
   min-width: 0;
 }
@@ -122,6 +134,18 @@ h3 {
   margin-right: 4px;
   color: #5e6d82;
   font-size: 14px;
+  font-weight: 700;
+}
+
+.selection-count {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #14315f;
+  background: #eef5ff;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -428,9 +452,10 @@ h3 {
   min-width: 0;
   min-height: 520px;
   overflow: auto;
-  border: 1px solid #dce3ee;
+  border: 1px solid #c7d2e2;
   border-radius: 8px;
   background: var(--canvas-bg, #ffffff);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 80%);
   cursor: grab;
 }
 
@@ -457,12 +482,21 @@ h3 {
 
 .mindmap-tree {
   position: relative;
-  min-width: max-content;
+  min-width: 100%;
   min-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding: var(--mindmap-canvas-padding, 80px);
+}
+
+.mindmap-lines {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.mindmap-lines path {
+  fill: none;
+  stroke: var(--line-color, #b7c5d8);
+  stroke-width: 2;
 }
 
 .mindmap-branch {
@@ -479,6 +513,11 @@ h3 {
   flex: 0 0 auto;
   display: flex;
   justify-content: center;
+}
+
+.positioned-node-wrap {
+  position: absolute;
+  align-items: center;
 }
 
 .mindmap-node-wrap:has(+ .child-branches)::after {
@@ -517,7 +556,11 @@ h3 {
   overflow-wrap: anywhere;
   word-break: break-word;
   hyphens: auto;
-  cursor: pointer;
+  cursor: grab;
+}
+
+.mindmap-node:active {
+  cursor: grabbing;
 }
 
 .mindmap-node:hover {
@@ -561,6 +604,25 @@ h3 {
   border-color: #f59f00;
   background: #fff7e8;
   box-shadow: 0 0 0 4px rgb(245 159 0 / 18%);
+}
+
+.mindmap-node.is-primary-selected {
+  outline: 3px solid rgb(31 111 235 / 30%);
+  outline-offset: 5px;
+}
+
+.mindmap-node.is-selected.is-primary-selected {
+  outline-color: rgb(245 159 0 / 42%);
+}
+
+.positioned-node-wrap:has(.mindmap-node:active) .mindmap-node {
+  box-shadow: 0 16px 36px rgb(31 111 235 / 24%);
+}
+
+.mindmap-node.is-dragging {
+  cursor: grabbing;
+  filter: brightness(1.02);
+  box-shadow: 0 18px 42px rgb(31 111 235 / 28%);
 }
 
 .collapse-toggle {
@@ -661,13 +723,70 @@ h3 {
   min-width: 0;
   max-width: 100%;
   min-height: 520px;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 18px;
   border: 1px solid #dce3ee;
   border-radius: 8px;
+  background: #ffffff;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 90;
+  width: 208px;
+  max-width: calc(100vw - 24px);
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid #c7d2e2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgb(15 23 42 / 20%);
+}
+
+.context-menu button {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #172033;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu button:hover,
+.context-menu button:focus-visible {
+  outline: 0;
+  color: #1f6feb;
+  background: #eef5ff;
+}
+
+.context-menu .danger-menu-item:hover,
+.context-menu .danger-menu-item:focus-visible {
+  color: #c93535;
+  background: #fff1f1;
+}
+
+.context-menu-select {
+  display: grid;
+  gap: 6px;
+  padding: 6px 10px;
+  color: #5e6d82;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.context-menu-select select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #c7d2e2;
+  border-radius: 6px;
+  color: #172033;
   background: #ffffff;
 }
 
