@@ -15,6 +15,16 @@ import {
   type CanvasViewState,
 } from '../features/mindmap/canvasControls';
 import {
+  getSelectionRect,
+  hitTestNodesInRect,
+  isDragPastThreshold,
+  mergeBoxSelection,
+  screenToCanvasPoint,
+  shouldStartBoxSelection,
+  type Point,
+  type Rect,
+} from '../features/mindmap/boxSelection';
+import {
   collectNodeIds,
   collectSelectedSubtrees,
   cutNodesSafely,
@@ -51,6 +61,7 @@ import {
   POSITIONED_LAYOUT,
   type MindmapLayoutNode,
 } from '../features/mindmap/layout';
+import { getKeyboardShortcutAction } from '../features/mindmap/keyboardShortcuts';
 import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
@@ -213,14 +224,6 @@ const setNodePositionById = (
     position,
   }));
 
-const isEditableShortcutTarget = (target: EventTarget | null) => {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
-};
-
 type DragState = {
   nodeId: string;
   pointerStart: { x: number; y: number };
@@ -256,19 +259,28 @@ type InternalClipboardState = {
   sourceNodeIds: string[];
 };
 
+type BoxSelectionState = {
+  screenStart: Point;
+  screenCurrent: Point;
+  canvasStart: Point;
+  canvasCurrent: Point;
+  append: boolean;
+  isActive: boolean;
+};
+
 type ToolDrawer =
   | 'templates'
   | 'node-types'
   | 'search'
   | 'performance'
-  | 'plugins'
-  | 'shortcuts';
+  | 'plugins';
 
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
   nodeTypes: MindmapNodeType[];
   selectedNodeId: string;
   selectedNodeIds: Set<string>;
+  boxSelectionPreviewIds: Set<string>;
   draggingNodeId: string | null;
   editingNodeId: string | null;
   editingText: string;
@@ -287,6 +299,7 @@ function MindmapTree({
   nodeTypes,
   selectedNodeId,
   selectedNodeIds,
+  boxSelectionPreviewIds,
   draggingNodeId,
   editingNodeId,
   editingText,
@@ -301,6 +314,7 @@ function MindmapTree({
 }: MindmapTreeProps) {
   const node = layoutNode.node;
   const isSelected = selectedNodeIds.has(node.id);
+  const isBoxSelectionPreview = boxSelectionPreviewIds.has(node.id);
   const isPrimarySelected = node.id === selectedNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
@@ -332,6 +346,7 @@ function MindmapTree({
           className={[
             'mindmap-node',
             isSelected ? 'is-selected' : '',
+            isBoxSelectionPreview ? 'is-box-selection-preview' : '',
             isPrimarySelected ? 'is-primary-selected' : '',
             draggingNodeId === node.id ? 'is-dragging' : '',
             isSearchMatch ? 'is-search-match' : '',
@@ -454,8 +469,12 @@ export function App() {
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [internalClipboard, setInternalClipboard] =
     useState<InternalClipboardState | null>(null);
+  const [boxSelection, setBoxSelection] = useState<BoxSelectionState | null>(null);
+  const [boxSelectionPreviewIds, setBoxSelectionPreviewIds] = useState<string[]>([]);
+  const [isShortcutHelpVisible, setIsShortcutHelpVisible] = useState(false);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLElement | null>(null);
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef({ x: 0, y: 0 });
   const dragStateRef = useRef<DragState | null>(null);
@@ -463,6 +482,17 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
   const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
+  const nodeHitboxes = useMemo(
+    () =>
+      mindmapLayout.nodes.map((layoutNode) => ({
+        id: layoutNode.id,
+        left: layoutNode.x,
+        top: layoutNode.y,
+        width: POSITIONED_LAYOUT.nodeWidth,
+        height: POSITIONED_LAYOUT.nodeHeight,
+      })),
+    [mindmapLayout.nodes],
+  );
   const layoutNodeById = useMemo(
     () =>
       new Map(
@@ -474,6 +504,11 @@ export function App() {
     () => new Set(selectedNodeIds),
     [selectedNodeIds],
   );
+  const boxSelectionPreviewIdSet = useMemo(
+    () => new Set(boxSelectionPreviewIds),
+    [boxSelectionPreviewIds],
+  );
+  const allNodeIds = useMemo(() => Array.from(collectNodeIds(mindmap)), [mindmap]);
   const pluginThemes = useMemo(() => getPluginThemes(plugins), [plugins]);
   const availableThemes = useMemo(
     () =>
@@ -524,6 +559,25 @@ export function App() {
     height: mindmapLayout.height,
     transform: `translate(${canvasView.offsetX}px, ${canvasView.offsetY}px) scale(${canvasView.scale})`,
   };
+  const boxSelectionRect = useMemo(() => {
+    if (!boxSelection?.isActive || !canvasRef.current) {
+      return null;
+    }
+
+    const viewportRect = canvasRef.current.getBoundingClientRect();
+    const rect = getSelectionRect(
+      {
+        x: boxSelection.screenStart.x - viewportRect.left + canvasRef.current.scrollLeft,
+        y: boxSelection.screenStart.y - viewportRect.top + canvasRef.current.scrollTop,
+      },
+      {
+        x: boxSelection.screenCurrent.x - viewportRect.left + canvasRef.current.scrollLeft,
+        y: boxSelection.screenCurrent.y - viewportRect.top + canvasRef.current.scrollTop,
+      },
+    );
+
+    return rect;
+  }, [boxSelection]);
   const searchMatches = useMemo(
     () => findMindmapMatches(mindmap, searchQuery, searchScope),
     [mindmap, searchQuery, searchScope],
@@ -561,7 +615,6 @@ export function App() {
     search: '查找替换',
     performance: '性能测试',
     plugins: '插件管理',
-    shortcuts: '快捷键',
   } as const;
 
   useEffect(() => {
@@ -592,58 +645,53 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setContextMenu(null);
+      const action = getKeyboardShortcutAction(event, {
+        hasModalOpen: Boolean(excelImportPreview || isPluginManagerVisible || isShortcutHelpVisible),
+        hasContextMenuOpen: Boolean(contextMenu),
+        isBoxSelecting: Boolean(boxSelection),
+        hasSelection: selectedNodeIds.length > 0,
+      });
+
+      if (!action) {
         return;
       }
 
-      if (isEditableShortcutTarget(event.target)) {
-        return;
-      }
+      event.preventDefault();
 
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        event.preventDefault();
-        handleDeleteNode();
-        return;
-      }
-
-      if (!event.ctrlKey) {
-        return;
-      }
-
-      if (event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        handleUndo();
-        return;
-      }
-
-      if (event.key.toLowerCase() === 'y') {
-        event.preventDefault();
-        handleRedo();
-        return;
-      }
-
-      if (event.key.toLowerCase() === 'c') {
-        event.preventDefault();
-        handleCopyNodes();
-        return;
-      }
-
-      if (event.key.toLowerCase() === 'x') {
-        event.preventDefault();
-        handleCutNodes();
-        return;
-      }
-
-      if (event.key.toLowerCase() === 'v') {
-        event.preventDefault();
-        handlePasteNodes();
-        return;
-      }
-
-      if (event.key.toLowerCase() === 'd') {
-        event.preventDefault();
-        handleDuplicateNodeAsSibling();
+      switch (action) {
+        case 'close-or-clear':
+          handleEscapeShortcut();
+          return;
+        case 'delete':
+          handleDeleteNode();
+          return;
+        case 'undo':
+          handleUndo();
+          return;
+        case 'redo':
+          handleRedo();
+          return;
+        case 'copy':
+          handleCopyNodes();
+          return;
+        case 'cut':
+          handleCutNodes();
+          return;
+        case 'paste':
+          handlePasteNodes();
+          return;
+        case 'duplicate':
+          handleDuplicateNodeAsSibling();
+          return;
+        case 'select-all':
+          handleSelectAllNodes();
+          return;
+        case 'save':
+          handleSaveMindmap();
+          return;
+        case 'open':
+          void handleOpenMindmap();
+          return;
       }
     };
 
@@ -683,6 +731,53 @@ export function App() {
     setSelectedNodeId(mindmap.id);
     setSelectedNodeIds([mindmap.id]);
     setContextMenu(null);
+  };
+
+  const handleSelectAllNodes = () => {
+    const nextSelectedNodeIds = allNodeIds;
+
+    if (nextSelectedNodeIds.length === 0) {
+      return;
+    }
+
+    setSelectedNodeId(nextSelectedNodeIds[0]);
+    setSelectedNodeIds(nextSelectedNodeIds);
+    setContextMenu(null);
+    showMessage(`已全选 ${nextSelectedNodeIds.length} 个节点`);
+  };
+
+  const cancelBoxSelection = () => {
+    setBoxSelection(null);
+    setBoxSelectionPreviewIds([]);
+  };
+
+  const handleEscapeShortcut = () => {
+    if (excelImportPreview) {
+      setExcelImportPreview(null);
+      return;
+    }
+
+    if (isPluginManagerVisible) {
+      setIsPluginManagerVisible(false);
+      return;
+    }
+
+    if (isShortcutHelpVisible) {
+      setIsShortcutHelpVisible(false);
+      return;
+    }
+
+    if (contextMenu) {
+      setContextMenu(null);
+      return;
+    }
+
+    if (boxSelection) {
+      cancelBoxSelection();
+      return;
+    }
+
+    clearSelectionToRoot();
   };
 
   const applyProject = (project: MindmapProject, nextSelectedNodeId?: string) => {
@@ -1371,24 +1466,81 @@ export function App() {
   const handleCanvasPointerDown = (
     event: MouseEvent<HTMLElement>,
   ) => {
-    if (event.button !== 0) {
-      return;
-    }
-
     const target = event.target as HTMLElement;
 
-    if (target.closest('.mindmap-node, .collapse-toggle, button, input, textarea, select')) {
+    const isOnInteractiveElement = Boolean(
+      target.closest(
+        '.mindmap-node, .collapse-toggle, .canvas-floating-toolbar, .context-menu, button, input, textarea, select, [contenteditable="true"]',
+      ),
+    );
+
+    if (
+      !shouldStartBoxSelection({
+        button: event.button,
+        isOnInteractiveElement,
+      })
+    ) {
       return;
     }
 
-    clearSelectionToRoot();
-    isPanningRef.current = true;
-    lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+    const canvasElement = event.currentTarget;
+    const canvasViewportRect = canvasElement.getBoundingClientRect();
+    const screenPoint = { x: event.clientX, y: event.clientY };
+    const canvasPoint = screenToCanvasPoint(
+      screenPoint,
+      canvasViewportRect,
+      canvasView,
+    );
+
+    setContextMenu(null);
+    setBoxSelection({
+      screenStart: screenPoint,
+      screenCurrent: screenPoint,
+      canvasStart: canvasPoint,
+      canvasCurrent: canvasPoint,
+      append: event.shiftKey,
+      isActive: false,
+    });
+    setBoxSelectionPreviewIds([]);
   };
 
   const handleCanvasPointerMove = (
     event: MouseEvent<HTMLElement>,
   ) => {
+    if (boxSelection) {
+      const canvasElement = event.currentTarget;
+      const canvasViewportRect = canvasElement.getBoundingClientRect();
+      const screenPoint = { x: event.clientX, y: event.clientY };
+      const canvasPoint = screenToCanvasPoint(
+        screenPoint,
+        canvasViewportRect,
+        canvasView,
+      );
+      const isActive =
+        boxSelection.isActive ||
+        isDragPastThreshold(boxSelection.screenStart, screenPoint);
+      const nextBoxSelection = {
+        ...boxSelection,
+        screenCurrent: screenPoint,
+        canvasCurrent: canvasPoint,
+        isActive,
+      };
+
+      setBoxSelection(nextBoxSelection);
+
+      if (isActive) {
+        const hitNodeIds = hitTestNodesInRect(
+          getSelectionRect(nextBoxSelection.canvasStart, nextBoxSelection.canvasCurrent),
+          nodeHitboxes,
+        );
+        setBoxSelectionPreviewIds(
+          mergeBoxSelection(selectedNodeIds, hitNodeIds, nextBoxSelection.append),
+        );
+      }
+
+      return;
+    }
+
     if (dragStateRef.current) {
       const dragState = dragStateRef.current;
       const pointerDeltaX = event.clientX - dragState.pointerStart.x;
@@ -1427,6 +1579,40 @@ export function App() {
 
   const stopCanvasPan = () => {
     isPanningRef.current = false;
+  };
+
+  const handleCanvasPointerUp = () => {
+    if (boxSelection) {
+      if (!boxSelection.isActive) {
+        clearSelectionToRoot();
+        cancelBoxSelection();
+        return;
+      }
+
+      const hitNodeIds = hitTestNodesInRect(
+        getSelectionRect(boxSelection.canvasStart, boxSelection.canvasCurrent),
+        nodeHitboxes,
+      );
+      const nextSelectedNodeIds = mergeBoxSelection(
+        selectedNodeIds,
+        hitNodeIds,
+        boxSelection.append,
+      );
+      const nextPrimaryNodeId =
+        nextSelectedNodeIds[nextSelectedNodeIds.length - 1] ?? mindmap.id;
+
+      setSelectedNodeId(nextPrimaryNodeId);
+      setSelectedNodeIds(nextSelectedNodeIds.length > 0 ? nextSelectedNodeIds : [mindmap.id]);
+      cancelBoxSelection();
+      showMessage(
+        nextSelectedNodeIds.length > 0
+          ? `已框选 ${nextSelectedNodeIds.length} 个节点`
+          : '未框选到节点',
+      );
+      return;
+    }
+
+    stopCanvasPan();
   };
 
   const handleStartNodeDrag = (
@@ -1661,7 +1847,10 @@ export function App() {
                   >
                     性能测试
                   </button>
-                  <button type="button" onClick={() => setActiveDrawer('shortcuts')}>
+                  <button
+                    type="button"
+                    onClick={() => setIsShortcutHelpVisible(true)}
+                  >
                     快捷键帮助
                   </button>
                 </div>
@@ -1743,7 +1932,6 @@ export function App() {
               ['search', '查找替换'],
               ['performance', '性能测试'],
               ['plugins', '插件管理'],
-              ['shortcuts', '快捷键'],
             ].map(([drawer, label]) => (
               <button
                 key={drawer}
@@ -1758,6 +1946,13 @@ export function App() {
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              className={isShortcutHelpVisible ? 'is-active' : ''}
+              onClick={() => setIsShortcutHelpVisible(true)}
+            >
+              快捷键
+            </button>
           </aside>
         ) : null}
 
@@ -2198,22 +2393,6 @@ export function App() {
               </section>
             ) : null}
 
-            {activeDrawer === 'shortcuts' ? (
-              <section className="feature-panel" aria-label="快捷键帮助">
-                <div className="shortcut-list">
-                  <span>Ctrl + Z：撤销</span>
-                  <span>Ctrl + Y：重做</span>
-                  <span>Ctrl + C：复制选中节点</span>
-                  <span>Ctrl + X：剪切选中节点</span>
-                  <span>Ctrl + V：粘贴到当前节点下</span>
-                  <span>Ctrl + D：复制为同级节点</span>
-                  <span>Ctrl / Shift + 点击节点：多选</span>
-                  <span>Ctrl + 鼠标滚轮：缩放画布</span>
-                  <span>Delete / Backspace：删除选中节点</span>
-                  <span>Esc：关闭右键菜单</span>
-                </div>
-              </section>
-            ) : null}
           </aside>
         ) : null}
 
@@ -2226,11 +2405,17 @@ export function App() {
           .join(' ')}
       >
         <section
-          className="mindmap-canvas"
+          className={[
+            'mindmap-canvas',
+            boxSelection ? 'is-box-selecting' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
           aria-label="思维导图画布"
+          ref={canvasRef}
           onMouseDown={handleCanvasPointerDown}
           onMouseMove={handleCanvasPointerMove}
-          onMouseUp={stopCanvasPan}
+          onMouseUp={handleCanvasPointerUp}
           onMouseLeave={stopCanvasPan}
           onWheel={handleCanvasWheel}
           onContextMenu={handleCanvasContextMenu}
@@ -2324,6 +2509,7 @@ export function App() {
                   nodeTypes={availableNodeTypes}
                   selectedNodeId={selectedNodeId}
                   selectedNodeIds={selectedNodeIdSet}
+                  boxSelectionPreviewIds={boxSelectionPreviewIdSet}
                   draggingNodeId={draggingNodeId}
                   editingNodeId={editingNodeId}
                   editingText={editingText}
@@ -2339,6 +2525,18 @@ export function App() {
               ))}
             </div>
           </div>
+          {boxSelectionRect ? (
+            <div
+              className="box-selection-rect"
+              style={{
+                left: boxSelectionRect.left,
+                top: boxSelectionRect.top,
+                width: boxSelectionRect.width,
+                height: boxSelectionRect.height,
+              }}
+              aria-hidden="true"
+            />
+          ) : null}
         </section>
 
         {!isFocusMode ? (
@@ -2389,6 +2587,72 @@ export function App() {
           onToggle={handleTogglePlugin}
           onUninstall={handleUninstallPlugin}
         />
+      ) : null}
+
+      {isShortcutHelpVisible ? (
+        <div className="shortcut-help-backdrop" role="presentation">
+          <section
+            className="shortcut-help-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="shortcut-help-title"
+          >
+            <header className="shortcut-help-header">
+              <div>
+                <p className="eyebrow">Shortcuts</p>
+                <h2 id="shortcut-help-title">快捷键帮助</h2>
+              </div>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setIsShortcutHelpVisible(false)}
+              >
+                关闭
+              </button>
+            </header>
+            <div className="shortcut-list">
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>Z</kbd>：撤销
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>Y</kbd>：重做
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>C</kbd>：复制节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>X</kbd>：剪切节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>V</kbd>：粘贴节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>D</kbd>：复制为同级节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>A</kbd>：全选节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>S</kbd>：保存 .lmind
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>O</kbd>：打开 .lmind
+              </span>
+              <span>
+                <kbd>Delete</kbd>：删除选中节点
+              </span>
+              <span>
+                <kbd>Backspace</kbd>：删除选中节点
+              </span>
+              <span>
+                <kbd>Esc</kbd>：关闭弹窗 / 右键菜单 / 框选，或清空选择
+              </span>
+              <span>Ctrl / Shift + 点击节点：多选</span>
+              <span>Shift + 框选：追加选择</span>
+              <span>Ctrl + 鼠标滚轮：缩放画布</span>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {contextMenu ? (
