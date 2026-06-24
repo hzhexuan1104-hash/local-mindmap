@@ -47,6 +47,7 @@ textarea {
 .app-header {
   width: 100%;
   min-width: 0;
+  overflow-x: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -77,6 +78,12 @@ h2 {
   margin: 0;
   font-size: 20px;
   line-height: 1.3;
+}
+
+h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.35;
 }
 
 .primary-action {
@@ -269,6 +276,30 @@ h2 {
   gap: 8px;
 }
 
+.template-group {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.template-group + .template-group {
+  padding-top: 12px;
+  border-top: 1px solid #e5ebf3;
+}
+
+.template-group-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.template-group-heading span {
+  color: #5e6d82;
+  font-size: 13px;
+}
+
 .template-item,
 .node-type-item {
   min-width: 0;
@@ -334,6 +365,28 @@ h2 {
   line-height: 1.45;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.performance-panel {
+  gap: 10px;
+}
+
+.performance-result {
+  max-height: 220px;
+  min-width: 0;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.performance-result pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: 13px/1.55 Consolas, "SFMono-Regular", "Microsoft YaHei", monospace;
 }
 
 .node-type-panel {
@@ -916,7 +969,7 @@ h2 {
 }
 
 .excel-mapping-dialog {
-  width: min(920px, 100%);
+  width: min(960px, 100%);
   max-width: calc(100vw - 64px);
   max-height: min(780px, calc(100vh - 64px));
   min-width: 0;
@@ -1017,7 +1070,7 @@ h2 {
 
 .excel-sample-table {
   width: 100%;
-  min-width: 560px;
+  min-width: 520px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -1053,7 +1106,7 @@ h2 {
 }
 
 .plugin-manager-dialog {
-  width: min(980px, 100%);
+  width: min(1040px, 100%);
   max-width: calc(100vw - 64px);
   max-height: min(820px, calc(100vh - 64px));
   min-width: 0;
@@ -1235,6 +1288,11 @@ h2 {
 
   .template-item {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .template-group-heading {
+    align-items: flex-start;
     flex-direction: column;
   }
 

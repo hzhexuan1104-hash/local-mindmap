@@ -48,6 +48,9 @@ import {
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
+import { OFFICIAL_TEMPLATES } from '../features/mindmap/officialTemplates';
+import { PerformancePanel } from '../features/mindmap/PerformancePanel';
+import type { PerformanceBenchmarkResult } from '../features/mindmap/performanceTest';
 import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
@@ -331,6 +334,8 @@ export function App() {
   );
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
+  const [performanceResult, setPerformanceResult] =
+    useState<PerformanceBenchmarkResult | null>(null);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const isPanningRef = useRef(false);
@@ -395,10 +400,19 @@ export function App() {
   );
   const activeMatch = searchMatches[activeMatchIndex] ?? null;
   const templateCategories = useMemo(
-    () => getTemplateCategories(templates),
+    () => getTemplateCategories([...OFFICIAL_TEMPLATES, ...templates]),
     [templates],
   );
-  const visibleTemplates = useMemo(
+  const visibleOfficialTemplates = useMemo(
+    () =>
+      filterAndSortTemplates(OFFICIAL_TEMPLATES, {
+        keyword: templateKeyword,
+        category: templateCategoryFilter,
+        sortMode: templateSortMode,
+      }),
+    [templateCategoryFilter, templateKeyword, templateSortMode],
+  );
+  const visibleCustomTemplates = useMemo(
     () =>
       filterAndSortTemplates(templates, {
         keyword: templateKeyword,
@@ -846,6 +860,17 @@ export function App() {
     showMessage('已删除模板');
   };
 
+  const handleGeneratePerformanceMindmap = (
+    rootNode: MindmapNode,
+    result: PerformanceBenchmarkResult,
+  ) => {
+    recordHistory();
+    applyProject({ rootNode, nodeTypes: [], themeId });
+    setPerformanceResult(result);
+    setCanvasView(centerCanvasView());
+    showMessage(`已生成 ${result.nodeCount} 节点性能测试导图`);
+  };
+
   const handleCreateNodeType = () => {
     const nodeType = createMindmapNodeType(nodeTypeDraft);
 
@@ -1166,6 +1191,17 @@ export function App() {
         </div>
       </section>
 
+      <PerformancePanel
+        rootNode={mindmap}
+        nodeTypes={nodeTypes}
+        themeId={themeId}
+        canExportTxt={canExportTxt}
+        result={performanceResult}
+        onGenerate={handleGeneratePerformanceMindmap}
+        onResultChange={setPerformanceResult}
+        onMessage={showMessage}
+      />
+
       <section className="feature-panel" aria-label="查找替换">
         <div className="panel-heading">
           <h2>查找替换</h2>
@@ -1290,6 +1326,7 @@ export function App() {
                   setTemplateSortMode(event.target.value as TemplateSortMode)
                 }
               >
+                <option value="preset-asc">预设顺序</option>
                 <option value="created-desc">创建时间倒序</option>
                 <option value="created-asc">创建时间正序</option>
                 <option value="name-asc">按名称排序</option>
@@ -1306,44 +1343,90 @@ export function App() {
                 ))}
               </select>
             </div>
-            <div className="template-list">
-              {visibleTemplates.length === 0 ? (
-              <p className="empty-note">暂无自定义模板</p>
-            ) : (
-              visibleTemplates.map((template) => (
-                <div className="template-item" key={template.id}>
-                  <div className="template-thumbnail" aria-hidden="true">
-                    {template.thumbnail.split('\n').map((line, index) => (
-                      <span key={`${template.id}-${index}`}>{line}</span>
-                    ))}
-                  </div>
-                  <div>
-                    <strong>{template.name}</strong>
-                    <span>分类：{template.category}</span>
-                    <span>{new Date(template.createTime).toLocaleString()}</span>
-                    {template.description ? (
-                      <p className="template-description">
-                        {template.description}
-                      </p>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => handleCreateFromTemplate(template)}
-                  >
-                    使用
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action danger-action"
-                    onClick={() => handleDeleteTemplate(template.id)}
-                  >
-                    删除
-                  </button>
-                </div>
-              ))
-            )}
+
+            <div className="template-group">
+              <div className="template-group-heading">
+                <h3>官方默认模板</h3>
+                <span>{visibleOfficialTemplates.length} 个模板</span>
+              </div>
+              <div className="template-list">
+                {visibleOfficialTemplates.length === 0 ? (
+                  <p className="empty-note">暂无匹配的官方模板</p>
+                ) : (
+                  visibleOfficialTemplates.map((template) => (
+                    <div className="template-item" key={template.id}>
+                      <div className="template-thumbnail" aria-hidden="true">
+                        {template.thumbnail.split('\n').map((line, index) => (
+                          <span key={`${template.id}-${index}`}>{line}</span>
+                        ))}
+                      </div>
+                      <div>
+                        <strong>{template.name}</strong>
+                        <span>分类：{template.category}</span>
+                        <span>预设顺序：{template.presetOrder}</span>
+                        {template.description ? (
+                          <p className="template-description">
+                            {template.description}
+                          </p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        onClick={() => handleCreateFromTemplate(template)}
+                      >
+                        使用
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="template-group">
+              <div className="template-group-heading">
+                <h3>我的自定义模板</h3>
+                <span>{visibleCustomTemplates.length} 个模板</span>
+              </div>
+              <div className="template-list">
+                {visibleCustomTemplates.length === 0 ? (
+                  <p className="empty-note">暂无自定义模板</p>
+                ) : (
+                  visibleCustomTemplates.map((template) => (
+                    <div className="template-item" key={template.id}>
+                      <div className="template-thumbnail" aria-hidden="true">
+                        {template.thumbnail.split('\n').map((line, index) => (
+                          <span key={`${template.id}-${index}`}>{line}</span>
+                        ))}
+                      </div>
+                      <div>
+                        <strong>{template.name}</strong>
+                        <span>分类：{template.category}</span>
+                        <span>{new Date(template.createTime).toLocaleString()}</span>
+                        {template.description ? (
+                          <p className="template-description">
+                            {template.description}
+                          </p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        onClick={() => handleCreateFromTemplate(template)}
+                      >
+                        使用
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-action danger-action"
+                        onClick={() => handleDeleteTemplate(template.id)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         ) : null}

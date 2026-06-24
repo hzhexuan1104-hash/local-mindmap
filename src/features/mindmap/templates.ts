@@ -4,17 +4,24 @@ const TEMPLATE_STORAGE_KEY = 'local-mindmap.templates.v1';
 
 export type MindmapTemplate = {
   id: string;
+  templateId?: string;
   name: string;
   category: string;
   description: string;
   createTime: string;
+  presetOrder?: number;
+  isOfficial?: boolean;
   rootNode: MindmapNode;
   nodeTypes: MindmapNodeType[];
   themeId: string;
   thumbnail: string;
 };
 
-export type TemplateSortMode = 'created-desc' | 'created-asc' | 'name-asc';
+export type TemplateSortMode =
+  | 'preset-asc'
+  | 'created-desc'
+  | 'created-asc'
+  | 'name-asc';
 
 export type TemplateFilterOptions = {
   keyword: string;
@@ -47,10 +54,14 @@ function normalizeTemplate(value: unknown): MindmapTemplate | null {
 
   return {
     id: String(item.id),
+    templateId: item.templateId ? String(item.templateId) : undefined,
     name: item.name || '未命名模板',
     category: item.category || '未分类',
     description: item.description || '',
     createTime: item.createTime || new Date().toISOString(),
+    presetOrder:
+      typeof item.presetOrder === 'number' ? item.presetOrder : undefined,
+    isOfficial: Boolean(item.isOfficial),
     rootNode: item.rootNode,
     nodeTypes: item.nodeTypes ?? [],
     themeId: item.themeId ?? 'default-blue',
@@ -151,6 +162,17 @@ export function filterAndSortTemplates(
       return matchesKeyword && matchesCategory;
     })
     .sort((left, right) => {
+      if (options.sortMode === 'preset-asc') {
+        const leftOrder = left.presetOrder ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = right.presetOrder ?? Number.MAX_SAFE_INTEGER;
+
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+
+        return left.name.localeCompare(right.name, 'zh-Hans-CN');
+      }
+
       if (options.sortMode === 'name-asc') {
         return left.name.localeCompare(right.name, 'zh-Hans-CN');
       }
