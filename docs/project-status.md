@@ -2,12 +2,14 @@
 
 更新时间：2026-06-24
 
+当前交付版本：v1.0.0
+
 ## 已完成
 
 - React + TypeScript + Vite 基础工程。
 - 基础节点新增、删除、编辑。
 - 子节点、同级节点。
-- 节点文本自动换行和基础自动布局。
+- 节点文本自动换行和左到右自动布局。
 - `.lmind` 保存和打开。
 - Markdown 备注、实时预览、独立放大预览。
 - Markdown / Excel / JSON 导入导出。
@@ -49,6 +51,9 @@
 - Release 检查文档已完成：
   - 新增 `docs/release-checklist.md`。
   - 覆盖构建、测试、GitHub Pages、回归、导入导出、插件和性能检查。
+- v1.0.0 发布说明已完成：
+  - 新增 `docs/release-notes-v1.0.0.md`。
+  - 覆盖在线预览、核心功能、本地运行、构建测试、数据安全、已知限制和后续计划。
 - README 和验收测试文档。
 - GitHub Pages 部署。
 
@@ -56,6 +61,7 @@
 
 - `npm run build` 通过。
 - `npm run test` 通过。
+- `package.json` 版本号已更新为 `1.0.0`。
 - Vite 提示打包后主 chunk 超过 500 kB，这是体积提醒，不是构建错误。
 
 ## 安全状态

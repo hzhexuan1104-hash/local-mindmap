@@ -19,6 +19,7 @@
    - 评估大导图渲染和 Markdown 预览性能。
 5. 创建 GitHub Release：
    - 按 `docs/release-checklist.md` 完成发布检查。
+   - 使用 `docs/release-notes-v1.0.0.md` 作为 Release 说明基础。
    - 记录版本号、已知风险和验证结果。
    - 等 GitHub Actions 通过后创建 Release。
 
