@@ -2,99 +2,75 @@
 
 ## 1. 当前结论
 
-当前项目继续保留 Vite Web 应用作为主形态，不在本阶段强行接入完整 Electron 或 Tauri 打包链路。
+v1.1 第一批已接入 Tauri v2 最小桌面端配置，但尚未交付正式桌面安装包。
 
-原因：
+当前仍保留 Vite Web 应用作为主形态：
 
-- 当前 Web 版已经支持 GitHub Pages 部署，贸然改构建入口可能影响线上静态部署。
-- 当前保存、打开、导入、导出均基于浏览器本地文件能力，已经满足纯本地数据处理。
-- 桌面端真实打包需要分别验证 Windows、macOS、Linux / 信创系统和国产 CPU 架构，风险不适合一次性大改。
+- Web 版开发仍使用 `npm run dev`。
+- Web 版构建仍使用 `npm run build`。
+- GitHub Pages 仍发布 Vite 静态构建产物 `dist/`。
+- 浏览器版保存、打开、导入、导出逻辑不变，仍使用本地文件能力。
 
-本阶段交付的是桌面端打包准备文档和测试基础，不改变现有 Web 运行方式。
+Tauri 最小壳只负责启动桌面窗口并加载当前 Vite 应用，不新增云端服务、不上传用户数据、不执行远程脚本。
 
-## 2. 保留的 Web 运行方式
+## 2. 新增文件和脚本
 
-开发运行：
+新增文件：
+
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+- `src-tauri/build.rs`
+- `src-tauri/src/main.rs`
+
+新增 npm 脚本：
+
+```bash
+npm run tauri:dev
+npm run tauri:build
+```
+
+新增开发依赖：
+
+```text
+@tauri-apps/cli
+```
+
+## 3. 运行方式
+
+Web 开发：
 
 ```bash
 npm run dev
 ```
 
-生产构建：
+Web 构建：
 
 ```bash
 npm run build
 ```
 
-本地预览：
+Tauri 桌面开发：
 
 ```bash
-npm run preview
+npm run tauri:dev
 ```
 
-GitHub Pages 仍使用 Vite 静态构建产物 `dist/`。
+Tauri 桌面构建：
 
-## 3. 推荐桌面端路线
+```bash
+npm run tauri:build
+```
 
-### 方案 A：Tauri
+Tauri 运行前需要安装 Rust / Cargo，并按目标平台安装系统 WebView 依赖。
 
-优点：
+## 4. 当前验证状态
 
-- 打包产物通常更小。
-- Rust 后端适合做本地文件系统能力和安全边界控制。
-- 更适合后续信创系统适配时做细粒度依赖审查。
-
-风险：
-
-- 需要验证 Linux / 信创发行版上的 WebView 依赖。
-- 需要验证国产 CPU 架构的 Rust 工具链、系统 WebView 和打包链路。
-- 团队需要维护 Rust/Tauri 配置。
-
-### 方案 B：Electron
-
-优点：
-
-- 生态成熟。
-- 文件系统、窗口管理、菜单、自动更新等能力资料丰富。
-- Windows/macOS/Linux 主流架构适配经验多。
-
-风险：
-
-- 包体积较大。
-- 国产 CPU 架构和信创系统下的 Electron 运行时兼容需要专门验证。
-- 需要额外关注 Node.js 能力暴露边界，避免破坏“纯本地、不开启不必要权限”的安全原则。
-
-## 4. 建议的分阶段计划
-
-### 阶段 1：保持 Web 应用稳定
-
-- 保持当前 Vite 构建。
-- 保持 GitHub Pages 部署不变。
-- 增加自动化测试覆盖纯函数。
-- 梳理桌面端文件读写、安全和适配风险。
-
-### 阶段 2：创建最小桌面壳
-
-- 单独新增桌面端目录，例如 `desktop/` 或 `src-tauri/`。
-- 桌面壳加载 Vite 构建产物。
-- 禁止远程页面加载。
-- 禁止执行第三方插件代码。
-- 文件打开和保存仍只面向本地 `.lmind` / 导入导出文件。
-
-### 阶段 3：接入原生文件能力
-
-- 用桌面端原生文件对话框替换或增强浏览器文件选择。
-- 支持 `.lmind` 默认保存和打开。
-- 支持本地图片、导入导出路径等桌面能力。
-- 保持 Web 版继续可用。
-
-### 阶段 4：平台验证
-
-- Windows 10+ x86/x64。
-- macOS 11+ Intel / Apple Silicon。
-- Linux x86/x64。
-- 统信 UOS / 银河麒麟。
-- 飞腾、鲲鹏、龙芯等国产 CPU 架构。
+- `npm run build` 已通过。
+- `npm run test` 已通过。
+- `npm run tauri:build` 在当前环境未通过，原因是缺少 Rust / Cargo：
+  - `rustc` 不在 PATH。
+  - `cargo` 不在 PATH。
+  - Tauri CLI 无法执行 `cargo metadata`。
 
 ## 5. 桌面端安全要求
 
@@ -103,23 +79,47 @@ GitHub Pages 仍使用 Vite 静态构建产物 `dist/`。
 - 不加载远程脚本。
 - 插件基础版继续只读 manifest 数据，不执行第三方 JS。
 - 本地文件读写必须由用户明确选择或确认。
-- 如后续引入桌面后端，应限制文件系统访问范围。
+- 后续如引入桌面后端文件能力，应限制文件系统访问范围。
 
 ## 6. 文件能力要求
 
-桌面版至少需要支持：
+桌面版至少需要保持 Web 版现有能力：
 
 - 新建导图。
 - 打开 `.lmind`。
 - 保存 `.lmind`。
 - 导入 Markdown / Excel / JSON。
 - 导出 Markdown / Excel / JSON / PNG / JPG / TXT。
-- 保持文件内容为本地 JSON 或本地导出文件，不依赖云端。
+- 保持 `.lmind` 为标准 JSON，不依赖云端。
 
-## 7. 当前未完成
+## 7. 后续分阶段计划
 
-- 未创建 Electron/Tauri 运行时配置。
+### 阶段 1：补齐本机环境
+
+- 安装 Rust / Cargo。
+- 运行 `npm run tauri:dev`。
+- 运行 `npm run tauri:build`。
+- 记录 Windows 本机验证结果。
+
+### 阶段 2：平台验证
+
+- Windows 10+ x86/x64。
+- macOS 11+ Intel / Apple Silicon。
+- Linux x86/x64。
+- 统信 UOS / 银河麒麟。
+- 飞腾、鲲鹏、龙芯等国产 CPU 架构。
+
+### 阶段 3：原生能力评估
+
+- 评估是否用 Tauri 原生文件对话框增强 `.lmind` 打开和保存。
+- 保持 Web 版继续可用。
+- 不改变 `.lmind` 数据结构。
+- 不开启不必要的系统权限。
+
+## 8. 当前未完成
+
+- 当前环境未完成 Tauri 真实构建。
 - 未生成桌面安装包。
 - 未验证信创系统真实打包。
 - 未验证国产 CPU 架构运行时兼容。
-
+- 未接入 Tauri 原生文件对话框。

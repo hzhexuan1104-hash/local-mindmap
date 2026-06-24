@@ -1,6 +1,6 @@
 # 本地化思维导图工具
 
-一个纯本地运行的思维导图 Web 工具，使用 React + TypeScript + Vite 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前交付版本：v1.0.0。
+一个纯本地运行的思维导图 Web 工具，使用 React + TypeScript + Vite 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前开发版本：v1.1.0。
 
 ## 在线预览
 
@@ -24,13 +24,14 @@
 - 操作历史：支持撤销 / 重做，历史记录不少于 50 步。
 - 性能测试工具：支持生成 100 / 500 / 1000 节点导图，统计序列化和内容生成耗时。
 - 自动化测试基础：使用 Vitest 覆盖 Markdown 导入导出、JSON 校验、Excel 导入核心解析、TXT 导出和插件 manifest 校验。
+- v1.1 第一批功能：Tauri 桌面端最小壳、节点拖拽位置、重新自动布局、Ctrl/Shift 多选、批量删除、批量切换节点类型、节点和画布右键菜单。
 
 ## 当前完成度
 
 - P0/P1 核心能力已覆盖主要编辑、备注、保存打开、导入导出、模板、查找替换、主题和基础画布操作。
 - P2 能力已实现自定义节点类型增强和插件管理基础版。
 - 官方模板库基础版、性能压测工具、Release 检查文档和 v1.0.0 发布说明已完成。
-- 桌面端真实打包尚未完成，当前已补充打包准备方案和信创适配说明。
+- 桌面端已新增 Tauri v2 最小配置；真实安装包和跨平台打包验证仍属于后续任务。
 - 复制 / 剪切 / 粘贴、拖拽调整层级、框选批量操作仍属于后续任务。
 
 ## 本地运行
@@ -72,6 +73,24 @@ npm run build
 npm run preview
 ```
 
+## 桌面端开发模式
+
+v1.1 新增 Tauri v2 最小桌面壳，保留当前 Vite + React Web 架构。
+
+运行桌面开发模式：
+
+```bash
+npm run tauri:dev
+```
+
+构建桌面端：
+
+```bash
+npm run tauri:build
+```
+
+运行 Tauri 需要本机安装 Rust / Cargo，以及目标平台所需的 Tauri 系统依赖。当前桌面端只加载本地 Vite 应用，不新增云端服务、不上传用户数据、不执行远程脚本。
+
 ## 自动化测试
 
 运行单元测试：
@@ -90,6 +109,7 @@ npm run test
 - 插件 manifest 校验：合法 manifest 与缺失必填字段。
 - 官方模板：模板数量、官方标识和 rootNode 合法性。
 - 性能测试：100 / 1000 节点生成、唯一 ID 和多层级结构。
+- v1.1：节点 `position` 保存/打开兼容、JSON 导入导出保留 `position`、无 `position` 自动布局、重新自动布局清除 `position`、多选纯函数。
 
 ## GitHub Pages 部署说明
 
@@ -110,12 +130,12 @@ https://hzhexuan1104-hash.github.io/local-mindmap/
 
 ## 桌面端打包准备
 
-当前阶段没有强行接入 Electron 或 Tauri，Web 版和 GitHub Pages 部署方式保持不变。
+当前阶段已接入 Tauri v2 最小桌面壳，Web 版和 GitHub Pages 部署方式保持不变。
 
 桌面端后续方向：
 
 - 保留当前 Vite Web 应用作为核心 UI。
-- 后续优先评估 Tauri 或 Electron 的最小桌面壳。
+- Tauri 桌面壳加载当前 Vite 应用和 `dist/` 构建产物。
 - 桌面端继续满足纯本地运行、不上传用户数据、支持 `.lmind` 打开和保存。
 - 先验证 Windows、macOS、Linux / 信创系统及国产 CPU 架构兼容，再进入正式打包。
 
@@ -161,10 +181,13 @@ docs/xinchuang-compatibility.md
     "id": "root",
     "text": "中心主题",
     "remark": "",
+    "position": { "x": 0, "y": 0 },
     "children": []
   }
 }
 ```
+
+`position` 是 v1.1 新增的可选字段。旧 `.lmind` 文件没有该字段时仍使用左到右自动布局；节点被手动拖拽后会保存该坐标，点击“重新自动布局”会清除节点坐标并恢复自动布局。
 
 ## 插件管理系统
 
@@ -274,6 +297,12 @@ docs/acceptance-test-checklist.md
 docs/plugin-development-guide.md
 ```
 
+v1.1 草稿发布说明见：
+
+```text
+docs/release-notes-v1.1.0-draft.md
+```
+
 ## 后续计划
 
 - 节点复制 / 剪切 / 粘贴。
@@ -284,4 +313,4 @@ docs/plugin-development-guide.md
 - 性能优化。
 - UI 细节打磨。
 - 插件签名、插件目录和沙箱执行能力。
-- 桌面端真实打包。
+- 桌面端真实安装包和跨平台打包验证。

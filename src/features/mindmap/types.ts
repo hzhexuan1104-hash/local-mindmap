@@ -4,6 +4,10 @@ export type MindmapNode = {
   remark: string;
   nodeTypeId?: string;
   collapsed?: boolean;
+  position?: {
+    x: number;
+    y: number;
+  };
   children: MindmapNode[];
 };
 
