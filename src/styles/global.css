@@ -230,6 +230,38 @@ h2 {
   word-break: break-word;
 }
 
+.template-save-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(140px, 220px) minmax(240px, 2fr);
+  gap: 10px;
+}
+
+.template-save-form input,
+.template-save-form textarea {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #c7d2e2;
+  border-radius: 6px;
+  color: #172033;
+  background: #ffffff;
+}
+
+.template-save-form textarea {
+  min-height: 72px;
+  padding: 10px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.template-manager {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
 .template-list,
 .node-type-list {
   min-width: 0;
@@ -256,6 +288,30 @@ h2 {
   gap: 4px;
 }
 
+.template-thumbnail {
+  width: 128px;
+  min-height: 72px;
+  flex: 0 0 auto;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #c7d2e2;
+  border-radius: 8px;
+  color: #14315f;
+  background:
+    linear-gradient(#edf2f8 1px, transparent 1px),
+    linear-gradient(90deg, #edf2f8 1px, transparent 1px),
+    #ffffff;
+  background-size: 18px 18px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .template-item strong,
 .node-type-item strong,
 .template-item span,
@@ -269,6 +325,15 @@ h2 {
 .node-type-item span {
   color: #5e6d82;
   font-size: 13px;
+}
+
+.template-description {
+  margin: 0;
+  color: #172033;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .node-type-panel {
@@ -285,8 +350,12 @@ h2 {
   width: 24px;
   height: 24px;
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 2px solid;
   border-radius: 6px;
+  font-size: 14px;
 }
 
 .workspace-layout {
@@ -368,6 +437,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 14px 18px;
   border: 2px solid var(--node-border, #1f6feb);
   border-radius: 8px;
@@ -392,6 +462,29 @@ h2 {
 .mindmap-node.has-node-type {
   border-color: var(--node-type-border);
   background: var(--node-type-bg);
+  color: var(--node-type-text);
+  font-size: var(--node-type-font-size);
+  font-weight: var(--node-type-font-weight);
+}
+
+.mindmap-node.shape-rectangle {
+  border-radius: 0;
+}
+
+.mindmap-node.shape-pill {
+  border-radius: 999px;
+}
+
+.mindmap-node.shape-diamond {
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  min-height: 120px;
+  padding: 28px 34px;
+}
+
+.node-icon {
+  flex: 0 0 auto;
+  font-size: 1.08em;
+  line-height: 1;
 }
 
 .mindmap-node.is-search-match {
@@ -512,12 +605,41 @@ h2 {
   background: #ffffff;
 }
 
+.remark-panel,
+.remark-panel * {
+  box-sizing: border-box;
+}
+
 .remark-panel-header {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.remark-header-top {
+  width: 100%;
   min-width: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.remark-header-top .eyebrow {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.remark-panel-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .remark-title-block {
@@ -534,10 +656,13 @@ h2 {
 }
 
 #remark-panel-title {
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
+  line-height: 1.5;
 }
 
 .remark-mode-switch {
@@ -583,6 +708,8 @@ h2 {
   min-height: 0;
   box-sizing: border-box;
   resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
@@ -601,6 +728,7 @@ h2 {
 
 .remark-live-preview {
   max-width: 100%;
+  width: 100%;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -631,6 +759,11 @@ h2 {
   padding: 4px 2px;
   color: #172033;
   line-height: 1.65;
+}
+
+.markdown-preview * {
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .markdown-preview :first-child {
@@ -683,9 +816,11 @@ h2 {
 }
 
 .markdown-preview table {
+  display: block;
   max-width: 100%;
-  table-layout: fixed;
   width: 100%;
+  overflow-x: auto;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -721,6 +856,55 @@ h2 {
   background: #fbfcfe;
 }
 
+.remark-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgb(15 23 42 / 48%);
+}
+
+.remark-preview-dialog {
+  width: min(980px, 100%);
+  max-width: calc(100vw - 64px);
+  max-height: min(760px, calc(100vh - 64px));
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgb(15 23 42 / 28%);
+}
+
+.remark-preview-dialog-header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.remark-preview-dialog-header > div {
+  min-width: 0;
+}
+
+.remark-preview-dialog-header h2 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.remark-preview-dialog-body {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+  padding: 4px;
+}
+
 @media (max-width: 640px) {
   .app-shell {
     padding: 16px;
@@ -741,6 +925,19 @@ h2 {
 
   .workspace-layout {
     grid-template-columns: 1fr;
+  }
+
+  .template-save-form {
+    grid-template-columns: 1fr;
+  }
+
+  .template-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .template-thumbnail {
+    width: 100%;
   }
 
   .mindmap-tree {

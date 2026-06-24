@@ -37,6 +37,8 @@ import {
   createMindmapNodeType,
   createNodeFromType,
   findNodeTypeById,
+  NODE_TYPE_ICONS,
+  NODE_TYPE_SHAPES,
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
@@ -53,8 +55,11 @@ import {
   cloneTemplateProject,
   createTemplateFromMindmap,
   deleteMindmapTemplate,
+  filterAndSortTemplates,
+  getTemplateCategories,
   loadMindmapTemplates,
   type MindmapTemplate,
+  type TemplateSortMode,
 } from '../features/mindmap/templates';
 import { createThemeStyle, MINDMAP_THEMES } from '../features/mindmap/themes';
 import type {
@@ -173,6 +178,9 @@ function MindmapTree({
     ? ({
         '--node-type-bg': nodeType.backgroundColor,
         '--node-type-border': nodeType.borderColor,
+        '--node-type-text': nodeType.textColor,
+        '--node-type-font-size': `${nodeType.fontSize}px`,
+        '--node-type-font-weight': nodeType.bold ? 700 : 500,
       } as CSSProperties)
     : undefined;
 
@@ -187,6 +195,7 @@ function MindmapTree({
             isSelected ? 'is-selected' : '',
             isSearchMatch ? 'is-search-match' : '',
             nodeType ? 'has-node-type' : '',
+            nodeType ? `shape-${nodeType.shape}` : '',
           ]
             .filter(Boolean)
             .join(' ')}
@@ -219,7 +228,14 @@ function MindmapTree({
               }}
             />
           ) : (
-            node.text
+            <>
+              {nodeType?.icon ? (
+                <span className="node-icon" aria-hidden="true">
+                  {nodeType.icon}
+                </span>
+              ) : null}
+              <span>{node.text}</span>
+            </>
           )}
         </div>
         {hasChildren ? (
@@ -279,6 +295,13 @@ export function App() {
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [templates, setTemplates] = useState<MindmapTemplate[]>([]);
   const [isTemplateListVisible, setIsTemplateListVisible] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templateCategory, setTemplateCategory] = useState('未分类');
+  const [templateDescription, setTemplateDescription] = useState('');
+  const [templateKeyword, setTemplateKeyword] = useState('');
+  const [templateCategoryFilter, setTemplateCategoryFilter] = useState('');
+  const [templateSortMode, setTemplateSortMode] =
+    useState<TemplateSortMode>('created-desc');
   const [isNodeTypePanelVisible, setIsNodeTypePanelVisible] = useState(false);
   const [childNodeTypeId, setChildNodeTypeId] = useState('');
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
@@ -307,6 +330,19 @@ export function App() {
     [searchMatches],
   );
   const activeMatch = searchMatches[activeMatchIndex] ?? null;
+  const templateCategories = useMemo(
+    () => getTemplateCategories(templates),
+    [templates],
+  );
+  const visibleTemplates = useMemo(
+    () =>
+      filterAndSortTemplates(templates, {
+        keyword: templateKeyword,
+        category: templateCategoryFilter,
+        sortMode: templateSortMode,
+      }),
+    [templateCategoryFilter, templateKeyword, templateSortMode, templates],
+  );
 
   useEffect(() => {
     setTemplates(loadMindmapTemplates());
@@ -629,19 +665,17 @@ export function App() {
   };
 
   const handleSaveTemplate = () => {
-    const templateName = window.prompt('请输入模板名称', mindmap.text);
-
-    if (templateName === null) {
-      return;
-    }
-
     const template = createTemplateFromMindmap(
-      templateName,
+      templateName || mindmap.text,
+      templateCategory,
+      templateDescription,
       mindmap,
       nodeTypes,
       themeId,
     );
     setTemplates(addMindmapTemplate(template));
+    setTemplateName('');
+    setTemplateDescription('');
     showMessage('已保存为模板');
   };
 
@@ -1050,16 +1084,77 @@ export function App() {
           </div>
         </div>
 
+        <div className="template-save-form">
+          <input
+            type="text"
+            value={templateName}
+            placeholder="模板名称"
+            onChange={(event) => setTemplateName(event.target.value)}
+          />
+          <input
+            type="text"
+            value={templateCategory}
+            placeholder="模板分类"
+            onChange={(event) => setTemplateCategory(event.target.value)}
+          />
+          <textarea
+            value={templateDescription}
+            placeholder="模板备注"
+            onChange={(event) => setTemplateDescription(event.target.value)}
+          />
+        </div>
+
         {isTemplateListVisible ? (
-          <div className="template-list">
-            {templates.length === 0 ? (
+          <div className="template-manager">
+            <div className="compact-form">
+              <input
+                type="search"
+                value={templateKeyword}
+                placeholder="搜索模板"
+                onChange={(event) => setTemplateKeyword(event.target.value)}
+              />
+              <select
+                value={templateSortMode}
+                onChange={(event) =>
+                  setTemplateSortMode(event.target.value as TemplateSortMode)
+                }
+              >
+                <option value="created-desc">创建时间倒序</option>
+                <option value="created-asc">创建时间正序</option>
+                <option value="name-asc">按名称排序</option>
+              </select>
+              <select
+                value={templateCategoryFilter}
+                onChange={(event) => setTemplateCategoryFilter(event.target.value)}
+              >
+                <option value="">全部分类</option>
+                {templateCategories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="template-list">
+              {visibleTemplates.length === 0 ? (
               <p className="empty-note">暂无自定义模板</p>
             ) : (
-              templates.map((template) => (
+              visibleTemplates.map((template) => (
                 <div className="template-item" key={template.id}>
+                  <div className="template-thumbnail" aria-hidden="true">
+                    {template.thumbnail.split('\n').map((line, index) => (
+                      <span key={`${template.id}-${index}`}>{line}</span>
+                    ))}
+                  </div>
                   <div>
                     <strong>{template.name}</strong>
+                    <span>分类：{template.category}</span>
                     <span>{new Date(template.createTime).toLocaleString()}</span>
+                    {template.description ? (
+                      <p className="template-description">
+                        {template.description}
+                      </p>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -1078,6 +1173,7 @@ export function App() {
                 </div>
               ))
             )}
+            </div>
           </div>
         ) : null}
 
@@ -1095,6 +1191,42 @@ export function App() {
                   }))
                 }
               />
+              <label className="inline-control">
+                图标
+                <select
+                  value={nodeTypeDraft.icon}
+                  onChange={(event) =>
+                    setNodeTypeDraft((draft) => ({
+                      ...draft,
+                      icon: event.target.value,
+                    }))
+                  }
+                >
+                  {NODE_TYPE_ICONS.map((icon) => (
+                    <option key={icon.value} value={icon.value}>
+                      {icon.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="inline-control">
+                形状
+                <select
+                  value={nodeTypeDraft.shape}
+                  onChange={(event) =>
+                    setNodeTypeDraft((draft) => ({
+                      ...draft,
+                      shape: event.target.value as NodeTypeDraft['shape'],
+                    }))
+                  }
+                >
+                  {NODE_TYPE_SHAPES.map((shape) => (
+                    <option key={shape.value} value={shape.value}>
+                      {shape.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="inline-control">
                 背景色
                 <input
@@ -1117,6 +1249,47 @@ export function App() {
                     setNodeTypeDraft((draft) => ({
                       ...draft,
                       borderColor: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="inline-control">
+                文字颜色
+                <input
+                  type="color"
+                  value={nodeTypeDraft.textColor}
+                  onChange={(event) =>
+                    setNodeTypeDraft((draft) => ({
+                      ...draft,
+                      textColor: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className="inline-control">
+                字号
+                <input
+                  type="number"
+                  min={12}
+                  max={28}
+                  value={nodeTypeDraft.fontSize}
+                  onChange={(event) =>
+                    setNodeTypeDraft((draft) => ({
+                      ...draft,
+                      fontSize: Number(event.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label className="inline-control">
+                加粗
+                <input
+                  type="checkbox"
+                  checked={nodeTypeDraft.bold}
+                  onChange={(event) =>
+                    setNodeTypeDraft((draft) => ({
+                      ...draft,
+                      bold: event.target.checked,
                     }))
                   }
                 />
@@ -1161,10 +1334,16 @@ export function App() {
                       style={{
                         background: nodeType.backgroundColor,
                         borderColor: nodeType.borderColor,
+                        color: nodeType.textColor,
                       }}
-                    />
+                    >
+                      {nodeType.icon}
+                    </span>
                     <strong>{nodeType.name}</strong>
-                    <span>{nodeType.defaultText}</span>
+                    <span>
+                      {nodeType.shape} · {nodeType.fontSize}px ·{' '}
+                      {nodeType.bold ? '加粗' : '常规'} · {nodeType.defaultText}
+                    </span>
                   </div>
                 ))
               )}

@@ -74,20 +74,37 @@ function normalizeNodeTypes(value: unknown): MindmapNodeType[] {
 
   return value
     .filter(isRecord)
-    .map((item) => ({
+    .map((item) => {
+      const shape: MindmapNodeType['shape'] =
+        item.shape === 'rectangle' ||
+        item.shape === 'pill' ||
+        item.shape === 'diamond'
+          ? item.shape
+          : 'rounded';
+
+      return {
       id: typeof item.id === 'string' ? item.id : '',
       name: typeof item.name === 'string' ? item.name : '',
+      icon: typeof item.icon === 'string' ? item.icon : '✅',
+      shape,
       backgroundColor:
         typeof item.backgroundColor === 'string'
           ? item.backgroundColor
           : '#eef5ff',
       borderColor:
         typeof item.borderColor === 'string' ? item.borderColor : '#1f6feb',
+      textColor: typeof item.textColor === 'string' ? item.textColor : '#14315f',
+      fontSize:
+        typeof item.fontSize === 'number' && Number.isFinite(item.fontSize)
+          ? item.fontSize
+          : 18,
+      bold: typeof item.bold === 'boolean' ? item.bold : true,
       defaultText:
         typeof item.defaultText === 'string' ? item.defaultText : '新节点',
       defaultRemark:
         typeof item.defaultRemark === 'string' ? item.defaultRemark : '',
-    }))
+      };
+    })
     .filter((item) => item.id && item.name);
 }
 

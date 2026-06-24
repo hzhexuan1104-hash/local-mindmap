@@ -10,8 +10,13 @@ export type MindmapNode = {
 export type MindmapNodeType = {
   id: string;
   name: string;
+  icon: string;
+  shape: 'rounded' | 'rectangle' | 'pill' | 'diamond';
   backgroundColor: string;
   borderColor: string;
+  textColor: string;
+  fontSize: number;
+  bold: boolean;
   defaultText: string;
   defaultRemark: string;
 };

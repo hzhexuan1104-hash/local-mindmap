@@ -1,5 +1,7 @@
 import type { MindmapNode } from './types';
 import { MarkdownPreview } from './MarkdownPreview';
+import { RemarkPreviewDialog } from './remarkPreview';
+import { useState } from 'react';
 
 type RemarkMode = 'edit' | 'preview';
 
@@ -16,47 +18,68 @@ export function RemarkPanel({
   onModeChange,
   onRemarkChange,
 }: RemarkPanelProps) {
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
   return (
-    <aside className="remark-panel" aria-labelledby="remark-panel-title">
-      <div className="remark-panel-header">
-        <div className="remark-title-block">
-          <p className="eyebrow">Remark</p>
+    <>
+      <aside className="remark-panel" aria-labelledby="remark-panel-title">
+        <div className="remark-panel-header">
+          <div className="remark-header-top">
+            <p className="eyebrow">Remark</p>
+            <div className="remark-panel-actions">
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setIsPreviewOpen(true)}
+              >
+                放大预览
+              </button>
+              <div className="remark-mode-switch" aria-label="备注显示模式">
+                <button
+                  type="button"
+                  className={`mode-button${mode === 'edit' ? ' is-active' : ''}`}
+                  onClick={() => onModeChange('edit')}
+                >
+                  编辑模式
+                </button>
+                <button
+                  type="button"
+                  className={`mode-button${mode === 'preview' ? ' is-active' : ''}`}
+                  onClick={() => onModeChange('preview')}
+                >
+                  预览模式
+                </button>
+              </div>
+            </div>
+          </div>
           <h2 id="remark-panel-title">{selectedNode.text}</h2>
         </div>
-        <div className="remark-mode-switch" aria-label="备注显示模式">
-          <button
-            type="button"
-            className={`mode-button${mode === 'edit' ? ' is-active' : ''}`}
-            onClick={() => onModeChange('edit')}
-          >
-            编辑模式
-          </button>
-          <button
-            type="button"
-            className={`mode-button${mode === 'preview' ? ' is-active' : ''}`}
-            onClick={() => onModeChange('preview')}
-          >
-            预览模式
-          </button>
-        </div>
-      </div>
 
-      {mode === 'edit' ? (
-        <div className="remark-edit-layout">
-          <textarea
-            className="remark-editor"
-            value={selectedNode.remark}
-            onChange={(event) => onRemarkChange(event.target.value)}
-            aria-label={`${selectedNode.text} 的 Markdown 备注`}
-          />
-          <div className="remark-live-preview">
-            <div className="remark-live-preview-title">实时预览</div>
-            <MarkdownPreview content={selectedNode.remark} />
+        {mode === 'edit' ? (
+          <div className="remark-edit-layout">
+            <textarea
+              className="remark-editor"
+              value={selectedNode.remark}
+              onChange={(event) => onRemarkChange(event.target.value)}
+              aria-label={`${selectedNode.text} 的 Markdown 备注`}
+            />
+            <div className="remark-live-preview">
+              <div className="remark-live-preview-title">实时预览</div>
+              <MarkdownPreview content={selectedNode.remark} />
+            </div>
           </div>
-        </div>
-      ) : (
-        <MarkdownPreview content={selectedNode.remark} />
-      )}
-    </aside>
+        ) : (
+          <MarkdownPreview content={selectedNode.remark} />
+        )}
+      </aside>
+
+      {isPreviewOpen ? (
+        <RemarkPreviewDialog
+          title={selectedNode.text}
+          content={selectedNode.remark}
+          onClose={() => setIsPreviewOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
