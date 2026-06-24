@@ -234,6 +234,14 @@ type ContextMenuInput =
       type: 'canvas';
     };
 
+type ToolDrawer =
+  | 'templates'
+  | 'node-types'
+  | 'search'
+  | 'performance'
+  | 'plugins'
+  | 'shortcuts';
+
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
   nodeTypes: MindmapNodeType[];
@@ -404,7 +412,6 @@ export function App() {
   const [searchScope, setSearchScope] = useState<SearchScope>('all');
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [templates, setTemplates] = useState<MindmapTemplate[]>([]);
-  const [isTemplateListVisible, setIsTemplateListVisible] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateCategory, setTemplateCategory] = useState('未分类');
   const [templateDescription, setTemplateDescription] = useState('');
@@ -412,7 +419,6 @@ export function App() {
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState('');
   const [templateSortMode, setTemplateSortMode] =
     useState<TemplateSortMode>('created-desc');
-  const [isNodeTypePanelVisible, setIsNodeTypePanelVisible] = useState(false);
   const [childNodeTypeId, setChildNodeTypeId] = useState('');
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
     createEmptyNodeTypeDraft,
@@ -421,6 +427,9 @@ export function App() {
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
+  const [activeDrawer, setActiveDrawer] = useState<ToolDrawer | null>(null);
+  const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(false);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const isPanningRef = useRef(false);
@@ -522,6 +531,14 @@ export function App() {
       }),
     [templateCategoryFilter, templateKeyword, templateSortMode, templates],
   );
+  const drawerTitle = {
+    templates: '模板库',
+    'node-types': '节点类型',
+    search: '查找替换',
+    performance: '性能测试',
+    plugins: '插件管理',
+    shortcuts: '快捷键',
+  } as const;
 
   useEffect(() => {
     setTemplates(loadMindmapTemplates());
@@ -1036,7 +1053,7 @@ export function App() {
   const handleCreateFromTemplate = (template: MindmapTemplate) => {
     recordHistory();
     applyProject(cloneTemplateProject(template));
-    setIsTemplateListVisible(false);
+    setActiveDrawer(null);
     showMessage('已从模板新建思维导图');
   };
 
@@ -1288,481 +1305,408 @@ export function App() {
       style={themeStyle}
       onMouseDown={() => setContextMenu(null)}
     >
-      <header className="app-header" aria-labelledby="app-title">
-        <div className="app-title-group">
-          <p className="eyebrow">Local Mindmap</p>
-          <h1 id="app-title">本地化思维导图工具</h1>
-        </div>
-        <div className="toolbar-group" aria-label="文件">
-          <span className="toolbar-label">文件</span>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={handleCreateMindmap}
-          >
-            新建思维导图
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleSaveMindmap}
-          >
-            保存 .lmind
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleOpenMindmap}
-          >
-            打开 .lmind
-          </button>
-        </div>
-        <div className="toolbar-group" aria-label="导入导出">
-          <span className="toolbar-label">导入导出</span>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleExportMarkdown}
-          >
-            导出 Markdown
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleExportExcel}
-          >
-            导出 Excel
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleExportJson}
-          >
-            导出 JSON
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => handleExportImage('png')}
-          >
-            导出 PNG
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => handleExportImage('jpg')}
-          >
-            导出 JPG
-          </button>
-          {canExportTxt ? (
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={handleExportTxt}
-            >
-              导出 TXT
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleImportJson}
-          >
-            导入 JSON
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleImportMarkdown}
-          >
-            导入 Markdown
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleImportExcel}
-          >
-            导入 Excel
-          </button>
-        </div>
-        <div className="toolbar-group" aria-label="工具">
-          <span className="toolbar-label">工具</span>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => setIsPluginManagerVisible(true)}
-          >
-            插件管理
-          </button>
-        </div>
-      </header>
+      {!isFocusMode ? (
+        <>
+          <header className="app-header" aria-labelledby="app-title">
+            <div className="app-title-group">
+              <p className="eyebrow">Local Mindmap</p>
+              <h1 id="app-title">本地化思维导图工具</h1>
+            </div>
 
-      <section className="node-toolbar" aria-label="节点操作">
-        <span className="toolbar-label">节点操作</span>
-        <span className="selection-count">
-          已选 {selectedNodeIds.length} 个
-        </span>
-        <button type="button" className="secondary-action" onClick={handleUndo}>
-          撤销
-        </button>
-        <button type="button" className="secondary-action" onClick={handleRedo}>
-          重做
-        </button>
-        <label className="inline-control">
-          子节点类型
-          <select
-            value={childNodeTypeId}
-            onChange={(event) => setChildNodeTypeId(event.target.value)}
-          >
-            <option value="">普通节点</option>
-            {availableNodeTypes.map((nodeType) => (
-              <option key={nodeType.id} value={nodeType.id}>
-                {nodeType.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="secondary-action" onClick={handleAddChild}>
-          新增子节点
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleAddSibling}
-        >
-          新增同级节点
-        </button>
-        <button
-          type="button"
-          className="secondary-action danger-action"
-          onClick={handleDeleteNode}
-        >
-          删除节点
-        </button>
-        <button type="button" className="secondary-action" onClick={handleExpandAll}>
-          展开全部
-        </button>
-        <button
-          type="button"
-          className="secondary-action"
-          onClick={handleCollapseAll}
-        >
-          折叠全部
-        </button>
-        <label className="inline-control">
-          当前节点类型
-          <select
-            value={selectedNode.nodeTypeId ?? ''}
-            onChange={(event) => handleSelectedNodeTypeChange(event.target.value)}
-          >
-            <option value="">普通节点</option>
-            {availableNodeTypes.map((nodeType) => (
-              <option key={nodeType.id} value={nodeType.id}>
-                {nodeType.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {message ? (
-          <span className="operation-message" role="status">
-            {message}
-          </span>
-        ) : null}
-      </section>
-
-      <section className="feature-panel" aria-label="画布和主题">
-        <div className="panel-heading">
-          <h2>画布与主题</h2>
-          <span className="panel-note">{Math.round(canvasView.scale * 100)}%</span>
-        </div>
-        <div className="compact-form">
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => setCanvasView((view) => zoomCanvasView(view, 'in'))}
-          >
-            放大
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => setCanvasView((view) => zoomCanvasView(view, 'out'))}
-          >
-            缩小
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => setCanvasView(centerCanvasView())}
-          >
-          一键居中
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleResetAutoLayout}
-          >
-            重新自动布局
-          </button>
-          <label className="inline-control">
-            主题
-            <select
-              value={themeId}
-              onChange={(event) => handleThemeChange(event.target.value)}
-            >
-              {availableThemes.map((theme) => (
-                <option key={theme.id} value={theme.id}>
-                  {theme.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <PerformancePanel
-        rootNode={mindmap}
-        nodeTypes={nodeTypes}
-        themeId={themeId}
-        canExportTxt={canExportTxt}
-        result={performanceResult}
-        onGenerate={handleGeneratePerformanceMindmap}
-        onResultChange={setPerformanceResult}
-        onMessage={showMessage}
-      />
-
-      <section className="feature-panel" aria-label="查找替换">
-        <div className="panel-heading">
-          <h2>查找替换</h2>
-          <span className="panel-note">
-            {searchMatches.length > 0
-              ? `${activeMatchIndex + 1} / ${searchMatches.length}`
-              : '0 个结果'}
-          </span>
-        </div>
-        <div className="compact-form">
-          <input
-            type="search"
-            value={searchQuery}
-            placeholder="查找内容"
-            onChange={(event) => setSearchQuery(event.target.value)}
-          />
-          <input
-            type="text"
-            value={replacementText}
-            placeholder="替换为"
-            onChange={(event) => setReplacementText(event.target.value)}
-          />
-          <select
-            value={searchScope}
-            onChange={(event) => setSearchScope(event.target.value as SearchScope)}
-          >
-            <option value="all">全部</option>
-            <option value="text">节点文本</option>
-            <option value="remark">备注内容</option>
-          </select>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => jumpToMatch(activeMatchIndex - 1)}
-          >
-            上一个
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={() => jumpToMatch(activeMatchIndex + 1)}
-          >
-            下一个
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleReplaceCurrent}
-          >
-            替换
-          </button>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={handleReplaceAll}
-          >
-            全部替换
-          </button>
-        </div>
-      </section>
-
-      <section className="feature-panel" aria-label="模板和节点类型">
-        <div className="panel-heading">
-          <h2>模板与节点类型</h2>
-          <div className="panel-actions">
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={handleSaveTemplate}
-            >
-              保存为模板
-            </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={() => setIsTemplateListVisible((visible) => !visible)}
-            >
-              从模板新建
-            </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={() => setIsNodeTypePanelVisible((visible) => !visible)}
-            >
-              节点类型
-            </button>
-          </div>
-        </div>
-
-        <div className="template-save-form">
-          <input
-            type="text"
-            value={templateName}
-            placeholder="模板名称"
-            onChange={(event) => setTemplateName(event.target.value)}
-          />
-          <input
-            type="text"
-            value={templateCategory}
-            placeholder="模板分类"
-            onChange={(event) => setTemplateCategory(event.target.value)}
-          />
-          <textarea
-            value={templateDescription}
-            placeholder="模板备注"
-            onChange={(event) => setTemplateDescription(event.target.value)}
-          />
-        </div>
-
-        {isTemplateListVisible ? (
-          <div className="template-manager">
-            <div className="compact-form">
-              <input
-                type="search"
-                value={templateKeyword}
-                placeholder="搜索模板"
-                onChange={(event) => setTemplateKeyword(event.target.value)}
-              />
-              <select
-                value={templateSortMode}
-                onChange={(event) =>
-                  setTemplateSortMode(event.target.value as TemplateSortMode)
-                }
+            <div className="quick-actions" aria-label="高频文件操作">
+              <button
+                type="button"
+                className="primary-action"
+                onClick={handleCreateMindmap}
               >
-                <option value="preset-asc">预设顺序</option>
-                <option value="created-desc">创建时间倒序</option>
-                <option value="created-asc">创建时间正序</option>
-                <option value="name-asc">按名称排序</option>
-              </select>
-              <select
-                value={templateCategoryFilter}
-                onChange={(event) => setTemplateCategoryFilter(event.target.value)}
+                新建思维导图
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={handleSaveMindmap}
               >
-                <option value="">全部分类</option>
-                {templateCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
+                保存 .lmind
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={handleOpenMindmap}
+              >
+                打开 .lmind
+              </button>
+            </div>
+
+            <nav className="menu-bar" aria-label="顶部菜单">
+              <details className="menu-dropdown">
+                <summary>文件</summary>
+                <div className="menu-popover">
+                  <button type="button" onClick={handleCreateMindmap}>
+                    新建思维导图
+                  </button>
+                  <button type="button" onClick={handleSaveMindmap}>
+                    保存 .lmind
+                  </button>
+                  <button type="button" onClick={handleOpenMindmap}>
+                    打开 .lmind
+                  </button>
+                </div>
+              </details>
+              <details className="menu-dropdown">
+                <summary>导入导出</summary>
+                <div className="menu-popover">
+                  <button type="button" onClick={handleImportJson}>
+                    导入 JSON
+                  </button>
+                  <button type="button" onClick={handleImportMarkdown}>
+                    导入 Markdown
+                  </button>
+                  <button type="button" onClick={handleImportExcel}>
+                    导入 Excel
+                  </button>
+                  <button type="button" onClick={handleExportMarkdown}>
+                    导出 Markdown
+                  </button>
+                  <button type="button" onClick={handleExportExcel}>
+                    导出 Excel
+                  </button>
+                  <button type="button" onClick={handleExportJson}>
+                    导出 JSON
+                  </button>
+                  <button type="button" onClick={() => handleExportImage('png')}>
+                    导出 PNG
+                  </button>
+                  <button type="button" onClick={() => handleExportImage('jpg')}>
+                    导出 JPG
+                  </button>
+                  {canExportTxt ? (
+                    <button type="button" onClick={handleExportTxt}>
+                      导出 TXT
+                    </button>
+                  ) : null}
+                </div>
+              </details>
+              <details className="menu-dropdown">
+                <summary>编辑</summary>
+                <div className="menu-popover">
+                  <button type="button" onClick={handleUndo}>
+                    撤销
+                  </button>
+                  <button type="button" onClick={handleRedo}>
+                    重做
+                  </button>
+                  <button type="button" onClick={handleAddChild}>
+                    新增子节点
+                  </button>
+                  <button type="button" onClick={handleAddSibling}>
+                    新增同级节点
+                  </button>
+                  <button type="button" onClick={handleDeleteNode}>
+                    删除节点
+                  </button>
+                </div>
+              </details>
+              <details className="menu-dropdown">
+                <summary>视图</summary>
+                <div className="menu-popover">
+                  <button type="button" onClick={handleExpandAll}>
+                    展开全部
+                  </button>
+                  <button type="button" onClick={handleCollapseAll}>
+                    折叠全部
+                  </button>
+                  <button type="button" onClick={handleResetAutoLayout}>
+                    重新自动布局
+                  </button>
+                  <button type="button" onClick={() => setIsFocusMode(true)}>
+                    专注模式
+                  </button>
+                </div>
+              </details>
+              <details className="menu-dropdown">
+                <summary>工具</summary>
+                <div className="menu-popover">
+                  <button type="button" onClick={() => setActiveDrawer('plugins')}>
+                    插件管理
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDrawer('performance')}
+                  >
+                    性能测试
+                  </button>
+                  <button type="button" onClick={() => setActiveDrawer('shortcuts')}>
+                    快捷键帮助
+                  </button>
+                </div>
+              </details>
+            </nav>
+          </header>
+
+          <section className="node-toolbar" aria-label="节点操作">
+            <span className="toolbar-label">节点</span>
+            <span className="selection-count">已选 {selectedNodeIds.length} 个</span>
+            <button type="button" className="secondary-action" onClick={handleAddChild}>
+              新增子节点
+            </button>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={handleAddSibling}
+            >
+              新增同级节点
+            </button>
+            <button
+              type="button"
+              className="secondary-action danger-action"
+              onClick={handleDeleteNode}
+            >
+              删除节点
+            </button>
+            <label className="inline-control">
+              子节点类型
+              <select
+                value={childNodeTypeId}
+                onChange={(event) => setChildNodeTypeId(event.target.value)}
+              >
+                <option value="">普通节点</option>
+                {availableNodeTypes.map((nodeType) => (
+                  <option key={nodeType.id} value={nodeType.id}>
+                    {nodeType.name}
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
+            <label className="inline-control">
+              当前节点类型
+              <select
+                value={selectedNode.nodeTypeId ?? ''}
+                onChange={(event) => handleSelectedNodeTypeChange(event.target.value)}
+              >
+                <option value="">普通节点</option>
+                {availableNodeTypes.map((nodeType) => (
+                  <option key={nodeType.id} value={nodeType.id}>
+                    {nodeType.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {message ? (
+              <span className="operation-message" role="status">
+                {message}
+              </span>
+            ) : null}
+          </section>
+        </>
+      ) : null}
 
-            <div className="template-group">
-              <div className="template-group-heading">
-                <h3>官方默认模板</h3>
-                <span>{visibleOfficialTemplates.length} 个模板</span>
-              </div>
-              <div className="template-list">
-                {visibleOfficialTemplates.length === 0 ? (
-                  <p className="empty-note">暂无匹配的官方模板</p>
-                ) : (
-                  visibleOfficialTemplates.map((template) => (
-                    <div className="template-item" key={template.id}>
-                      <div className="template-thumbnail" aria-hidden="true">
-                        {template.thumbnail.split('\n').map((line, index) => (
-                          <span key={`${template.id}-${index}`}>{line}</span>
-                        ))}
-                      </div>
-                      <div>
-                        <strong>{template.name}</strong>
-                        <span>分类：{template.category}</span>
-                        <span>预设顺序：{template.presetOrder}</span>
-                        {template.description ? (
-                          <p className="template-description">
-                            {template.description}
-                          </p>
-                        ) : null}
-                      </div>
-                      <button
-                        type="button"
-                        className="secondary-action"
-                        onClick={() => handleCreateFromTemplate(template)}
-                      >
-                        使用
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="template-group">
-              <div className="template-group-heading">
-                <h3>我的自定义模板</h3>
-                <span>{visibleCustomTemplates.length} 个模板</span>
-              </div>
-              <div className="template-list">
-                {visibleCustomTemplates.length === 0 ? (
-                  <p className="empty-note">暂无自定义模板</p>
-                ) : (
-                  visibleCustomTemplates.map((template) => (
-                    <div className="template-item" key={template.id}>
-                      <div className="template-thumbnail" aria-hidden="true">
-                        {template.thumbnail.split('\n').map((line, index) => (
-                          <span key={`${template.id}-${index}`}>{line}</span>
-                        ))}
-                      </div>
-                      <div>
-                        <strong>{template.name}</strong>
-                        <span>分类：{template.category}</span>
-                        <span>{new Date(template.createTime).toLocaleString()}</span>
-                        {template.description ? (
-                          <p className="template-description">
-                            {template.description}
-                          </p>
-                        ) : null}
-                      </div>
-                      <button
-                        type="button"
-                        className="secondary-action"
-                        onClick={() => handleCreateFromTemplate(template)}
-                      >
-                        使用
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-action danger-action"
-                        onClick={() => handleDeleteTemplate(template.id)}
-                      >
-                        删除
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
+      <div
+        className={[
+          'app-body',
+          activeDrawer && !isFocusMode ? 'has-drawer' : '',
+          isFocusMode ? 'is-focus-mode' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        {!isFocusMode ? (
+          <aside className="side-toolrail" aria-label="工具栏">
+            {[
+              ['templates', '模板库'],
+              ['node-types', '节点类型'],
+              ['search', '查找替换'],
+              ['performance', '性能测试'],
+              ['plugins', '插件管理'],
+              ['shortcuts', '快捷键'],
+            ].map(([drawer, label]) => (
+              <button
+                key={drawer}
+                type="button"
+                className={activeDrawer === drawer ? 'is-active' : ''}
+                onClick={() =>
+                  setActiveDrawer((currentDrawer) =>
+                    currentDrawer === drawer ? null : (drawer as ToolDrawer),
+                  )
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </aside>
         ) : null}
 
-        {isNodeTypePanelVisible ? (
-          <div className="node-type-panel">
-            <div className="compact-form node-type-form">
+        {!isFocusMode && activeDrawer ? (
+          <aside className="tool-drawer" aria-label={drawerTitle[activeDrawer]}>
+            <div className="drawer-header">
+              <h2>{drawerTitle[activeDrawer]}</h2>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setActiveDrawer(null)}
+              >
+                关闭
+              </button>
+            </div>
+
+            {activeDrawer === 'templates' ? (
+              <section className="feature-panel" aria-label="模板库">
+                <div className="panel-heading">
+                  <h2>保存当前导图为模板</h2>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={handleSaveTemplate}
+                  >
+                    保存为模板
+                  </button>
+                </div>
+                <div className="template-save-form">
+                  <input
+                    type="text"
+                    value={templateName}
+                    placeholder="模板名称"
+                    onChange={(event) => setTemplateName(event.target.value)}
+                  />
+                  <input
+                    type="text"
+                    value={templateCategory}
+                    placeholder="模板分类"
+                    onChange={(event) => setTemplateCategory(event.target.value)}
+                  />
+                  <textarea
+                    value={templateDescription}
+                    placeholder="模板备注"
+                    onChange={(event) => setTemplateDescription(event.target.value)}
+                  />
+                </div>
+
+                <div className="template-manager">
+                  <div className="compact-form">
+                    <input
+                      type="search"
+                      value={templateKeyword}
+                      placeholder="搜索模板"
+                      onChange={(event) => setTemplateKeyword(event.target.value)}
+                    />
+                    <select
+                      value={templateSortMode}
+                      onChange={(event) =>
+                        setTemplateSortMode(event.target.value as TemplateSortMode)
+                      }
+                    >
+                      <option value="preset-asc">预设顺序</option>
+                      <option value="created-desc">创建时间倒序</option>
+                      <option value="created-asc">创建时间正序</option>
+                      <option value="name-asc">按名称排序</option>
+                    </select>
+                    <select
+                      value={templateCategoryFilter}
+                      onChange={(event) =>
+                        setTemplateCategoryFilter(event.target.value)
+                      }
+                    >
+                      <option value="">全部分类</option>
+                      {templateCategories.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="template-group">
+                    <div className="template-group-heading">
+                      <h3>官方默认模板</h3>
+                      <span>{visibleOfficialTemplates.length} 个模板</span>
+                    </div>
+                    <div className="template-list">
+                      {visibleOfficialTemplates.length === 0 ? (
+                        <p className="empty-note">暂无匹配的官方模板</p>
+                      ) : (
+                        visibleOfficialTemplates.map((template) => (
+                          <div className="template-item" key={template.id}>
+                            <div className="template-thumbnail" aria-hidden="true">
+                              {template.thumbnail.split('\n').map((line, index) => (
+                                <span key={`${template.id}-${index}`}>{line}</span>
+                              ))}
+                            </div>
+                            <div>
+                              <strong>{template.name}</strong>
+                              <span>分类：{template.category}</span>
+                              <span>预设顺序：{template.presetOrder}</span>
+                              {template.description ? (
+                                <p className="template-description">
+                                  {template.description}
+                                </p>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() => handleCreateFromTemplate(template)}
+                            >
+                              使用
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="template-group">
+                    <div className="template-group-heading">
+                      <h3>我的自定义模板</h3>
+                      <span>{visibleCustomTemplates.length} 个模板</span>
+                    </div>
+                    <div className="template-list">
+                      {visibleCustomTemplates.length === 0 ? (
+                        <p className="empty-note">暂无自定义模板</p>
+                      ) : (
+                        visibleCustomTemplates.map((template) => (
+                          <div className="template-item" key={template.id}>
+                            <div className="template-thumbnail" aria-hidden="true">
+                              {template.thumbnail.split('\n').map((line, index) => (
+                                <span key={`${template.id}-${index}`}>{line}</span>
+                              ))}
+                            </div>
+                            <div>
+                              <strong>{template.name}</strong>
+                              <span>分类：{template.category}</span>
+                              <span>
+                                {new Date(template.createTime).toLocaleString()}
+                              </span>
+                              {template.description ? (
+                                <p className="template-description">
+                                  {template.description}
+                                </p>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() => handleCreateFromTemplate(template)}
+                            >
+                              使用
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-action danger-action"
+                              onClick={() => handleDeleteTemplate(template.id)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            {activeDrawer === 'node-types' ? (
+              <section className="feature-panel node-type-panel" aria-label="节点类型">
+                <div className="compact-form node-type-form">
               <input
                 type="text"
                 value={nodeTypeDraft.name}
@@ -1905,8 +1849,8 @@ export function App() {
               >
                 创建节点类型
               </button>
-            </div>
-            <div className="node-type-list">
+                </div>
+                <div className="node-type-list">
               {nodeTypes.length === 0 ? (
                 <p className="empty-note">暂无节点类型</p>
               ) : (
@@ -1930,12 +1874,126 @@ export function App() {
                   </div>
                 ))
               )}
-            </div>
-          </div>
-        ) : null}
-      </section>
+                </div>
+              </section>
+            ) : null}
 
-      <div className="workspace-layout">
+            {activeDrawer === 'search' ? (
+              <section className="feature-panel" aria-label="查找替换">
+                <div className="panel-heading">
+                  <h2>查找替换</h2>
+                  <span className="panel-note">
+                    {searchMatches.length > 0
+                      ? `${activeMatchIndex + 1} / ${searchMatches.length}`
+                      : '0 个结果'}
+                  </span>
+                </div>
+                <div className="compact-form drawer-form">
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    placeholder="查找内容"
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                  />
+                  <input
+                    type="text"
+                    value={replacementText}
+                    placeholder="替换为"
+                    onChange={(event) => setReplacementText(event.target.value)}
+                  />
+                  <select
+                    value={searchScope}
+                    onChange={(event) =>
+                      setSearchScope(event.target.value as SearchScope)
+                    }
+                  >
+                    <option value="all">全部</option>
+                    <option value="text">节点文本</option>
+                    <option value="remark">备注内容</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => jumpToMatch(activeMatchIndex - 1)}
+                  >
+                    上一个
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => jumpToMatch(activeMatchIndex + 1)}
+                  >
+                    下一个
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={handleReplaceCurrent}
+                  >
+                    替换
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={handleReplaceAll}
+                  >
+                    全部替换
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
+            {activeDrawer === 'performance' ? (
+              <PerformancePanel
+                rootNode={mindmap}
+                nodeTypes={nodeTypes}
+                themeId={themeId}
+                canExportTxt={canExportTxt}
+                result={performanceResult}
+                onGenerate={handleGeneratePerformanceMindmap}
+                onResultChange={setPerformanceResult}
+                onMessage={showMessage}
+              />
+            ) : null}
+
+            {activeDrawer === 'plugins' ? (
+              <section className="feature-panel" aria-label="插件管理入口">
+                <div className="panel-heading">
+                  <h2>插件管理</h2>
+                  <span className="panel-note">{plugins.length} 个插件</span>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => setIsPluginManagerVisible(true)}
+                >
+                  打开插件管理面板
+                </button>
+              </section>
+            ) : null}
+
+            {activeDrawer === 'shortcuts' ? (
+              <section className="feature-panel" aria-label="快捷键帮助">
+                <div className="shortcut-list">
+                  <span>Ctrl + Z：撤销</span>
+                  <span>Ctrl + Y：重做</span>
+                  <span>Ctrl / Shift + 点击节点：多选</span>
+                  <span>Ctrl + 鼠标滚轮：缩放画布</span>
+                  <span>Esc：关闭右键菜单</span>
+                </div>
+              </section>
+            ) : null}
+          </aside>
+        ) : null}
+
+      <div
+        className={[
+          'workspace-layout',
+          isRemarkPanelCollapsed || isFocusMode ? 'is-remark-collapsed' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
         <section
           className="mindmap-canvas"
           aria-label="思维导图画布"
@@ -1947,6 +2005,61 @@ export function App() {
           onContextMenu={handleCanvasContextMenu}
         >
           <div className="canvas-grid" aria-hidden="true" />
+          <div className="canvas-floating-toolbar" aria-label="画布工具">
+            <span className="canvas-zoom-label">
+              {Math.round(canvasView.scale * 100)}%
+            </span>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setCanvasView((view) => zoomCanvasView(view, 'in'))}
+            >
+              放大
+            </button>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setCanvasView((view) => zoomCanvasView(view, 'out'))}
+            >
+              缩小
+            </button>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setCanvasView(centerCanvasView())}
+            >
+              一键居中
+            </button>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={handleResetAutoLayout}
+            >
+              重新自动布局
+            </button>
+            <label className="inline-control">
+              主题
+              <select
+                value={themeId}
+                onChange={(event) => handleThemeChange(event.target.value)}
+              >
+                {availableThemes.map((theme) => (
+                  <option key={theme.id} value={theme.id}>
+                    {theme.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {isFocusMode ? (
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setIsFocusMode(false)}
+              >
+                退出专注模式
+              </button>
+            ) : null}
+          </div>
           <div className="mindmap-pan-layer" style={panLayerStyle}>
             <div
               className="mindmap-tree"
@@ -1997,12 +2110,36 @@ export function App() {
           </div>
         </section>
 
-        <RemarkPanel
-          selectedNode={selectedNode}
-          mode={remarkMode}
-          onModeChange={setRemarkMode}
-          onRemarkChange={handleRemarkChange}
-        />
+        {!isFocusMode ? (
+          isRemarkPanelCollapsed ? (
+            <aside className="remark-collapsed-bar" aria-label="备注面板已折叠">
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setIsRemarkPanelCollapsed(false)}
+              >
+                展开备注
+              </button>
+            </aside>
+          ) : (
+            <div className="remark-panel-shell">
+              <button
+                type="button"
+                className="remark-collapse-button secondary-action"
+                onClick={() => setIsRemarkPanelCollapsed(true)}
+              >
+                收起备注
+              </button>
+              <RemarkPanel
+                selectedNode={selectedNode}
+                mode={remarkMode}
+                onModeChange={setRemarkMode}
+                onRemarkChange={handleRemarkChange}
+              />
+            </div>
+          )
+        ) : null}
+      </div>
       </div>
 
       {excelImportPreview ? (
