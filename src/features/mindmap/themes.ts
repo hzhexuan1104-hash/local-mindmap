@@ -64,14 +64,20 @@ export const MINDMAP_THEMES: MindmapTheme[] = [
   },
 ];
 
-export function getMindmapTheme(themeId: string) {
+export function getMindmapTheme(
+  themeId: string,
+  themes: MindmapTheme[] = MINDMAP_THEMES,
+) {
   return (
-    MINDMAP_THEMES.find((theme) => theme.id === themeId) ?? MINDMAP_THEMES[0]
+    themes.find((theme) => theme.id === themeId) ?? MINDMAP_THEMES[0]
   );
 }
 
-export function createThemeStyle(themeId: string): CSSProperties {
-  const theme = getMindmapTheme(themeId);
+export function createThemeStyle(
+  themeId: string,
+  themes: MindmapTheme[] = MINDMAP_THEMES,
+): CSSProperties {
+  const theme = getMindmapTheme(themeId, themes);
 
   return {
     '--canvas-bg': theme.canvasBackground,

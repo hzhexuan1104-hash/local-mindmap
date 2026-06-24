@@ -19,6 +19,7 @@ import { exportMindmapExcel } from '../features/mindmap/exportExcel';
 import { exportMindmapAsImage } from '../features/mindmap/exportImage';
 import { exportMindmapJson } from '../features/mindmap/exportJson';
 import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
+import { exportMindmapTxt } from '../features/mindmap/exportTxt';
 import {
   createHistoryState,
   pushHistory,
@@ -47,6 +48,20 @@ import {
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
+import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
+import {
+  getPluginIcons,
+  getPluginNodeTypes,
+  getPluginThemes,
+  installPluginManifest,
+  isTxtExportPluginEnabled,
+  loadPluginRegistry,
+  readLocalPluginManifest,
+  savePluginRegistry,
+  setPluginEnabled,
+  uninstallPlugin,
+  type PluginManifest,
+} from '../features/mindmap/plugins';
 import { RemarkPanel } from '../features/mindmap/RemarkPanel';
 import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
 import {
@@ -314,17 +329,59 @@ export function App() {
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
     createEmptyNodeTypeDraft,
   );
+  const [plugins, setPlugins] = useState<PluginManifest[]>([]);
+  const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef({ x: 0, y: 0 });
   const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
   const mindmapLayoutStyle = createMindmapLayoutStyle();
+  const pluginThemes = useMemo(() => getPluginThemes(plugins), [plugins]);
+  const availableThemes = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          [...MINDMAP_THEMES, ...pluginThemes].map((theme) => [theme.id, theme]),
+        ).values(),
+      ),
+    [pluginThemes],
+  );
+  const pluginIcons = useMemo(() => getPluginIcons(plugins), [plugins]);
+  const availableNodeTypeIcons = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          [...NODE_TYPE_ICONS, ...pluginIcons].map((icon) => [
+            icon.value,
+            icon,
+          ]),
+        ).values(),
+      ),
+    [pluginIcons],
+  );
+  const pluginNodeTypes = useMemo(() => getPluginNodeTypes(plugins), [plugins]);
+  const availableNodeTypes = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          [...nodeTypes, ...pluginNodeTypes].map((nodeType) => [
+            nodeType.id,
+            nodeType,
+          ]),
+        ).values(),
+      ),
+    [nodeTypes, pluginNodeTypes],
+  );
+  const canExportTxt = useMemo(
+    () => isTxtExportPluginEnabled(plugins),
+    [plugins],
+  );
   const currentProject = useMemo(
     () => ({ rootNode: mindmap, nodeTypes, themeId }),
     [mindmap, nodeTypes, themeId],
   );
-  const themeStyle = createThemeStyle(themeId);
+  const themeStyle = createThemeStyle(themeId, availableThemes);
   const panLayerStyle = {
     transform: `translate(${canvasView.offsetX}px, ${canvasView.offsetY}px) scale(${canvasView.scale})`,
   };
@@ -353,11 +410,19 @@ export function App() {
 
   useEffect(() => {
     setTemplates(loadMindmapTemplates());
+    setPlugins(loadPluginRegistry());
 
     return () => {
       window.clearTimeout(messageTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!availableThemes.some((theme) => theme.id === themeId)) {
+      setThemeId('default-blue');
+      showMessage('当前主题来自已禁用或未安装插件，已切回默认主题');
+    }
+  }, [availableThemes, themeId]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
@@ -401,9 +466,17 @@ export function App() {
   };
 
   const applyProject = (project: MindmapProject, nextSelectedNodeId?: string) => {
+    const nextThemeId =
+      project.themeId && availableThemes.some((theme) => theme.id === project.themeId)
+        ? project.themeId
+        : 'default-blue';
+
     setMindmap(project.rootNode);
     setNodeTypes(project.nodeTypes);
-    setThemeId(project.themeId ?? 'default-blue');
+    setThemeId(nextThemeId);
+    if (project.themeId && project.themeId !== nextThemeId) {
+      showMessage('文件使用的插件主题未启用，已切回默认主题');
+    }
     setSelectedNodeId(
       nextSelectedNodeId && findNodeById(project.rootNode, nextSelectedNodeId)
         ? nextSelectedNodeId
@@ -486,6 +559,54 @@ export function App() {
     showMessage('已导出 mindmap.json');
   };
 
+  const handleExportTxt = () => {
+    exportMindmapTxt(mindmap);
+    showMessage('已导出 mindmap.txt');
+  };
+
+  const handleInstallPlugin = async () => {
+    try {
+      const manifest = await readLocalPluginManifest();
+
+      if (!manifest) {
+        return;
+      }
+
+      const exists = plugins.some(
+        (plugin) => plugin.pluginId === manifest.pluginId,
+      );
+
+      if (exists && !window.confirm('插件已存在，是否覆盖安装？')) {
+        return;
+      }
+
+      const nextPlugins = installPluginManifest(plugins, manifest);
+      setPlugins(nextPlugins);
+      savePluginRegistry(nextPlugins);
+      showMessage('插件安装成功');
+    } catch {
+      showMessage('插件格式不正确');
+    }
+  };
+
+  const handleTogglePlugin = (pluginId: string, enabled: boolean) => {
+    const nextPlugins = setPluginEnabled(plugins, pluginId, enabled);
+    setPlugins(nextPlugins);
+    savePluginRegistry(nextPlugins);
+    showMessage(enabled ? '插件已启用' : '插件已禁用');
+  };
+
+  const handleUninstallPlugin = (pluginId: string) => {
+    if (!window.confirm('确定要卸载这个插件吗？')) {
+      return;
+    }
+
+    const nextPlugins = uninstallPlugin(plugins, pluginId);
+    setPlugins(nextPlugins);
+    savePluginRegistry(nextPlugins);
+    showMessage('插件已卸载');
+  };
+
   const handleImportJson = async () => {
     try {
       const importedProject = await importMindmapJson();
@@ -549,7 +670,7 @@ export function App() {
       const importedMindmap = parseExcelRowsToMindmap(
         rows,
         mapping,
-        nodeTypes,
+        availableNodeTypes,
       );
 
       recordHistory();
@@ -567,7 +688,7 @@ export function App() {
   };
 
   const createTypedNode = () =>
-    createNodeFromType(findNodeTypeById(nodeTypes, childNodeTypeId));
+    createNodeFromType(findNodeTypeById(availableNodeTypes, childNodeTypeId));
 
   const handleAddChild = () => {
     const newNode = createTypedNode();
@@ -893,6 +1014,15 @@ export function App() {
         >
           导出 JPG
         </button>
+        {canExportTxt ? (
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={handleExportTxt}
+          >
+            导出 TXT
+          </button>
+        ) : null}
         <button
           type="button"
           className="secondary-action"
@@ -914,6 +1044,13 @@ export function App() {
         >
           导入 Excel
         </button>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={() => setIsPluginManagerVisible(true)}
+        >
+          插件管理
+        </button>
       </header>
 
       <section className="node-toolbar" aria-label="节点操作">
@@ -931,7 +1068,7 @@ export function App() {
             onChange={(event) => setChildNodeTypeId(event.target.value)}
           >
             <option value="">普通节点</option>
-            {nodeTypes.map((nodeType) => (
+            {availableNodeTypes.map((nodeType) => (
               <option key={nodeType.id} value={nodeType.id}>
                 {nodeType.name}
               </option>
@@ -972,7 +1109,7 @@ export function App() {
             onChange={(event) => handleSelectedNodeTypeChange(event.target.value)}
           >
             <option value="">普通节点</option>
-            {nodeTypes.map((nodeType) => (
+            {availableNodeTypes.map((nodeType) => (
               <option key={nodeType.id} value={nodeType.id}>
                 {nodeType.name}
               </option>
@@ -1019,7 +1156,7 @@ export function App() {
               value={themeId}
               onChange={(event) => handleThemeChange(event.target.value)}
             >
-              {MINDMAP_THEMES.map((theme) => (
+              {availableThemes.map((theme) => (
                 <option key={theme.id} value={theme.id}>
                   {theme.name}
                 </option>
@@ -1236,7 +1373,7 @@ export function App() {
                     }))
                   }
                 >
-                  {NODE_TYPE_ICONS.map((icon) => (
+                  {availableNodeTypeIcons.map((icon) => (
                     <option key={icon.value} value={icon.value}>
                       {icon.label}
                     </option>
@@ -1405,7 +1542,7 @@ export function App() {
             >
               <MindmapTree
                 node={mindmap}
-                nodeTypes={nodeTypes}
+                nodeTypes={availableNodeTypes}
                 selectedNodeId={selectedNodeId}
                 editingNodeId={editingNodeId}
                 editingText={editingText}
@@ -1433,6 +1570,16 @@ export function App() {
           preview={excelImportPreview}
           onCancel={() => setExcelImportPreview(null)}
           onConfirm={handleConfirmExcelImport}
+        />
+      ) : null}
+
+      {isPluginManagerVisible ? (
+        <PluginManagerPanel
+          plugins={plugins}
+          onClose={() => setIsPluginManagerVisible(false)}
+          onInstall={handleInstallPlugin}
+          onToggle={handleTogglePlugin}
+          onUninstall={handleUninstallPlugin}
         />
       ) : null}
     </main>

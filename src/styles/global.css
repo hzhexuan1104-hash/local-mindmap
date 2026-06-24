@@ -1042,6 +1042,166 @@ h2 {
   font-size: 14px;
 }
 
+.plugin-manager-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgb(15 23 42 / 48%);
+}
+
+.plugin-manager-dialog {
+  width: min(980px, 100%);
+  max-width: calc(100vw - 64px);
+  max-height: min(820px, calc(100vh - 64px));
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgb(15 23 42 / 28%);
+}
+
+.plugin-manager-dialog,
+.plugin-manager-dialog * {
+  box-sizing: border-box;
+}
+
+.plugin-manager-header,
+.plugin-manager-actions,
+.plugin-manager-filters,
+.plugin-item,
+.plugin-item-title,
+.plugin-item-actions {
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+}
+
+.plugin-manager-header {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.plugin-manager-actions,
+.plugin-item-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.plugin-manager-filters {
+  flex-wrap: wrap;
+}
+
+.plugin-manager-filters input,
+.plugin-manager-filters select {
+  min-width: 180px;
+  flex: 1 1 220px;
+}
+
+.plugin-list {
+  min-width: 0;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 2px;
+}
+
+.plugin-item {
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.plugin-item-main {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.plugin-item-title {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.plugin-item strong,
+.plugin-item p,
+.plugin-meta,
+.plugin-capability-list {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.plugin-item p {
+  margin: 0;
+  color: #526173;
+  line-height: 1.5;
+}
+
+.plugin-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.plugin-meta div {
+  min-width: 0;
+}
+
+.plugin-meta dt {
+  color: #6b778c;
+  font-size: 12px;
+}
+
+.plugin-meta dd {
+  margin: 2px 0 0;
+  color: #172033;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.plugin-capability-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plugin-capability-list span,
+.status-on,
+.status-off {
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.plugin-capability-list span {
+  color: #14315f;
+  background: #eef5ff;
+}
+
+.status-on {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.status-off {
+  color: #7f1d1d;
+  background: #fee2e2;
+}
+
 .primary-action:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -1083,6 +1243,15 @@ h2 {
   }
 
   .excel-mapping-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plugin-manager-header,
+  .plugin-item {
+    flex-direction: column;
+  }
+
+  .plugin-meta {
     grid-template-columns: 1fr;
   }
 
