@@ -1,7 +1,7 @@
-import type { MindmapNode } from './types';
+import { useState } from 'react';
 import { MarkdownPreview } from './MarkdownPreview';
 import { RemarkPreviewDialog } from './remarkPreview';
-import { useState } from 'react';
+import type { MindmapNode } from './types';
 
 type RemarkMode = 'edit' | 'preview';
 
@@ -33,16 +33,12 @@ export function RemarkPanel({
               className="remark-collapse-button secondary-action"
               onClick={onCollapse}
               aria-label="收起备注面板"
-<<<<<<< HEAD
-            >
-              收起
-=======
               title="收起备注"
             >
-              ›
->>>>>>> main
+              &rsaquo;
             </button>
           </div>
+
           <div className="remark-panel-actions">
             <button
               type="button"
@@ -68,6 +64,7 @@ export function RemarkPanel({
               </button>
             </div>
           </div>
+
           <h2 id="remark-panel-title">{selectedNode.text}</h2>
         </div>
 
