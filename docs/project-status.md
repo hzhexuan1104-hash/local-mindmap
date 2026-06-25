@@ -2,7 +2,7 @@
 
 更新时间：2026-06-25
 
-当前开发版本：v1.2-dev
+当前版本：v1.2.0 发布准备版
 
 ## v1.0.0 已完成
 
@@ -168,8 +168,8 @@
 - v1.1.1：`npm run test` 通过。
 - v1.1.1：本地页面可打开，默认画布高度约占浏览器可视区域 74%。
 - v1.1.1：左侧抽屉、备注折叠和专注模式已完成浏览器快速验证。
-- v1.2-dev：`npm run build` 通过。
-- v1.2-dev：`npm run test` 通过。
+- v1.2.0 发布准备：`npm run build` 通过。
+- v1.2.0 发布准备：`npm run test` 通过。
 - Vite 仍提示主 chunk 超过 500 kB，这是体积提醒，不是构建错误。
 - `npm run tauri:build` 未通过：当前环境缺少 Rust / Cargo，`cargo` 和 `rustc` 均不在 PATH。
 - Vite 仍提示主 chunk 超过 500 kB，这是体积提醒，不是构建错误。
