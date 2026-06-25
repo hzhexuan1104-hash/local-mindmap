@@ -15,11 +15,13 @@ import {
   type CanvasViewState,
 } from '../features/mindmap/canvasControls';
 import {
-  getSelectionRect,
+  getBoxSelectionGeometry,
   hitTestNodesInRect,
+  isCanvasInteractionBlockedTarget,
   isDragPastThreshold,
-  mergeBoxSelection,
+  screenPointToWorldPoint,
   screenToCanvasPoint,
+  shouldStartCanvasPan,
   shouldStartBoxSelection,
   type Point,
   type Rect,
@@ -75,6 +77,7 @@ import {
   saveLocalNodeTypes,
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
+import { updateNodePositionById } from '../features/mindmap/nodePositions';
 import {
   exportNodeTypesToPack,
   importNodeTypesFromPack,
@@ -110,7 +113,8 @@ import {
   applyNodeTypeToNodes,
   deleteNodesByIds,
   getDeletableSelectedNodeIds,
-  updateSelection,
+  resolveBoxSelectionState,
+  resolveNodeClickSelection,
 } from '../features/mindmap/selection';
 import {
   addMindmapTemplate,
@@ -236,16 +240,6 @@ const findParentNodeById = (
   return null;
 };
 
-const setNodePositionById = (
-  node: MindmapNode,
-  nodeId: string,
-  position: { x: number; y: number },
-): MindmapNode =>
-  updateNodeById(node, nodeId, (targetNode) => ({
-    ...targetNode,
-    position,
-  }));
-
 type DragState = {
   nodeId: string;
   pointerStart: { x: number; y: number };
@@ -290,6 +284,12 @@ type BoxSelectionState = {
   isActive: boolean;
 };
 
+type CanvasPanState = {
+  screenStart: Point;
+  lastScreenPoint: Point;
+  hasMoved: boolean;
+};
+
 type ToolDrawer =
   | 'templates'
   | 'node-types'
@@ -300,7 +300,7 @@ type ToolDrawer =
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
   nodeTypes: MindmapNodeType[];
-  selectedNodeId: string;
+  selectedNodeId: string | null;
   selectedNodeIds: Set<string>;
   boxSelectionPreviewIds: Set<string>;
   draggingNodeId: string | null;
@@ -339,7 +339,7 @@ function MindmapTree({
   const node = layoutNode.node;
   const isSelected = selectedNodeIds.has(node.id);
   const isBoxSelectionPreview = boxSelectionPreviewIds.has(node.id);
-  const isPrimarySelected = node.id === selectedNodeId;
+  const isPrimarySelected = isSelected && node.id === selectedNodeId;
   const isDropTarget = node.id === dropTargetNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
@@ -462,8 +462,8 @@ export function App() {
   const [history, setHistory] = useState<HistoryState>(createHistoryState);
   const [canvasView, setCanvasView] =
     useState<CanvasViewState>(DEFAULT_CANVAS_VIEW);
-  const [selectedNodeId, setSelectedNodeId] = useState('root');
-  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(['root']);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
@@ -501,13 +501,17 @@ export function App() {
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
+  const panLayerRef = useRef<HTMLDivElement | null>(null);
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef({ x: 0, y: 0 });
+  const canvasPanStateRef = useRef<CanvasPanState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
+  const selectedNode = selectedNodeId
+    ? findNodeById(mindmap, selectedNodeId) ?? mindmap
+    : mindmap;
   const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
   const nodeHitboxes = useMemo(
     () =>
@@ -592,19 +596,20 @@ export function App() {
     }
 
     const viewportRect = canvasRef.current.getBoundingClientRect();
-    const rect = getSelectionRect(
-      {
-        x: boxSelection.screenStart.x - viewportRect.left + canvasRef.current.scrollLeft,
-        y: boxSelection.screenStart.y - viewportRect.top + canvasRef.current.scrollTop,
-      },
-      {
-        x: boxSelection.screenCurrent.x - viewportRect.left + canvasRef.current.scrollLeft,
-        y: boxSelection.screenCurrent.y - viewportRect.top + canvasRef.current.scrollTop,
-      },
-    );
+    const worldViewportRect = panLayerRef.current?.getBoundingClientRect();
 
-    return rect;
-  }, [boxSelection]);
+    return getBoxSelectionGeometry({
+      screenStart: boxSelection.screenStart,
+      screenCurrent: boxSelection.screenCurrent,
+      canvasViewportRect: viewportRect,
+      worldViewportRect,
+      canvasView,
+      scrollOffset: {
+        x: canvasRef.current.scrollLeft,
+        y: canvasRef.current.scrollTop,
+      },
+    }).viewportRect;
+  }, [boxSelection, canvasView]);
   const searchMatches = useMemo(
     () => findMindmapMatches(mindmap, searchQuery, searchScope),
     [mindmap, searchQuery, searchScope],
@@ -730,6 +735,8 @@ export function App() {
   useEffect(() => {
     const stopDrag = () => {
       dragStateRef.current = null;
+      canvasPanStateRef.current = null;
+      isPanningRef.current = false;
       setDraggingNodeId(null);
       setDropTargetNodeId(null);
     };
@@ -749,16 +756,23 @@ export function App() {
   };
 
   const selectNode = (nodeId: string, append: boolean) => {
-    setSelectedNodeId(nodeId);
-    setSelectedNodeIds((currentSelectedIds) =>
-      updateSelection(currentSelectedIds, nodeId, { append }),
+    const nextSelection = resolveNodeClickSelection(
+      {
+        selectedNodeId,
+        selectedNodeIds,
+      },
+      nodeId,
+      append,
     );
+
+    setSelectedNodeId(nextSelection.selectedNodeId);
+    setSelectedNodeIds(nextSelection.selectedNodeIds);
     setContextMenu(null);
   };
 
-  const clearSelectionToRoot = () => {
-    setSelectedNodeId(mindmap.id);
-    setSelectedNodeIds([mindmap.id]);
+  const clearSelection = () => {
+    setSelectedNodeId(null);
+    setSelectedNodeIds([]);
     setContextMenu(null);
   };
 
@@ -813,10 +827,13 @@ export function App() {
       return;
     }
 
-    clearSelectionToRoot();
+    clearSelection();
   };
 
-  const applyProject = (project: MindmapProject, nextSelectedNodeId?: string) => {
+  const applyProject = (
+    project: MindmapProject,
+    nextSelectedNodeId?: string | null,
+  ) => {
     const nextThemeId =
       project.themeId && availableThemes.some((theme) => theme.id === project.themeId)
         ? project.themeId
@@ -831,10 +848,10 @@ export function App() {
     const nextPrimaryNodeId =
       nextSelectedNodeId && findNodeById(project.rootNode, nextSelectedNodeId)
         ? nextSelectedNodeId
-        : project.rootNode.id;
+        : null;
 
     setSelectedNodeId(nextPrimaryNodeId);
-    setSelectedNodeIds([nextPrimaryNodeId]);
+    setSelectedNodeIds(nextPrimaryNodeId ? [nextPrimaryNodeId] : []);
     setEditingNodeId(null);
     setEditingText('');
     setContextMenu(null);
@@ -871,8 +888,8 @@ export function App() {
     setMindmap(createCenterNode());
     setNodeTypes(loadLocalNodeTypes());
     setThemeId('default-blue');
-    setSelectedNodeId('root');
-    setSelectedNodeIds(['root']);
+    setSelectedNodeId(null);
+    setSelectedNodeIds([]);
     setEditingNodeId(null);
     setEditingText('');
     showMessage('已新建空白思维导图');
@@ -1112,12 +1129,13 @@ export function App() {
     );
 
   const handleAddChild = () => {
-    const parentNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
+    const parentNodeId = selectedNodeId ?? mindmap.id;
+    const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
     const newNode = createChildNodeForParent(parentNode);
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
+      updateNodeById(currentMindmap, parentNodeId, (node) => ({
         ...node,
         children: [...node.children, newNode],
       })),
@@ -1128,6 +1146,11 @@ export function App() {
   };
 
   const handleAddSibling = () => {
+    if (!selectedNodeId) {
+      showMessage('璇峰厛閫夋嫨鑺傜偣');
+      return;
+    }
+
     if (selectedNodeId === mindmap.id) {
       showMessage('中心主题不能新增同级节点');
       return;
@@ -1178,8 +1201,8 @@ export function App() {
     setMindmap((currentMindmap) =>
       deleteNodesByIds(currentMindmap, new Set(deletableIds)),
     );
-    setSelectedNodeId(mindmap.id);
-    setSelectedNodeIds([mindmap.id]);
+    setSelectedNodeId(null);
+    setSelectedNodeIds([]);
     setEditingNodeId(null);
     showMessage(
       deletableIds.length > 1 ? `已删除 ${deletableIds.length} 个节点` : '已删除节点',
@@ -1203,7 +1226,9 @@ export function App() {
       : undefined;
 
   const getSafePasteTargetId = (clipboard: InternalClipboardState) => {
-    const targetNode = findNodeById(mindmap, selectedNodeId);
+    const targetNode = selectedNodeId
+      ? findNodeById(mindmap, selectedNodeId)
+      : null;
 
     if (!targetNode) {
       return mindmap.id;
@@ -1296,8 +1321,8 @@ export function App() {
     }
 
     setMindmap(result.rootNode);
-    setSelectedNodeId(result.pastedNodeIds[0] ?? result.rootNode.id);
-    setSelectedNodeIds(result.pastedNodeIds.length > 0 ? result.pastedNodeIds : [result.rootNode.id]);
+    setSelectedNodeId(result.pastedNodeIds[0] ?? null);
+    setSelectedNodeIds(result.pastedNodeIds);
     setEditingNodeId(null);
     setEditingText('');
     if (internalClipboard.mode === 'cut') {
@@ -1311,6 +1336,11 @@ export function App() {
   };
 
   const handleDuplicateNodeAsSibling = () => {
+    if (!selectedNodeId) {
+      showMessage('璇峰厛閫夋嫨鑺傜偣');
+      return;
+    }
+
     const result = duplicateNodeAsSibling(mindmap, selectedNodeId, {
       getRootPosition: getPastedRootPosition,
     });
@@ -1329,8 +1359,8 @@ export function App() {
 
     recordHistory();
     setMindmap(result.rootNode);
-    setSelectedNodeId(result.pastedNodeIds[0] ?? mindmap.id);
-    setSelectedNodeIds(result.pastedNodeIds.length > 0 ? result.pastedNodeIds : [mindmap.id]);
+    setSelectedNodeId(result.pastedNodeIds[0] ?? null);
+    setSelectedNodeIds(result.pastedNodeIds);
     setEditingNodeId(null);
     setEditingText('');
     showMessage('已复制为同级节点');
@@ -1605,6 +1635,16 @@ export function App() {
   const getCanvasPointFromMouseEvent = (
     event: MouseEvent<HTMLElement>,
   ): Point => {
+    const panLayerViewportRect = panLayerRef.current?.getBoundingClientRect();
+
+    if (panLayerViewportRect) {
+      return screenPointToWorldPoint(
+        { x: event.clientX, y: event.clientY },
+        panLayerViewportRect,
+        canvasView.scale,
+      );
+    }
+
     const canvasElement = canvasRef.current ?? event.currentTarget;
     const canvasViewportRect = canvasElement.getBoundingClientRect();
 
@@ -1668,63 +1708,95 @@ export function App() {
   const handleCanvasPointerDown = (
     event: MouseEvent<HTMLElement>,
   ) => {
-    const target = event.target as HTMLElement;
-
-    const isOnInteractiveElement = Boolean(
-      target.closest(
-        '.mindmap-node, .collapse-toggle, .canvas-floating-toolbar, .context-menu, button, input, textarea, select, [contenteditable="true"]',
-      ),
+    const isOnInteractiveElement = isCanvasInteractionBlockedTarget(
+      event.target as HTMLElement | null,
     );
-
-    if (
-      !shouldStartBoxSelection({
-        button: event.button,
-        isOnInteractiveElement,
-      })
-    ) {
-      return;
-    }
 
     const canvasElement = event.currentTarget;
     const canvasViewportRect = canvasElement.getBoundingClientRect();
     const screenPoint = { x: event.clientX, y: event.clientY };
-    const canvasPoint = screenToCanvasPoint(
-      screenPoint,
-      canvasViewportRect,
-      canvasView,
-    );
 
-    setContextMenu(null);
-    setBoxSelection({
-      screenStart: screenPoint,
-      screenCurrent: screenPoint,
-      canvasStart: canvasPoint,
-      canvasCurrent: canvasPoint,
-      append: event.shiftKey,
-      isActive: false,
-    });
-    setBoxSelectionPreviewIds([]);
+    if (
+      shouldStartBoxSelection({
+        button: event.button,
+        isOnInteractiveElement,
+        shiftKey: event.shiftKey,
+      })
+    ) {
+      event.preventDefault();
+      isPanningRef.current = false;
+      canvasPanStateRef.current = null;
+      const selectionGeometry = getBoxSelectionGeometry({
+        screenStart: screenPoint,
+        screenCurrent: screenPoint,
+        canvasViewportRect,
+        worldViewportRect: panLayerRef.current?.getBoundingClientRect(),
+        canvasView,
+        scrollOffset: {
+          x: canvasElement.scrollLeft,
+          y: canvasElement.scrollTop,
+        },
+      });
+
+      setContextMenu(null);
+      setBoxSelection({
+        screenStart: screenPoint,
+        screenCurrent: screenPoint,
+        canvasStart: selectionGeometry.canvasStart,
+        canvasCurrent: selectionGeometry.canvasCurrent,
+        append: false,
+        isActive: false,
+      });
+      setBoxSelectionPreviewIds([]);
+      return;
+    }
+
+    if (
+      shouldStartCanvasPan({
+        button: event.button,
+        isOnInteractiveElement,
+        shiftKey: event.shiftKey,
+      })
+    ) {
+      event.preventDefault();
+      setContextMenu(null);
+      cancelBoxSelection();
+      isPanningRef.current = true;
+      lastPanPointRef.current = screenPoint;
+      canvasPanStateRef.current = {
+        screenStart: screenPoint,
+        lastScreenPoint: screenPoint,
+        hasMoved: false,
+      };
+    }
   };
 
   const handleCanvasPointerMove = (
     event: MouseEvent<HTMLElement>,
   ) => {
     if (boxSelection) {
+      event.preventDefault();
       const canvasElement = event.currentTarget;
       const canvasViewportRect = canvasElement.getBoundingClientRect();
       const screenPoint = { x: event.clientX, y: event.clientY };
-      const canvasPoint = screenToCanvasPoint(
-        screenPoint,
+      const selectionGeometry = getBoxSelectionGeometry({
+        screenStart: boxSelection.screenStart,
+        screenCurrent: screenPoint,
         canvasViewportRect,
+        worldViewportRect: panLayerRef.current?.getBoundingClientRect(),
         canvasView,
-      );
+        scrollOffset: {
+          x: canvasElement.scrollLeft,
+          y: canvasElement.scrollTop,
+        },
+      });
       const isActive =
         boxSelection.isActive ||
         isDragPastThreshold(boxSelection.screenStart, screenPoint);
       const nextBoxSelection = {
         ...boxSelection,
         screenCurrent: screenPoint,
-        canvasCurrent: canvasPoint,
+        canvasCurrent: selectionGeometry.canvasCurrent,
         isActive,
       };
 
@@ -1732,18 +1804,25 @@ export function App() {
 
       if (isActive) {
         const hitNodeIds = hitTestNodesInRect(
-          getSelectionRect(nextBoxSelection.canvasStart, nextBoxSelection.canvasCurrent),
+          selectionGeometry.canvasRect,
           nodeHitboxes,
         );
-        setBoxSelectionPreviewIds(
-          mergeBoxSelection(selectedNodeIds, hitNodeIds, nextBoxSelection.append),
+        const nextPreviewSelection = resolveBoxSelectionState(
+          {
+            selectedNodeId,
+            selectedNodeIds,
+          },
+          hitNodeIds,
+          nextBoxSelection.append,
         );
+        setBoxSelectionPreviewIds(nextPreviewSelection.selectedNodeIds);
       }
 
       return;
     }
 
     if (dragStateRef.current) {
+      event.preventDefault();
       const dragState = dragStateRef.current;
       const pointerDeltaX = event.clientX - dragState.pointerStart.x;
       const pointerDeltaY = event.clientY - dragState.pointerStart.y;
@@ -1764,7 +1843,7 @@ export function App() {
       };
 
       setMindmap((currentMindmap) =>
-        setNodePositionById(currentMindmap, dragState.nodeId, nextPosition),
+        updateNodePositionById(currentMindmap, dragState.nodeId, nextPosition),
       );
       setDropTargetNodeId(
         findDropTargetNodeId(
@@ -1775,54 +1854,88 @@ export function App() {
       return;
     }
 
-    if (!isPanningRef.current) {
+    if (!isPanningRef.current || !canvasPanStateRef.current) {
       return;
     }
 
-    const deltaX = event.clientX - lastPanPointRef.current.x;
-    const deltaY = event.clientY - lastPanPointRef.current.y;
-    lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+    event.preventDefault();
+
+    const screenPoint = { x: event.clientX, y: event.clientY };
+    const canvasPanState = canvasPanStateRef.current;
+
+    if (
+      !canvasPanState.hasMoved &&
+      !isDragPastThreshold(canvasPanState.screenStart, screenPoint)
+    ) {
+      return;
+    }
+
+    const deltaX = screenPoint.x - canvasPanState.lastScreenPoint.x;
+    const deltaY = screenPoint.y - canvasPanState.lastScreenPoint.y;
+    canvasPanStateRef.current = {
+      ...canvasPanState,
+      lastScreenPoint: screenPoint,
+      hasMoved: true,
+    };
+    lastPanPointRef.current = screenPoint;
     setCanvasView((view) => panCanvasView(view, deltaX, deltaY));
   };
 
   const stopCanvasPan = () => {
     isPanningRef.current = false;
+    canvasPanStateRef.current = null;
   };
 
   const handleCanvasPointerUp = (
     event: MouseEvent<HTMLElement>,
   ) => {
     if (boxSelection) {
+      event.preventDefault();
       if (!boxSelection.isActive) {
-        clearSelectionToRoot();
+        clearSelection();
         cancelBoxSelection();
         return;
       }
 
+      const canvasElement = event.currentTarget;
+      const screenPoint = { x: event.clientX, y: event.clientY };
+      const selectionGeometry = getBoxSelectionGeometry({
+        screenStart: boxSelection.screenStart,
+        screenCurrent: screenPoint,
+        canvasViewportRect: canvasElement.getBoundingClientRect(),
+        worldViewportRect: panLayerRef.current?.getBoundingClientRect(),
+        canvasView,
+        scrollOffset: {
+          x: canvasElement.scrollLeft,
+          y: canvasElement.scrollTop,
+        },
+      });
       const hitNodeIds = hitTestNodesInRect(
-        getSelectionRect(boxSelection.canvasStart, boxSelection.canvasCurrent),
+        selectionGeometry.canvasRect,
         nodeHitboxes,
       );
-      const nextSelectedNodeIds = mergeBoxSelection(
-        selectedNodeIds,
+      const nextSelection = resolveBoxSelectionState(
+        {
+          selectedNodeId,
+          selectedNodeIds,
+        },
         hitNodeIds,
         boxSelection.append,
       );
-      const nextPrimaryNodeId =
-        nextSelectedNodeIds[nextSelectedNodeIds.length - 1] ?? mindmap.id;
 
-      setSelectedNodeId(nextPrimaryNodeId);
-      setSelectedNodeIds(nextSelectedNodeIds.length > 0 ? nextSelectedNodeIds : [mindmap.id]);
+      setSelectedNodeId(nextSelection.selectedNodeId);
+      setSelectedNodeIds(nextSelection.selectedNodeIds);
       cancelBoxSelection();
       showMessage(
-        nextSelectedNodeIds.length > 0
-          ? `已框选 ${nextSelectedNodeIds.length} 个节点`
+        nextSelection.selectedNodeIds.length > 0
+          ? `已框选 ${nextSelection.selectedNodeIds.length} 个节点`
           : '未框选到节点',
       );
       return;
     }
 
     if (dragStateRef.current) {
+      event.preventDefault();
       const dragState = dragStateRef.current;
       const finalDropTargetNodeId =
         findDropTargetNodeId(
@@ -1859,6 +1972,18 @@ export function App() {
       return;
     }
 
+    if (canvasPanStateRef.current) {
+      event.preventDefault();
+      const hasMoved = canvasPanStateRef.current.hasMoved;
+      stopCanvasPan();
+
+      if (!hasMoved) {
+        clearSelection();
+      }
+
+      return;
+    }
+
     stopCanvasPan();
   };
 
@@ -1874,6 +1999,7 @@ export function App() {
     }
 
     isPanningRef.current = false;
+    canvasPanStateRef.current = null;
     setDropTargetNodeId(null);
     dragStateRef.current = {
       nodeId,
@@ -2752,7 +2878,11 @@ export function App() {
               </button>
             ) : null}
           </div>
-          <div className="mindmap-pan-layer" style={panLayerStyle}>
+          <div
+            className="mindmap-pan-layer"
+            style={panLayerStyle}
+            ref={panLayerRef}
+          >
             <div
               className="mindmap-tree"
               style={{
@@ -2920,7 +3050,8 @@ export function App() {
                 <kbd>Esc</kbd>：关闭弹窗 / 右键菜单 / 框选，或清空选择
               </span>
               <span>Ctrl / Shift + 点击节点：多选</span>
-              <span>Shift + 框选：追加选择</span>
+              <span>拖动画布空白区域：平移画布</span>
+              <span>Shift + 拖动画布空白区域：框选节点</span>
               <span>Ctrl + 鼠标滚轮：缩放画布</span>
             </div>
           </section>

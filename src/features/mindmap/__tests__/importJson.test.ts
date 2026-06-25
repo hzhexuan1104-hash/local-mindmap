@@ -56,6 +56,38 @@ describe('parseLmindProject', () => {
     expect(project.rootNode.children[0].position).toBeUndefined();
   });
 
+  it('preserves negative node positions when opening lmind JSON', () => {
+    const project = parseLmindProject(
+      JSON.stringify({
+        version: '1.0',
+        meta: {
+          createTime: '2026-06-24T00:00:00.000Z',
+          updateTime: '2026-06-24T00:00:00.000Z',
+          theme: 'default-blue',
+        },
+        nodeTypes: [],
+        rootNode: {
+          id: 'root',
+          text: 'Root',
+          remark: '',
+          position: { x: -120, y: -80 },
+          children: [
+            {
+              id: 'child',
+              text: 'Child',
+              remark: '',
+              position: { x: -40, y: -20 },
+              children: [],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(project.rootNode.position).toEqual({ x: -120, y: -80 });
+    expect(project.rootNode.children[0].position).toEqual({ x: -40, y: -20 });
+  });
+
   it('rejects invalid JSON documents', () => {
     expect(() => parseLmindProject('{bad json')).toThrow('Invalid JSON');
     expect(() => parseLmindProject(JSON.stringify({ version: '1.0' }))).toThrow(

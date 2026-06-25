@@ -34,6 +34,35 @@ textarea {
   font: inherit;
 }
 
+.app-shell,
+.app-header,
+.node-toolbar,
+.toolbar-group,
+.tool-sidebar,
+.tool-drawer,
+.workspace-layout,
+.mindmap-canvas,
+.canvas-floating-toolbar,
+.mindmap-node,
+button {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable="true"],
+.node-editor,
+.remark-editor,
+.markdown-editor,
+.remark-live-preview,
+.remark-preview-dialog-body,
+.markdown-preview {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .app-shell {
   width: 100%;
   max-width: 100vw;
