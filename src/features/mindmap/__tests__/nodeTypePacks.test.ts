@@ -68,7 +68,11 @@ describe('node type packs', () => {
           nodeTypes: [],
         }),
       ),
-    ).toThrow('Invalid node type pack');
+    ).toThrow('这不是有效的节点类型包');
+  });
+
+  it('rejects invalid JSON with a clear message', () => {
+    expect(() => parseNodeTypePack('{bad json')).toThrow('文件不是有效 JSON');
   });
 
   it('rejects nodeTypes when it is not an array', () => {
@@ -81,7 +85,17 @@ describe('node type packs', () => {
           nodeTypes: {},
         }),
       ),
-    ).toThrow('Invalid node type pack');
+    ).toThrow('这不是有效的节点类型包');
+  });
+
+  it('handles an empty node type pack safely', () => {
+    const result = importNodeTypesFromPack([], createNodeTypePack([]));
+
+    expect(result.nodeTypes).toHaveLength(0);
+    expect(result.importedCount).toBe(0);
+    expect(result.skippedDuplicateCount).toBe(0);
+    expect(result.renamedConflictCount).toBe(0);
+    expect(result.invalidCount).toBe(0);
   });
 
   it('skips same-id node types with identical content', () => {
@@ -126,6 +140,17 @@ describe('node type packs', () => {
     const result = importNodeTypesFromPack([], pack);
     const ids = result.nodeTypes.map((nodeType) => nodeType.id);
 
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('does not produce duplicate ids when the same pack is imported twice', () => {
+    const pack = createNodeTypePack([createNodeType()]);
+    const firstResult = importNodeTypesFromPack([], pack);
+    const secondResult = importNodeTypesFromPack(firstResult.nodeTypes, pack);
+    const ids = secondResult.nodeTypes.map((nodeType) => nodeType.id);
+
+    expect(secondResult.importedCount).toBe(0);
+    expect(secondResult.skippedDuplicateCount).toBe(1);
     expect(new Set(ids).size).toBe(ids.length);
   });
 

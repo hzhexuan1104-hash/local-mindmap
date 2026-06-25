@@ -156,6 +156,9 @@ const setAllNodesCollapsed = (
   children: node.children.map((child) => setAllNodesCollapsed(child, collapsed)),
 });
 
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error && error.message ? error.message : fallback;
+
 const updateNodeById = (
   node: MindmapNode,
   nodeId: string,
@@ -937,6 +940,12 @@ export function App() {
       }
 
       const pack = parseNodeTypePack(await selectedFile.text());
+
+      if (pack.nodeTypes.length === 0) {
+        showMessage('未找到可导入的节点类型');
+        return;
+      }
+
       const result = importNodeTypesFromPack(nodeTypes, pack);
 
       if (result.importedCount > 0) {
@@ -948,10 +957,10 @@ export function App() {
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `导入 ${result.importedCount}，重复 ${result.skippedDuplicateCount}，重命名 ${result.renamedConflictCount}，无效 ${result.invalidCount}${nameConflictText}`,
+        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
-    } catch {
-      showMessage('节点类型包格式不正确，无法导入');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '节点类型包格式不正确，无法导入'));
     }
   };
 
@@ -1462,6 +1471,12 @@ export function App() {
       }
 
       const pack = parseTemplatePack(await selectedFile.text());
+
+      if (pack.templates.length === 0) {
+        showMessage('未找到可导入的模板');
+        return;
+      }
+
       const result = importTemplatesFromPack(templates, pack);
 
       if (result.importedCount > 0) {
@@ -1472,10 +1487,10 @@ export function App() {
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `导入 ${result.importedCount}，重复 ${result.skippedDuplicateCount}，重命名 ${result.renamedConflictCount}，无效 ${result.invalidCount}${nameConflictText}`,
+        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
-    } catch {
-      showMessage('模板包格式不正确，无法导入');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '模板包格式不正确，无法导入'));
     }
   };
 

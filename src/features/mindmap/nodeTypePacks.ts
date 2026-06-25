@@ -136,11 +136,11 @@ export function parseNodeTypePack(fileContent: string): NodeTypePack {
   try {
     parsedContent = JSON.parse(fileContent);
   } catch {
-    throw new Error('Invalid JSON');
+    throw new Error('文件不是有效 JSON');
   }
 
   if (!validateNodeTypePack(parsedContent)) {
-    throw new Error('Invalid node type pack');
+    throw new Error('这不是有效的节点类型包');
   }
 
   return {

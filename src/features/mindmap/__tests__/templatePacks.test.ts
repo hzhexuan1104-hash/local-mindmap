@@ -93,7 +93,11 @@ describe('template packs', () => {
           templates: [],
         }),
       ),
-    ).toThrow('Invalid template pack');
+    ).toThrow('这不是有效的模板包');
+  });
+
+  it('rejects invalid JSON with a clear message', () => {
+    expect(() => parseTemplatePack('{bad json')).toThrow('文件不是有效 JSON');
   });
 
   it('rejects templates when it is not an array', () => {
@@ -106,7 +110,17 @@ describe('template packs', () => {
           templates: {},
         }),
       ),
-    ).toThrow('Invalid template pack');
+    ).toThrow('这不是有效的模板包');
+  });
+
+  it('handles an empty template pack safely', () => {
+    const result = importTemplatesFromPack([], createTemplatePack([]));
+
+    expect(result.templates).toHaveLength(0);
+    expect(result.importedCount).toBe(0);
+    expect(result.skippedDuplicateCount).toBe(0);
+    expect(result.renamedConflictCount).toBe(0);
+    expect(result.invalidCount).toBe(0);
   });
 
   it('skips same-id templates with identical content', () => {
@@ -165,6 +179,17 @@ describe('template packs', () => {
     );
     const ids = result.templates.map((template) => template.id);
 
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('does not produce duplicate ids when the same pack is imported twice', () => {
+    const pack = createTemplatePack([createTemplate()]);
+    const firstResult = importTemplatesFromPack([], pack);
+    const secondResult = importTemplatesFromPack(firstResult.templates, pack);
+    const ids = secondResult.templates.map((template) => template.id);
+
+    expect(secondResult.importedCount).toBe(0);
+    expect(secondResult.skippedDuplicateCount).toBe(1);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
