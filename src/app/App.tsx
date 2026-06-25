@@ -120,9 +120,15 @@ import {
   filterAndSortTemplates,
   getTemplateCategories,
   loadMindmapTemplates,
+  saveMindmapTemplates,
   type MindmapTemplate,
   type TemplateSortMode,
 } from '../features/mindmap/templates';
+import {
+  exportTemplatesToPack,
+  importTemplatesFromPack,
+  parseTemplatePack,
+} from '../features/mindmap/templatePacks';
 import { createThemeStyle, MINDMAP_THEMES } from '../features/mindmap/themes';
 import {
   isDescendant as isTreeDescendant,
@@ -1430,6 +1436,49 @@ export function App() {
     showMessage('已保存为模板');
   };
 
+  const handleExportTemplatePack = () => {
+    if (templates.length === 0) {
+      showMessage('暂无可导出的自定义模板');
+      return;
+    }
+
+    downloadTextFile(
+      exportTemplatesToPack(templates, {
+        name: 'Local Mindmap 模板包',
+        description: '用于分享本地自定义模板，不等同于 .lmind 文件。',
+      }),
+      'local-mindmap-templates.json',
+      'application/json;charset=utf-8',
+    );
+    showMessage('已导出模板包');
+  };
+
+  const handleImportTemplatePack = async () => {
+    try {
+      const selectedFile = await selectLocalFile('.json,application/json');
+
+      if (!selectedFile) {
+        return;
+      }
+
+      const pack = parseTemplatePack(await selectedFile.text());
+      const result = importTemplatesFromPack(templates, pack);
+
+      if (result.importedCount > 0) {
+        setTemplates(result.templates);
+        saveMindmapTemplates(result.templates);
+      }
+
+      const nameConflictText =
+        result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
+      showMessage(
+        `导入 ${result.importedCount}，重复 ${result.skippedDuplicateCount}，重命名 ${result.renamedConflictCount}，无效 ${result.invalidCount}${nameConflictText}`,
+      );
+    } catch {
+      showMessage('模板包格式不正确，无法导入');
+    }
+  };
+
   const handleCreateFromTemplate = (template: MindmapTemplate) => {
     recordHistory();
     applyProject(cloneTemplateProject(template));
@@ -2163,6 +2212,20 @@ export function App() {
                     onClick={handleSaveTemplate}
                   >
                     保存为模板
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={handleExportTemplatePack}
+                  >
+                    导出模板包
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => void handleImportTemplatePack()}
+                  >
+                    导入模板包
                   </button>
                 </div>
                 <div className="template-save-form">

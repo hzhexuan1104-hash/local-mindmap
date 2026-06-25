@@ -174,3 +174,13 @@ docs/acceptance-test-checklist.md
 - 节点类型包不是 `.lmind` 文件，不包含 `rootNode`，不保存用户导图内容。
 - `.lmind` 文件仍保留原有结构，仍可携带当前导图使用的 `nodeTypes`，保存和打开逻辑不变。
 - 当前不包含云同步、用户登录、远程节点类型市场或权限系统，也不会执行第三方 JavaScript。
+
+## v1.3 模板包基础版
+
+- 支持在“模板库”面板导出 `local-mindmap-templates.json`，用于分享当前本地自定义模板。
+- 支持导入模板包 JSON，导入后写入浏览器 localStorage 中的本地模板库，刷新后仍可使用。
+- 模板包格式包含 `version`、`kind`、`meta`、`templates`，其中 `kind` 固定为 `local-mindmap-template-pack`。
+- 模板包不等同于 `.lmind` 文件，不代表当前打开的完整导图文件；它保存的是模板库配置。
+- 模板本身继续保留已有 `rootNode`、`nodeTypes`、`themeId` 等字段，用于从模板新建导图，不改变 `.lmind` 基础结构。
+- 节点类型包和模板包是两个独立共享能力：节点类型包分享节点类型配置，模板包分享自定义模板。
+- 当前不包含云同步、用户登录、远程模板市场或权限系统，也不会执行第三方 JavaScript。

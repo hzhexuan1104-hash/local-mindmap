@@ -88,7 +88,7 @@ export function loadMindmapTemplates(): MindmapTemplate[] {
   }
 }
 
-function saveTemplates(templates: MindmapTemplate[]) {
+export function saveMindmapTemplates(templates: MindmapTemplate[]) {
   window.localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(templates));
 }
 
@@ -116,7 +116,7 @@ export function createTemplateFromMindmap(
 export function addMindmapTemplate(template: MindmapTemplate) {
   const templates = loadMindmapTemplates();
   const nextTemplates = [template, ...templates];
-  saveTemplates(nextTemplates);
+  saveMindmapTemplates(nextTemplates);
   return nextTemplates;
 }
 
@@ -124,7 +124,7 @@ export function deleteMindmapTemplate(templateId: string) {
   const nextTemplates = loadMindmapTemplates().filter(
     (template) => template.id !== templateId,
   );
-  saveTemplates(nextTemplates);
+  saveMindmapTemplates(nextTemplates);
   return nextTemplates;
 }
 
