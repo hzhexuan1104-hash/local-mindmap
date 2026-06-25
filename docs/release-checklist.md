@@ -2,9 +2,9 @@
 
 ## 1. 发布前检查
 
-- [ ] 确认当前分支为 `v1.2-dev`。
-- [ ] 确认发布版本号为 `v1.2.0`。
-- [ ] 确认 `package.json` 和 `package-lock.json` 均为 `1.2.0`。
+- [ ] 确认当前分支为 `v1.3-dev`。
+- [ ] 确认发布版本号为 `v1.3.0`。
+- [ ] 确认 `package.json` 和 `package-lock.json` 均为 `1.3.0`。
 - [ ] 确认没有未保存的编辑器文件。
 - [ ] 确认没有新增云同步、用户登录、远程脚本或用户数据上传能力。
 - [ ] 确认 `.lmind` 基础结构未改变，旧文件可继续打开。
@@ -82,6 +82,21 @@ npm run build
 - [ ] GitHub Pages 静态构建不受影响。
 - [ ] Tauri 配置仍存在，Web 构建不受桌面端配置影响。
 
+## 6.1 v1.3 共享包回归
+
+- [ ] 节点类型包可导出为 `local-mindmap-node-types.json`。
+- [ ] 节点类型包可导入并写入当前浏览器 localStorage。
+- [ ] 模板包可导出为 `local-mindmap-templates.json`。
+- [ ] 模板包可导入并写入当前浏览器 localStorage。
+- [ ] 重复导入不会产生重复 ID。
+- [ ] ID 冲突且内容不同会生成 `原ID-imported-N`。
+- [ ] 非法 JSON 显示“文件不是有效 JSON”。
+- [ ] kind 不匹配时区分提示不是有效节点类型包或模板包。
+- [ ] 空节点类型包提示“未找到可导入的节点类型”。
+- [ ] 空模板包提示“未找到可导入的模板”。
+- [ ] 共享包不被误识别为 `.lmind`，`.lmind` 不被误识别为共享包。
+- [ ] 共享包不执行脚本、不上传文件、不依赖云端。
+
 ## 7. GitHub Pages 检查
 
 - [ ] 在线预览地址可打开。
@@ -99,11 +114,11 @@ https://hzhexuan1104-hash.github.io/local-mindmap/
 
 | 项目 | 内容 |
 |---|---|
-| 版本号 | v1.2.0 |
+| 版本号 | v1.3.0 |
 | 发布日期 | 2026-06-25 |
-| 发布分支 | v1.2-dev |
+| 发布分支 | v1.3-dev |
 | 发布负责人 | 项目维护者 |
-| 主要变更 | 节点复制 / 剪切 / 粘贴、框选节点、Ctrl+A、Esc 行为统一、快捷键帮助、拖拽调整父子层级基础版、备注面板顶部布局修复 |
+| 主要变更 | 节点类型包共享、模板包共享、共享包导入导出提示收口；继续保持完全本地运行 |
 
 ## 9. 已知风险
 
@@ -112,7 +127,8 @@ https://hzhexuan1104-hash.github.io/local-mindmap/
 | 主 chunk 体积超过 500 kB | 首次加载可能受影响 | 后续评估代码分包 |
 | 自动化测试以纯函数和核心解析为主 | 完整浏览器交互仍需手动回归 | 按验收清单执行关键流程 |
 | Tauri 真实安装包未发布 | 本次不交付桌面安装包 | 后续在目标平台补齐 Rust / WebView 环境后验证 |
-| 拖拽调整层级为基础版 | 不含兄弟排序、批量层级调整和智能排版 | 放入 v1.2 后续批次或 v1.3 |
+| 拖拽调整层级为基础版 | 不含兄弟排序、批量层级调整和智能排版 | 放入后续批次 |
+| 共享包持久化范围为 localStorage | 换浏览器、换设备或清空站点数据后需重新导入 | 在 `docs/share-packs.md` 中说明 |
 
 ## 10. 发布步骤建议
 
@@ -121,12 +137,12 @@ git status
 npm run test
 npm run build
 git add .
-git commit -m "release: prepare v1.2.0"
-git push origin v1.2-dev
+git commit -m "release: prepare v1.3.0"
+git push origin v1.3-dev
 ```
 
 发布后：
 
 - [ ] 确认 GitHub Actions 通过。
 - [ ] 确认 GitHub Pages 更新完成。
-- [ ] 基于 `docs/release-notes-v1.2.0-draft.md` 创建 GitHub Release 或合并到正式发布说明。
+- [ ] 基于 `docs/release-notes-v1.3.0-draft.md` 创建 GitHub Release 或合并到正式发布说明。

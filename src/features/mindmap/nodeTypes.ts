@@ -1,4 +1,11 @@
 import type { MindmapNode, MindmapNodeType } from './types';
+import {
+  createNodeTypePack,
+  importNodeTypesFromPack,
+  normalizeImportedNodeType,
+} from './nodeTypePacks';
+
+const LOCAL_NODE_TYPES_STORAGE_KEY = 'local-mindmap.node-types.v1';
 
 export const NODE_TYPE_ICONS = [
   { value: '✅', label: '✅ 任务' },
@@ -84,4 +91,40 @@ export function createNodeFromType(nodeType?: MindmapNodeType | null): MindmapNo
     ...(nodeType ? { nodeTypeId: nodeType.id } : {}),
     children: [],
   };
+}
+
+export function loadLocalNodeTypes(): MindmapNodeType[] {
+  const rawValue = window.localStorage.getItem(LOCAL_NODE_TYPES_STORAGE_KEY);
+
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue);
+
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+
+    return parsedValue
+      .map(normalizeImportedNodeType)
+      .filter((nodeType): nodeType is MindmapNodeType => Boolean(nodeType));
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalNodeTypes(nodeTypes: MindmapNodeType[]) {
+  window.localStorage.setItem(
+    LOCAL_NODE_TYPES_STORAGE_KEY,
+    JSON.stringify(nodeTypes),
+  );
+}
+
+export function mergeWithLocalNodeTypes(nodeTypes: MindmapNodeType[]) {
+  return importNodeTypesFromPack(
+    nodeTypes,
+    createNodeTypePack(loadLocalNodeTypes()),
+  ).nodeTypes;
 }

@@ -38,6 +38,7 @@ import { exportMindmapAsImage } from '../features/mindmap/exportImage';
 import { exportMindmapJson } from '../features/mindmap/exportJson';
 import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
 import { exportMindmapTxt } from '../features/mindmap/exportTxt';
+import { downloadTextFile, selectLocalFile } from '../features/mindmap/fileUtils';
 import {
   createHistoryState,
   pushHistory,
@@ -67,10 +68,18 @@ import {
   createMindmapNodeType,
   createNodeFromType,
   findNodeTypeById,
+  loadLocalNodeTypes,
+  mergeWithLocalNodeTypes,
   NODE_TYPE_ICONS,
   NODE_TYPE_SHAPES,
+  saveLocalNodeTypes,
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
+import {
+  exportNodeTypesToPack,
+  importNodeTypesFromPack,
+  parseNodeTypePack,
+} from '../features/mindmap/nodeTypePacks';
 import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
 import { OFFICIAL_TEMPLATES } from '../features/mindmap/officialTemplates';
 import { PerformancePanel } from '../features/mindmap/PerformancePanel';
@@ -111,9 +120,15 @@ import {
   filterAndSortTemplates,
   getTemplateCategories,
   loadMindmapTemplates,
+  saveMindmapTemplates,
   type MindmapTemplate,
   type TemplateSortMode,
 } from '../features/mindmap/templates';
+import {
+  exportTemplatesToPack,
+  importTemplatesFromPack,
+  parseTemplatePack,
+} from '../features/mindmap/templatePacks';
 import { createThemeStyle, MINDMAP_THEMES } from '../features/mindmap/themes';
 import {
   isDescendant as isTreeDescendant,
@@ -140,6 +155,9 @@ const setAllNodesCollapsed = (
   collapsed: node.children.length > 0 ? collapsed : false,
   children: node.children.map((child) => setAllNodesCollapsed(child, collapsed)),
 });
+
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error && error.message ? error.message : fallback;
 
 const updateNodeById = (
   node: MindmapNode,
@@ -629,6 +647,7 @@ export function App() {
   useEffect(() => {
     setTemplates(loadMindmapTemplates());
     setPlugins(loadPluginRegistry());
+    setNodeTypes(loadLocalNodeTypes());
 
     return () => {
       window.clearTimeout(messageTimerRef.current);
@@ -804,7 +823,7 @@ export function App() {
         : 'default-blue';
 
     setMindmap(project.rootNode);
-    setNodeTypes(project.nodeTypes);
+    setNodeTypes(mergeWithLocalNodeTypes(project.nodeTypes));
     setThemeId(nextThemeId);
     if (project.themeId && project.themeId !== nextThemeId) {
       showMessage('文件使用的插件主题未启用，已切回默认主题');
@@ -850,7 +869,7 @@ export function App() {
   const handleCreateMindmap = () => {
     recordHistory();
     setMindmap(createCenterNode());
-    setNodeTypes([]);
+    setNodeTypes(loadLocalNodeTypes());
     setThemeId('default-blue');
     setSelectedNodeId('root');
     setSelectedNodeIds(['root']);
@@ -893,6 +912,56 @@ export function App() {
   const handleExportJson = () => {
     exportMindmapJson(mindmap, nodeTypes, themeId);
     showMessage('已导出 mindmap.json');
+  };
+
+  const handleExportNodeTypePack = () => {
+    if (nodeTypes.length === 0) {
+      showMessage('暂无可导出的自定义节点类型');
+      return;
+    }
+
+    downloadTextFile(
+      exportNodeTypesToPack(nodeTypes, {
+        name: 'Local Mindmap 节点类型包',
+        description: '用于分享本地自定义节点类型，不包含导图内容。',
+      }),
+      'local-mindmap-node-types.json',
+      'application/json;charset=utf-8',
+    );
+    showMessage('已导出节点类型包');
+  };
+
+  const handleImportNodeTypePack = async () => {
+    try {
+      const selectedFile = await selectLocalFile('.json,application/json');
+
+      if (!selectedFile) {
+        return;
+      }
+
+      const pack = parseNodeTypePack(await selectedFile.text());
+
+      if (pack.nodeTypes.length === 0) {
+        showMessage('未找到可导入的节点类型');
+        return;
+      }
+
+      const result = importNodeTypesFromPack(nodeTypes, pack);
+
+      if (result.importedCount > 0) {
+        recordHistory();
+        setNodeTypes(result.nodeTypes);
+        saveLocalNodeTypes(result.nodeTypes);
+      }
+
+      const nameConflictText =
+        result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
+      showMessage(
+        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error, '节点类型包格式不正确，无法导入'));
+    }
   };
 
   const handleExportTxt = () => {
@@ -1376,6 +1445,55 @@ export function App() {
     showMessage('已保存为模板');
   };
 
+  const handleExportTemplatePack = () => {
+    if (templates.length === 0) {
+      showMessage('暂无可导出的自定义模板');
+      return;
+    }
+
+    downloadTextFile(
+      exportTemplatesToPack(templates, {
+        name: 'Local Mindmap 模板包',
+        description: '用于分享本地自定义模板，不等同于 .lmind 文件。',
+      }),
+      'local-mindmap-templates.json',
+      'application/json;charset=utf-8',
+    );
+    showMessage('已导出模板包');
+  };
+
+  const handleImportTemplatePack = async () => {
+    try {
+      const selectedFile = await selectLocalFile('.json,application/json');
+
+      if (!selectedFile) {
+        return;
+      }
+
+      const pack = parseTemplatePack(await selectedFile.text());
+
+      if (pack.templates.length === 0) {
+        showMessage('未找到可导入的模板');
+        return;
+      }
+
+      const result = importTemplatesFromPack(templates, pack);
+
+      if (result.importedCount > 0) {
+        setTemplates(result.templates);
+        saveMindmapTemplates(result.templates);
+      }
+
+      const nameConflictText =
+        result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
+      showMessage(
+        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error, '模板包格式不正确，无法导入'));
+    }
+  };
+
   const handleCreateFromTemplate = (template: MindmapTemplate) => {
     recordHistory();
     applyProject(cloneTemplateProject(template));
@@ -1408,7 +1526,11 @@ export function App() {
     }
 
     recordHistory();
-    setNodeTypes((currentNodeTypes) => [...currentNodeTypes, nodeType]);
+    setNodeTypes((currentNodeTypes) => {
+      const nextNodeTypes = [...currentNodeTypes, nodeType];
+      saveLocalNodeTypes(nextNodeTypes);
+      return nextNodeTypes;
+    });
     setNodeTypeDraft(createEmptyNodeTypeDraft());
     showMessage('已创建节点类型');
   };
@@ -2106,6 +2228,20 @@ export function App() {
                   >
                     保存为模板
                   </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={handleExportTemplatePack}
+                  >
+                    导出模板包
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => void handleImportTemplatePack()}
+                  >
+                    导入模板包
+                  </button>
                 </div>
                 <div className="template-save-form">
                   <input
@@ -2395,6 +2531,20 @@ export function App() {
                 onClick={handleCreateNodeType}
               >
                 创建节点类型
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={handleExportNodeTypePack}
+              >
+                导出节点类型包
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => void handleImportNodeTypePack()}
+              >
+                导入节点类型包
               </button>
                 </div>
                 <div className="node-type-list">
