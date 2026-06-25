@@ -59,11 +59,61 @@ describe('mindmap layout positions', () => {
     expect(manualNode?.y).toBeGreaterThanOrEqual(160);
   });
 
+  it('keeps negative root positions visible instead of normalizing them back to padding', () => {
+    const layout = createMindmapLayout({
+      ...mindmap,
+      position: { x: -120, y: -90 },
+    });
+    const root = layout.nodes.find((node) => node.id === 'root');
+
+    expect(root?.x).toBe(-24);
+    expect(root?.y).toBe(6);
+  });
+
+  it('keeps negative normal node positions visible instead of normalizing them back to padding', () => {
+    const layout = createMindmapLayout({
+      ...mindmap,
+      children: [
+        mindmap.children[0],
+        {
+          ...mindmap.children[1],
+          position: { x: -60, y: -40 },
+        },
+      ],
+    });
+    const manualNode = layout.nodes.find((node) => node.id === 'child-2');
+
+    expect(manualNode?.x).toBe(36);
+    expect(manualNode?.y).toBe(56);
+  });
+
   it('serializes positions into lmind JSON', () => {
     const serialized = serializeLmindDocument(mindmap, [], 'default-blue');
     const parsed = JSON.parse(serialized) as { rootNode: MindmapNode };
 
     expect(parsed.rootNode.children[1].position).toEqual({ x: 480, y: 160 });
+  });
+
+  it('serializes negative positions into lmind JSON', () => {
+    const negativePositionMindmap: MindmapNode = {
+      ...mindmap,
+      position: { x: -120, y: -80 },
+      children: [
+        {
+          ...mindmap.children[0],
+          position: { x: -40, y: -20 },
+        },
+      ],
+    };
+    const serialized = serializeLmindDocument(
+      negativePositionMindmap,
+      [],
+      'default-blue',
+    );
+    const parsed = JSON.parse(serialized) as { rootNode: MindmapNode };
+
+    expect(parsed.rootNode.position).toEqual({ x: -120, y: -80 });
+    expect(parsed.rootNode.children[0].position).toEqual({ x: -40, y: -20 });
   });
 
   it('clears positions when resetting automatic layout', () => {

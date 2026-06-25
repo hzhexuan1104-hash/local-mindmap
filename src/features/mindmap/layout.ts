@@ -164,8 +164,6 @@ export function createMindmapLayout(rootNode: MindmapNode): MindmapLayoutResult 
     });
   });
 
-  const minX = Math.min(...nodes.map((node) => node.x), 0);
-  const minY = Math.min(...nodes.map((node) => node.y), 0);
   const maxX = Math.max(
     ...nodes.map((node) => node.x + POSITIONED_LAYOUT.nodeWidth),
     POSITIONED_LAYOUT.nodeWidth,
@@ -174,8 +172,8 @@ export function createMindmapLayout(rootNode: MindmapNode): MindmapLayoutResult 
     ...nodes.map((node) => node.y + POSITIONED_LAYOUT.nodeHeight),
     POSITIONED_LAYOUT.nodeHeight,
   );
-  const offsetX = POSITIONED_LAYOUT.canvasPadding - minX;
-  const offsetY = POSITIONED_LAYOUT.canvasPadding - minY;
+  const offsetX = POSITIONED_LAYOUT.canvasPadding;
+  const offsetY = POSITIONED_LAYOUT.canvasPadding;
 
   return {
     nodes: nodes.map((node) => ({
@@ -188,8 +186,10 @@ export function createMindmapLayout(rootNode: MindmapNode): MindmapLayoutResult 
       from: { x: line.from.x + offsetX, y: line.from.y + offsetY },
       to: { x: line.to.x + offsetX, y: line.to.y + offsetY },
     })),
-    width: maxX - minX + POSITIONED_LAYOUT.canvasPadding * 2,
-    height: maxY - minY + POSITIONED_LAYOUT.canvasPadding * 2,
+    width:
+      Math.max(maxX + POSITIONED_LAYOUT.canvasPadding * 2, POSITIONED_LAYOUT.nodeWidth),
+    height:
+      Math.max(maxY + POSITIONED_LAYOUT.canvasPadding * 2, POSITIONED_LAYOUT.nodeHeight),
   };
 }
 

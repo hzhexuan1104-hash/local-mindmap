@@ -16,6 +16,67 @@ export function updateSelection(
   return [...currentSelectedIds, nodeId];
 }
 
+export function normalizeSelectionState(input: {
+  selectedNodeId: string | null;
+  selectedNodeIds: string[];
+}) {
+  const selectedNodeIds = Array.from(new Set(input.selectedNodeIds));
+  let selectedNodeId = input.selectedNodeId;
+
+  if (selectedNodeId && !selectedNodeIds.includes(selectedNodeId)) {
+    selectedNodeId = selectedNodeIds[selectedNodeIds.length - 1] ?? null;
+  }
+
+  return {
+    selectedNodeId,
+    selectedNodeIds,
+  };
+}
+
+export function resolveNodeClickSelection(
+  currentSelection: {
+    selectedNodeId: string | null;
+    selectedNodeIds: string[];
+  },
+  nodeId: string,
+  append: boolean,
+) {
+  const selectedNodeIds = updateSelection(currentSelection.selectedNodeIds, nodeId, {
+    append,
+  });
+  const clickedNodeIsSelected = selectedNodeIds.includes(nodeId);
+  const selectedNodeId = clickedNodeIsSelected
+    ? nodeId
+    : currentSelection.selectedNodeId;
+
+  return normalizeSelectionState({
+    selectedNodeId,
+    selectedNodeIds,
+  });
+}
+
+export function resolveBoxSelectionState(
+  currentSelection: {
+    selectedNodeId: string | null;
+    selectedNodeIds: string[];
+  },
+  hitNodeIds: string[],
+  append: boolean,
+) {
+  const nextSelectedNodeIds = append
+    ? Array.from(new Set([...currentSelection.selectedNodeIds, ...hitNodeIds]))
+    : Array.from(new Set(hitNodeIds));
+
+  let nextSelectedNodeId = append
+    ? hitNodeIds[hitNodeIds.length - 1] ?? currentSelection.selectedNodeId
+    : hitNodeIds[hitNodeIds.length - 1] ?? null;
+
+  return normalizeSelectionState({
+    selectedNodeId: nextSelectedNodeId,
+    selectedNodeIds: nextSelectedNodeIds,
+  });
+}
+
 export function getDeletableSelectedNodeIds(
   selectedNodeIds: string[],
   rootNodeId: string,

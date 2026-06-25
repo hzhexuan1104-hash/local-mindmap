@@ -3,6 +3,9 @@ import {
   applyNodeTypeToNodes,
   deleteNodesByIds,
   getDeletableSelectedNodeIds,
+  normalizeSelectionState,
+  resolveBoxSelectionState,
+  resolveNodeClickSelection,
   updateSelection,
 } from '../selection';
 import type { MindmapNode } from '../types';
@@ -57,6 +60,147 @@ describe('selection helpers', () => {
     expect(updateSelection(selectedIds, 'child-1', { append: false })).toEqual([
       'child-1',
     ]);
+  });
+
+  it('keeps blank canvas selection empty', () => {
+    expect(
+      normalizeSelectionState({
+        selectedNodeId: null,
+        selectedNodeIds: [],
+      }),
+    ).toEqual({
+      selectedNodeId: null,
+      selectedNodeIds: [],
+    });
+  });
+
+  it('does not add root when ctrl or shift clicking after blank canvas selection', () => {
+    expect(
+      resolveNodeClickSelection(
+        {
+          selectedNodeId: null,
+          selectedNodeIds: [],
+        },
+        'child-1',
+        true,
+      ),
+    ).toEqual({
+      selectedNodeId: 'child-1',
+      selectedNodeIds: ['child-1'],
+    });
+  });
+
+  it('keeps primary node id inside selected node ids after ctrl toggle', () => {
+    expect(
+      resolveNodeClickSelection(
+        {
+          selectedNodeId: 'child-1',
+          selectedNodeIds: ['child-1'],
+        },
+        'child-1',
+        true,
+      ),
+    ).toEqual({
+      selectedNodeId: null,
+      selectedNodeIds: [],
+    });
+  });
+
+  it('replaces old selected node id after non-shift box selection', () => {
+    expect(
+      resolveBoxSelectionState(
+        {
+          selectedNodeId: 'child-2',
+          selectedNodeIds: ['child-2'],
+        },
+        ['root', 'child-1'],
+        false,
+      ),
+    ).toEqual({
+      selectedNodeId: 'child-1',
+      selectedNodeIds: ['root', 'child-1'],
+    });
+  });
+
+  it('keeps only current hits after non-shift box selection', () => {
+    const selection = resolveBoxSelectionState(
+      {
+        selectedNodeId: 'child-2',
+        selectedNodeIds: ['child-2'],
+      },
+      ['root', 'child-1'],
+      false,
+    );
+
+    expect(selection.selectedNodeIds).toEqual(['root', 'child-1']);
+    expect(selection.selectedNodeIds).not.toContain('child-2');
+    expect(selection.selectedNodeId === null || selection.selectedNodeIds.includes(selection.selectedNodeId)).toBe(
+      true,
+    );
+  });
+
+  it('clears primary node id when non-shift box selection hits nothing', () => {
+    expect(
+      resolveBoxSelectionState(
+        {
+          selectedNodeId: 'child-2',
+          selectedNodeIds: ['child-2'],
+        },
+        [],
+        false,
+      ),
+    ).toEqual({
+      selectedNodeId: null,
+      selectedNodeIds: [],
+    });
+  });
+
+  it('keeps selected node id inside selected node ids for shift box selection', () => {
+    expect(
+      resolveBoxSelectionState(
+        {
+          selectedNodeId: 'missing',
+          selectedNodeIds: ['child-1'],
+        },
+        ['child-2'],
+        true,
+      ),
+    ).toEqual({
+      selectedNodeId: 'child-2',
+      selectedNodeIds: ['child-1', 'child-2'],
+    });
+  });
+
+  it('does not add root when shift box selection starts from empty selection', () => {
+    expect(
+      resolveBoxSelectionState(
+        {
+          selectedNodeId: null,
+          selectedNodeIds: [],
+        },
+        ['child-1', 'child-2'],
+        true,
+      ),
+    ).toEqual({
+      selectedNodeId: 'child-2',
+      selectedNodeIds: ['child-1', 'child-2'],
+    });
+  });
+
+  it('falls back to the last selected id when shift box selection has no new hits', () => {
+    expect(
+      resolveBoxSelectionState(
+        {
+          selectedNodeId: 'missing',
+          selectedNodeIds: ['child-1', 'child-2'],
+        },
+        [],
+        true,
+      ),
+    ).toEqual({
+      selectedNodeId: 'child-2',
+      selectedNodeIds: ['child-1', 'child-2'],
+    });
   });
 
   it('keeps root out of deletable selected node ids', () => {
