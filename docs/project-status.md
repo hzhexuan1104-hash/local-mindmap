@@ -2,7 +2,7 @@
 
 更新时间：2026-06-25
 
-当前版本：v1.3.0 发布准备版
+当前版本：v1.3.1 补丁发布准备版
 
 ## v1.0.0 已完成
 
@@ -170,7 +170,7 @@
 - v1.1.1：左侧抽屉、备注折叠和专注模式已完成浏览器快速验证。
 - v1.2.0 发布准备：`npm run build` 通过。
 - v1.2.0 发布准备：`npm run test` 通过。
-- v1.3.0 发布准备：版本号已升级到 `1.3.0`，`package-lock.json` 已同步。
+- v1.3.1 补丁发布准备：版本号已升级到 `1.3.1`，`package-lock.json` 已同步。
 - Vite 仍提示主 chunk 超过 500 kB，这是体积提醒，不是构建错误。
 - `npm run tauri:build` 未通过：当前环境缺少 Rust / Cargo，`cargo` 和 `rustc` 均不在 PATH。
 - Vite 仍提示主 chunk 超过 500 kB，这是体积提醒，不是构建错误。
@@ -223,7 +223,7 @@
 - 已优化空包提示：空 `nodeTypes` 包显示“未找到可导入的节点类型”，空 `templates` 包显示“未找到可导入的模板”。
 - 已新增 `docs/share-packs.md`，说明节点类型包、模板包、与 `.lmind` 的区别、导入导出流程、冲突处理和安全边界。
 - 当前仍保持完全本地运行，不新增云同步、用户登录、远程市场、权限系统或第三方 JavaScript 执行。
-- `package.json` 和 `package-lock.json` 版本已同步为 `1.3.0`。
+- `package.json` 和 `package-lock.json` 版本已同步为 `1.3.1`。
 
 ## v1.3-dev 画布框选与平移交互修复
 
