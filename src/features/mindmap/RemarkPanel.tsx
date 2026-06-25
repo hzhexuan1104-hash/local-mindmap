@@ -33,9 +33,14 @@ export function RemarkPanel({
               className="remark-collapse-button secondary-action"
               onClick={onCollapse}
               aria-label="收起备注面板"
+<<<<<<< HEAD
+            >
+              收起
+=======
               title="收起备注"
             >
               ›
+>>>>>>> main
             </button>
           </div>
           <div className="remark-panel-actions">

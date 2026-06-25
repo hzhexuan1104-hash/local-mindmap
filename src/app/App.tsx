@@ -14,6 +14,24 @@ import {
   zoomCanvasView,
   type CanvasViewState,
 } from '../features/mindmap/canvasControls';
+import {
+  getSelectionRect,
+  hitTestNodesInRect,
+  isDragPastThreshold,
+  mergeBoxSelection,
+  screenToCanvasPoint,
+  shouldStartBoxSelection,
+  type Point,
+  type Rect,
+} from '../features/mindmap/boxSelection';
+import {
+  collectNodeIds,
+  collectSelectedSubtrees,
+  cutNodesSafely,
+  duplicateNodeAsSibling,
+  pasteNodesAsChildren,
+  validateTreeIntegrity,
+} from '../features/mindmap/clipboard';
 import { ExcelImportMappingDialog } from '../features/mindmap/ExcelImportMappingDialog';
 import { exportMindmapExcel } from '../features/mindmap/exportExcel';
 import { exportMindmapAsImage } from '../features/mindmap/exportImage';
@@ -43,6 +61,7 @@ import {
   POSITIONED_LAYOUT,
   type MindmapLayoutNode,
 } from '../features/mindmap/layout';
+import { getKeyboardShortcutAction } from '../features/mindmap/keyboardShortcuts';
 import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
@@ -96,6 +115,10 @@ import {
   type TemplateSortMode,
 } from '../features/mindmap/templates';
 import { createThemeStyle, MINDMAP_THEMES } from '../features/mindmap/themes';
+import {
+  isDescendant as isTreeDescendant,
+  moveNodeAsChild,
+} from '../features/mindmap/treeOperations';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -234,20 +257,36 @@ type ContextMenuInput =
       type: 'canvas';
     };
 
+type InternalClipboardState = {
+  mode: 'copy' | 'cut';
+  nodes: MindmapNode[];
+  sourceNodeIds: string[];
+};
+
+type BoxSelectionState = {
+  screenStart: Point;
+  screenCurrent: Point;
+  canvasStart: Point;
+  canvasCurrent: Point;
+  append: boolean;
+  isActive: boolean;
+};
+
 type ToolDrawer =
   | 'templates'
   | 'node-types'
   | 'search'
   | 'performance'
-  | 'plugins'
-  | 'shortcuts';
+  | 'plugins';
 
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
   nodeTypes: MindmapNodeType[];
   selectedNodeId: string;
   selectedNodeIds: Set<string>;
+  boxSelectionPreviewIds: Set<string>;
   draggingNodeId: string | null;
+  dropTargetNodeId: string | null;
   editingNodeId: string | null;
   editingText: string;
   searchMatchNodeIds: Set<string>;
@@ -265,7 +304,9 @@ function MindmapTree({
   nodeTypes,
   selectedNodeId,
   selectedNodeIds,
+  boxSelectionPreviewIds,
   draggingNodeId,
+  dropTargetNodeId,
   editingNodeId,
   editingText,
   searchMatchNodeIds,
@@ -279,7 +320,9 @@ function MindmapTree({
 }: MindmapTreeProps) {
   const node = layoutNode.node;
   const isSelected = selectedNodeIds.has(node.id);
+  const isBoxSelectionPreview = boxSelectionPreviewIds.has(node.id);
   const isPrimarySelected = node.id === selectedNodeId;
+  const isDropTarget = node.id === dropTargetNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
   const hasChildren = node.children.length > 0;
@@ -310,8 +353,10 @@ function MindmapTree({
           className={[
             'mindmap-node',
             isSelected ? 'is-selected' : '',
+            isBoxSelectionPreview ? 'is-box-selection-preview' : '',
             isPrimarySelected ? 'is-primary-selected' : '',
             draggingNodeId === node.id ? 'is-dragging' : '',
+            isDropTarget ? 'is-drop-target' : '',
             isSearchMatch ? 'is-search-match' : '',
             nodeType ? 'has-node-type' : '',
             nodeType ? `shape-${nodeType.shape}` : '',
@@ -430,15 +475,33 @@ export function App() {
   const [activeDrawer, setActiveDrawer] = useState<ToolDrawer | null>(null);
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
+  const [internalClipboard, setInternalClipboard] =
+    useState<InternalClipboardState | null>(null);
+  const [boxSelection, setBoxSelection] = useState<BoxSelectionState | null>(null);
+  const [boxSelectionPreviewIds, setBoxSelectionPreviewIds] = useState<string[]>([]);
+  const [isShortcutHelpVisible, setIsShortcutHelpVisible] = useState(false);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLElement | null>(null);
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef({ x: 0, y: 0 });
   const dragStateRef = useRef<DragState | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
   const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
+  const nodeHitboxes = useMemo(
+    () =>
+      mindmapLayout.nodes.map((layoutNode) => ({
+        id: layoutNode.id,
+        left: layoutNode.x,
+        top: layoutNode.y,
+        width: POSITIONED_LAYOUT.nodeWidth,
+        height: POSITIONED_LAYOUT.nodeHeight,
+      })),
+    [mindmapLayout.nodes],
+  );
   const layoutNodeById = useMemo(
     () =>
       new Map(
@@ -450,6 +513,11 @@ export function App() {
     () => new Set(selectedNodeIds),
     [selectedNodeIds],
   );
+  const boxSelectionPreviewIdSet = useMemo(
+    () => new Set(boxSelectionPreviewIds),
+    [boxSelectionPreviewIds],
+  );
+  const allNodeIds = useMemo(() => Array.from(collectNodeIds(mindmap)), [mindmap]);
   const pluginThemes = useMemo(() => getPluginThemes(plugins), [plugins]);
   const availableThemes = useMemo(
     () =>
@@ -500,6 +568,25 @@ export function App() {
     height: mindmapLayout.height,
     transform: `translate(${canvasView.offsetX}px, ${canvasView.offsetY}px) scale(${canvasView.scale})`,
   };
+  const boxSelectionRect = useMemo(() => {
+    if (!boxSelection?.isActive || !canvasRef.current) {
+      return null;
+    }
+
+    const viewportRect = canvasRef.current.getBoundingClientRect();
+    const rect = getSelectionRect(
+      {
+        x: boxSelection.screenStart.x - viewportRect.left + canvasRef.current.scrollLeft,
+        y: boxSelection.screenStart.y - viewportRect.top + canvasRef.current.scrollTop,
+      },
+      {
+        x: boxSelection.screenCurrent.x - viewportRect.left + canvasRef.current.scrollLeft,
+        y: boxSelection.screenCurrent.y - viewportRect.top + canvasRef.current.scrollTop,
+      },
+    );
+
+    return rect;
+  }, [boxSelection]);
   const searchMatches = useMemo(
     () => findMindmapMatches(mindmap, searchQuery, searchScope),
     [mindmap, searchQuery, searchScope],
@@ -537,7 +624,6 @@ export function App() {
     search: '查找替换',
     performance: '性能测试',
     plugins: '插件管理',
-    shortcuts: '快捷键',
   } as const;
 
   useEffect(() => {
@@ -568,23 +654,53 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setContextMenu(null);
+      const action = getKeyboardShortcutAction(event, {
+        hasModalOpen: Boolean(excelImportPreview || isPluginManagerVisible || isShortcutHelpVisible),
+        hasContextMenuOpen: Boolean(contextMenu),
+        isBoxSelecting: Boolean(boxSelection),
+        hasSelection: selectedNodeIds.length > 0,
+      });
+
+      if (!action) {
         return;
       }
 
-      if (!event.ctrlKey) {
-        return;
-      }
+      event.preventDefault();
 
-      if (event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        handleUndo();
-      }
-
-      if (event.key.toLowerCase() === 'y') {
-        event.preventDefault();
-        handleRedo();
+      switch (action) {
+        case 'close-or-clear':
+          handleEscapeShortcut();
+          return;
+        case 'delete':
+          handleDeleteNode();
+          return;
+        case 'undo':
+          handleUndo();
+          return;
+        case 'redo':
+          handleRedo();
+          return;
+        case 'copy':
+          handleCopyNodes();
+          return;
+        case 'cut':
+          handleCutNodes();
+          return;
+        case 'paste':
+          handlePasteNodes();
+          return;
+        case 'duplicate':
+          handleDuplicateNodeAsSibling();
+          return;
+        case 'select-all':
+          handleSelectAllNodes();
+          return;
+        case 'save':
+          handleSaveMindmap();
+          return;
+        case 'open':
+          void handleOpenMindmap();
+          return;
       }
     };
 
@@ -596,6 +712,7 @@ export function App() {
     const stopDrag = () => {
       dragStateRef.current = null;
       setDraggingNodeId(null);
+      setDropTargetNodeId(null);
     };
 
     window.addEventListener('mouseup', stopDrag);
@@ -624,6 +741,60 @@ export function App() {
     setSelectedNodeId(mindmap.id);
     setSelectedNodeIds([mindmap.id]);
     setContextMenu(null);
+  };
+
+  const handleSelectAllNodes = () => {
+    const nextSelectedNodeIds = allNodeIds;
+
+    if (nextSelectedNodeIds.length === 0) {
+      return;
+    }
+
+    setSelectedNodeId(nextSelectedNodeIds[0]);
+    setSelectedNodeIds(nextSelectedNodeIds);
+    setContextMenu(null);
+    showMessage(`已全选 ${nextSelectedNodeIds.length} 个节点`);
+  };
+
+  const cancelBoxSelection = () => {
+    setBoxSelection(null);
+    setBoxSelectionPreviewIds([]);
+  };
+
+  const handleEscapeShortcut = () => {
+    if (excelImportPreview) {
+      setExcelImportPreview(null);
+      return;
+    }
+
+    if (isPluginManagerVisible) {
+      setIsPluginManagerVisible(false);
+      return;
+    }
+
+    if (isShortcutHelpVisible) {
+      setIsShortcutHelpVisible(false);
+      return;
+    }
+
+    if (contextMenu) {
+      setContextMenu(null);
+      return;
+    }
+
+    if (boxSelection) {
+      cancelBoxSelection();
+      return;
+    }
+
+    if (dragStateRef.current) {
+      dragStateRef.current = null;
+      setDraggingNodeId(null);
+      setDropTargetNodeId(null);
+      return;
+    }
+
+    clearSelectionToRoot();
   };
 
   const applyProject = (project: MindmapProject, nextSelectedNodeId?: string) => {
@@ -946,6 +1117,161 @@ export function App() {
     );
   };
 
+  const getPastedRootPosition = ({
+    targetNode,
+    index,
+    existingChildCount,
+  }: {
+    targetNode: MindmapNode;
+    index: number;
+    existingChildCount: number;
+  }) =>
+    targetNode.position
+      ? {
+          x: targetNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
+          y: targetNode.position.y + (existingChildCount + index) * 96,
+        }
+      : undefined;
+
+  const getSafePasteTargetId = (clipboard: InternalClipboardState) => {
+    const targetNode = findNodeById(mindmap, selectedNodeId);
+
+    if (!targetNode) {
+      return mindmap.id;
+    }
+
+    if (clipboard.mode !== 'cut') {
+      return targetNode.id;
+    }
+
+    const sourceSubtreeIds = new Set<string>();
+    clipboard.nodes.forEach((node) => {
+      collectNodeIds(node).forEach((nodeId) => sourceSubtreeIds.add(nodeId));
+    });
+
+    return sourceSubtreeIds.has(targetNode.id) ? mindmap.id : targetNode.id;
+  };
+
+  const handleCopyNodes = () => {
+    const copiedNodes = collectSelectedSubtrees(mindmap, selectedNodeIds);
+
+    if (copiedNodes.length === 0) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    setInternalClipboard({
+      mode: 'copy',
+      nodes: copiedNodes,
+      sourceNodeIds: [],
+    });
+    showMessage(
+      copiedNodes.length > 1
+        ? `已复制 ${copiedNodes.length} 个节点`
+        : '已复制 1 个节点',
+    );
+  };
+
+  const handleCutNodes = () => {
+    const cutResult = cutNodesSafely(mindmap, selectedNodeIds, mindmap.id);
+
+    if (cutResult.cutNodes.length === 0) {
+      showMessage(
+        cutResult.skippedRoot ? '中心主题不能剪切' : '请先选择可剪切节点',
+      );
+      return;
+    }
+
+    setInternalClipboard({
+      mode: 'cut',
+      nodes: cutResult.cutNodes,
+      sourceNodeIds: cutResult.cutNodeIds,
+    });
+    showMessage(
+      cutResult.cutNodes.length > 1
+        ? `已剪切 ${cutResult.cutNodes.length} 个节点`
+        : '已剪切 1 个节点',
+    );
+  };
+
+  const handlePasteNodes = (targetNodeId?: string) => {
+    if (!internalClipboard || internalClipboard.nodes.length === 0) {
+      showMessage('内部剪贴板为空');
+      return;
+    }
+
+    const pasteTargetId = targetNodeId ?? getSafePasteTargetId(internalClipboard);
+    const existingTargetNode = findNodeById(mindmap, pasteTargetId);
+    const safeTargetId = existingTargetNode ? pasteTargetId : mindmap.id;
+
+    recordHistory();
+    const sourceNodeIds = new Set(
+      internalClipboard.mode === 'cut' ? internalClipboard.sourceNodeIds : [],
+    );
+    const baseMindmap =
+      sourceNodeIds.size > 0
+        ? deleteNodesByIds(mindmap, sourceNodeIds)
+        : mindmap;
+    const targetStillExists = findNodeById(baseMindmap, safeTargetId);
+    const result = pasteNodesAsChildren(
+      baseMindmap,
+      targetStillExists ? safeTargetId : baseMindmap.id,
+      internalClipboard.nodes,
+      { getRootPosition: getPastedRootPosition },
+    );
+    const integrity = validateTreeIntegrity(result.rootNode);
+
+    if (!integrity.valid) {
+      showMessage('粘贴失败：节点结构异常');
+      return;
+    }
+
+    setMindmap(result.rootNode);
+    setSelectedNodeId(result.pastedNodeIds[0] ?? result.rootNode.id);
+    setSelectedNodeIds(result.pastedNodeIds.length > 0 ? result.pastedNodeIds : [result.rootNode.id]);
+    setEditingNodeId(null);
+    setEditingText('');
+    if (internalClipboard.mode === 'cut') {
+      setInternalClipboard(null);
+    }
+    showMessage(
+      result.pastedNodeIds.length > 1
+        ? `已粘贴 ${result.pastedNodeIds.length} 个节点`
+        : '已粘贴 1 个节点',
+    );
+  };
+
+  const handleDuplicateNodeAsSibling = () => {
+    const result = duplicateNodeAsSibling(mindmap, selectedNodeId, {
+      getRootPosition: getPastedRootPosition,
+    });
+
+    if (!result) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    const integrity = validateTreeIntegrity(result.rootNode);
+
+    if (!integrity.valid) {
+      showMessage('复制失败：节点结构异常');
+      return;
+    }
+
+    recordHistory();
+    setMindmap(result.rootNode);
+    setSelectedNodeId(result.pastedNodeIds[0] ?? mindmap.id);
+    setSelectedNodeIds(result.pastedNodeIds.length > 0 ? result.pastedNodeIds : [mindmap.id]);
+    setEditingNodeId(null);
+    setEditingText('');
+    showMessage('已复制为同级节点');
+  };
+
+  const handleClearInternalClipboard = () => {
+    setInternalClipboard(null);
+    showMessage('已清空内部剪贴板');
+  };
+
   const handleRemarkChange = (remark: string) => {
     recordHistory();
     setMindmap((currentMindmap) =>
@@ -1154,27 +1480,147 @@ export function App() {
     }
   };
 
+  const getCanvasPointFromMouseEvent = (
+    event: MouseEvent<HTMLElement>,
+  ): Point => {
+    const canvasElement = canvasRef.current ?? event.currentTarget;
+    const canvasViewportRect = canvasElement.getBoundingClientRect();
+
+    return {
+      x:
+        (event.clientX -
+          canvasViewportRect.left +
+          canvasElement.scrollLeft -
+          canvasView.offsetX) /
+        canvasView.scale,
+      y:
+        (event.clientY -
+          canvasViewportRect.top +
+          canvasElement.scrollTop -
+          canvasView.offsetY) /
+        canvasView.scale,
+    };
+  };
+
+  const findDropTargetNodeId = (
+    draggedNodeId: string,
+    canvasPoint: Point,
+  ): string | null => {
+    if (draggedNodeId === mindmap.id) {
+      return null;
+    }
+
+    const currentParentNode = findParentNodeById(mindmap, draggedNodeId);
+    const hitPadding = 12;
+    const dropTargetMatches = nodeHitboxes
+      .filter((hitbox) => {
+        if (
+          hitbox.id === draggedNodeId ||
+          hitbox.id === currentParentNode?.id ||
+          isTreeDescendant(mindmap, draggedNodeId, hitbox.id)
+        ) {
+          return false;
+        }
+
+        return (
+          canvasPoint.x >= hitbox.left - hitPadding &&
+          canvasPoint.x <= hitbox.left + hitbox.width + hitPadding &&
+          canvasPoint.y >= hitbox.top - hitPadding &&
+          canvasPoint.y <= hitbox.top + hitbox.height + hitPadding
+        );
+      })
+      .map((hitbox) => {
+        const centerX = hitbox.left + hitbox.width / 2;
+        const centerY = hitbox.top + hitbox.height / 2;
+
+        return {
+          id: hitbox.id,
+          distance: Math.hypot(canvasPoint.x - centerX, canvasPoint.y - centerY),
+        };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+    return dropTargetMatches[0]?.id ?? null;
+  };
+
   const handleCanvasPointerDown = (
     event: MouseEvent<HTMLElement>,
   ) => {
-    if (event.button !== 0) {
-      return;
-    }
-
     const target = event.target as HTMLElement;
 
-    if (target.closest('.mindmap-node, .collapse-toggle, button, input, textarea, select')) {
+    const isOnInteractiveElement = Boolean(
+      target.closest(
+        '.mindmap-node, .collapse-toggle, .canvas-floating-toolbar, .context-menu, button, input, textarea, select, [contenteditable="true"]',
+      ),
+    );
+
+    if (
+      !shouldStartBoxSelection({
+        button: event.button,
+        isOnInteractiveElement,
+      })
+    ) {
       return;
     }
 
-    clearSelectionToRoot();
-    isPanningRef.current = true;
-    lastPanPointRef.current = { x: event.clientX, y: event.clientY };
+    const canvasElement = event.currentTarget;
+    const canvasViewportRect = canvasElement.getBoundingClientRect();
+    const screenPoint = { x: event.clientX, y: event.clientY };
+    const canvasPoint = screenToCanvasPoint(
+      screenPoint,
+      canvasViewportRect,
+      canvasView,
+    );
+
+    setContextMenu(null);
+    setBoxSelection({
+      screenStart: screenPoint,
+      screenCurrent: screenPoint,
+      canvasStart: canvasPoint,
+      canvasCurrent: canvasPoint,
+      append: event.shiftKey,
+      isActive: false,
+    });
+    setBoxSelectionPreviewIds([]);
   };
 
   const handleCanvasPointerMove = (
     event: MouseEvent<HTMLElement>,
   ) => {
+    if (boxSelection) {
+      const canvasElement = event.currentTarget;
+      const canvasViewportRect = canvasElement.getBoundingClientRect();
+      const screenPoint = { x: event.clientX, y: event.clientY };
+      const canvasPoint = screenToCanvasPoint(
+        screenPoint,
+        canvasViewportRect,
+        canvasView,
+      );
+      const isActive =
+        boxSelection.isActive ||
+        isDragPastThreshold(boxSelection.screenStart, screenPoint);
+      const nextBoxSelection = {
+        ...boxSelection,
+        screenCurrent: screenPoint,
+        canvasCurrent: canvasPoint,
+        isActive,
+      };
+
+      setBoxSelection(nextBoxSelection);
+
+      if (isActive) {
+        const hitNodeIds = hitTestNodesInRect(
+          getSelectionRect(nextBoxSelection.canvasStart, nextBoxSelection.canvasCurrent),
+          nodeHitboxes,
+        );
+        setBoxSelectionPreviewIds(
+          mergeBoxSelection(selectedNodeIds, hitNodeIds, nextBoxSelection.append),
+        );
+      }
+
+      return;
+    }
+
     if (dragStateRef.current) {
       const dragState = dragStateRef.current;
       const pointerDeltaX = event.clientX - dragState.pointerStart.x;
@@ -1198,6 +1644,12 @@ export function App() {
       setMindmap((currentMindmap) =>
         setNodePositionById(currentMindmap, dragState.nodeId, nextPosition),
       );
+      setDropTargetNodeId(
+        findDropTargetNodeId(
+          dragState.nodeId,
+          getCanvasPointFromMouseEvent(event),
+        ),
+      );
       return;
     }
 
@@ -1215,6 +1667,79 @@ export function App() {
     isPanningRef.current = false;
   };
 
+  const handleCanvasPointerUp = (
+    event: MouseEvent<HTMLElement>,
+  ) => {
+    if (boxSelection) {
+      if (!boxSelection.isActive) {
+        clearSelectionToRoot();
+        cancelBoxSelection();
+        return;
+      }
+
+      const hitNodeIds = hitTestNodesInRect(
+        getSelectionRect(boxSelection.canvasStart, boxSelection.canvasCurrent),
+        nodeHitboxes,
+      );
+      const nextSelectedNodeIds = mergeBoxSelection(
+        selectedNodeIds,
+        hitNodeIds,
+        boxSelection.append,
+      );
+      const nextPrimaryNodeId =
+        nextSelectedNodeIds[nextSelectedNodeIds.length - 1] ?? mindmap.id;
+
+      setSelectedNodeId(nextPrimaryNodeId);
+      setSelectedNodeIds(nextSelectedNodeIds.length > 0 ? nextSelectedNodeIds : [mindmap.id]);
+      cancelBoxSelection();
+      showMessage(
+        nextSelectedNodeIds.length > 0
+          ? `已框选 ${nextSelectedNodeIds.length} 个节点`
+          : '未框选到节点',
+      );
+      return;
+    }
+
+    if (dragStateRef.current) {
+      const dragState = dragStateRef.current;
+      const finalDropTargetNodeId =
+        findDropTargetNodeId(
+          dragState.nodeId,
+          getCanvasPointFromMouseEvent(event),
+        ) ?? dropTargetNodeId;
+      const canMoveNode =
+        finalDropTargetNodeId !== null &&
+        moveNodeAsChild(mindmap, dragState.nodeId, finalDropTargetNodeId) !== null;
+
+      if (finalDropTargetNodeId && canMoveNode) {
+        if (!dragState.hasRecordedHistory) {
+          recordHistory();
+        }
+
+        setMindmap((currentMindmap) => {
+          const moveResult = moveNodeAsChild(
+            currentMindmap,
+            dragState.nodeId,
+            finalDropTargetNodeId,
+          );
+
+          return moveResult?.rootNode ?? currentMindmap;
+        });
+        setSelectedNodeId(dragState.nodeId);
+        setSelectedNodeIds([dragState.nodeId]);
+        showMessage('\u5df2\u79fb\u52a8\u4e3a\u5b50\u8282\u70b9');
+      }
+
+      dragStateRef.current = null;
+      setDraggingNodeId(null);
+      setDropTargetNodeId(null);
+      stopCanvasPan();
+      return;
+    }
+
+    stopCanvasPan();
+  };
+
   const handleStartNodeDrag = (
     nodeId: string,
     event: MouseEvent<HTMLElement>,
@@ -1227,6 +1752,7 @@ export function App() {
     }
 
     isPanningRef.current = false;
+    setDropTargetNodeId(null);
     dragStateRef.current = {
       nodeId,
       pointerStart: { x: event.clientX, y: event.clientY },
@@ -1254,7 +1780,7 @@ export function App() {
     event.preventDefault();
     event.stopPropagation();
     const menuWidth = 220;
-    const menuHeight = nextContextMenu.type === 'node' ? 360 : 280;
+    const menuHeight = nextContextMenu.type === 'node' ? 480 : 360;
     setContextMenu({
       ...nextContextMenu,
       x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
@@ -1395,6 +1921,18 @@ export function App() {
                   <button type="button" onClick={handleRedo}>
                     重做
                   </button>
+                  <button type="button" onClick={handleCopyNodes}>
+                    复制节点
+                  </button>
+                  <button type="button" onClick={handleCutNodes}>
+                    剪切节点
+                  </button>
+                  <button type="button" onClick={() => handlePasteNodes()}>
+                    粘贴节点
+                  </button>
+                  <button type="button" onClick={handleDuplicateNodeAsSibling}>
+                    复制为同级节点
+                  </button>
                   <button type="button" onClick={handleAddChild}>
                     新增子节点
                   </button>
@@ -1435,7 +1973,10 @@ export function App() {
                   >
                     性能测试
                   </button>
-                  <button type="button" onClick={() => setActiveDrawer('shortcuts')}>
+                  <button
+                    type="button"
+                    onClick={() => setIsShortcutHelpVisible(true)}
+                  >
                     快捷键帮助
                   </button>
                 </div>
@@ -1517,7 +2058,6 @@ export function App() {
               ['search', '查找替换'],
               ['performance', '性能测试'],
               ['plugins', '插件管理'],
-              ['shortcuts', '快捷键'],
             ].map(([drawer, label]) => (
               <button
                 key={drawer}
@@ -1532,6 +2072,13 @@ export function App() {
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              className={isShortcutHelpVisible ? 'is-active' : ''}
+              onClick={() => setIsShortcutHelpVisible(true)}
+            >
+              快捷键
+            </button>
           </aside>
         ) : null}
 
@@ -1972,17 +2519,6 @@ export function App() {
               </section>
             ) : null}
 
-            {activeDrawer === 'shortcuts' ? (
-              <section className="feature-panel" aria-label="快捷键帮助">
-                <div className="shortcut-list">
-                  <span>Ctrl + Z：撤销</span>
-                  <span>Ctrl + Y：重做</span>
-                  <span>Ctrl / Shift + 点击节点：多选</span>
-                  <span>Ctrl + 鼠标滚轮：缩放画布</span>
-                  <span>Esc：关闭右键菜单</span>
-                </div>
-              </section>
-            ) : null}
           </aside>
         ) : null}
 
@@ -1995,11 +2531,17 @@ export function App() {
           .join(' ')}
       >
         <section
-          className="mindmap-canvas"
+          className={[
+            'mindmap-canvas',
+            boxSelection ? 'is-box-selecting' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
           aria-label="思维导图画布"
+          ref={canvasRef}
           onMouseDown={handleCanvasPointerDown}
           onMouseMove={handleCanvasPointerMove}
-          onMouseUp={stopCanvasPan}
+          onMouseUp={handleCanvasPointerUp}
           onMouseLeave={stopCanvasPan}
           onWheel={handleCanvasWheel}
           onContextMenu={handleCanvasContextMenu}
@@ -2093,7 +2635,9 @@ export function App() {
                   nodeTypes={availableNodeTypes}
                   selectedNodeId={selectedNodeId}
                   selectedNodeIds={selectedNodeIdSet}
+                  boxSelectionPreviewIds={boxSelectionPreviewIdSet}
                   draggingNodeId={draggingNodeId}
+                  dropTargetNodeId={dropTargetNodeId}
                   editingNodeId={editingNodeId}
                   editingText={editingText}
                   searchMatchNodeIds={searchMatchNodeIds}
@@ -2108,6 +2652,18 @@ export function App() {
               ))}
             </div>
           </div>
+          {boxSelectionRect ? (
+            <div
+              className="box-selection-rect"
+              style={{
+                left: boxSelectionRect.left,
+                top: boxSelectionRect.top,
+                width: boxSelectionRect.width,
+                height: boxSelectionRect.height,
+              }}
+              aria-hidden="true"
+            />
+          ) : null}
         </section>
 
         {!isFocusMode ? (
@@ -2155,6 +2711,72 @@ export function App() {
         />
       ) : null}
 
+      {isShortcutHelpVisible ? (
+        <div className="shortcut-help-backdrop" role="presentation">
+          <section
+            className="shortcut-help-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="shortcut-help-title"
+          >
+            <header className="shortcut-help-header">
+              <div>
+                <p className="eyebrow">Shortcuts</p>
+                <h2 id="shortcut-help-title">快捷键帮助</h2>
+              </div>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setIsShortcutHelpVisible(false)}
+              >
+                关闭
+              </button>
+            </header>
+            <div className="shortcut-list">
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>Z</kbd>：撤销
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>Y</kbd>：重做
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>C</kbd>：复制节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>X</kbd>：剪切节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>V</kbd>：粘贴节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>D</kbd>：复制为同级节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>A</kbd>：全选节点
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>S</kbd>：保存 .lmind
+              </span>
+              <span>
+                <kbd>Ctrl</kbd> + <kbd>O</kbd>：打开 .lmind
+              </span>
+              <span>
+                <kbd>Delete</kbd>：删除选中节点
+              </span>
+              <span>
+                <kbd>Backspace</kbd>：删除选中节点
+              </span>
+              <span>
+                <kbd>Esc</kbd>：关闭弹窗 / 右键菜单 / 框选，或清空选择
+              </span>
+              <span>Ctrl / Shift + 点击节点：多选</span>
+              <span>Shift + 框选：追加选择</span>
+              <span>Ctrl + 鼠标滚轮：缩放画布</span>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {contextMenu ? (
         <div
           className="context-menu"
@@ -2199,6 +2821,36 @@ export function App() {
                 onClick={() => runContextMenuAction(handleCopySelectedNodeText)}
               >
                 复制节点文本
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleCopyNodes)}
+              >
+                复制节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleCutNodes)}
+              >
+                剪切节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() =>
+                  runContextMenuAction(() => handlePasteNodes(selectedNode.id))
+                }
+              >
+                粘贴为子节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleDuplicateNodeAsSibling)}
+              >
+                复制为同级节点
               </button>
               <button
                 type="button"
@@ -2257,6 +2909,20 @@ export function App() {
                 onClick={() => runContextMenuAction(handleResetAutoLayout)}
               >
                 重新自动布局
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(() => handlePasteNodes(mindmap.id))}
+              >
+                粘贴到中心主题
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleClearInternalClipboard)}
+              >
+                清空内部剪贴板
               </button>
               <button
                 type="button"
