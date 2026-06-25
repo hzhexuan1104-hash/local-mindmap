@@ -218,7 +218,7 @@
 |---|---|---|---|---|
 | Release 文档存在 | 验证发布文档交付 | 打开 `docs/release-checklist.md` | 文档包含发布前、构建、测试、Pages、回归、导入导出、插件、性能检查 | [ ] |
 | Release Notes 存在 | 验证版本说明交付 | 打开 `docs/release-notes-v1.0.0.md` | 文档包含 v1.0.0、在线预览、核心功能、运行/构建/测试方式、数据安全、已知限制和后续计划 | [ ] |
-| package 版本号 | 验证发布版本 | 查看 `package.json` | `version` 为 `1.2.0` | [ ] |
+| package 版本号 | 验证发布版本 | 查看 `package.json` 和 `package-lock.json` | `version` 均为 `1.3.0` | [ ] |
 | 构建检查 | 验证发布构建 | 执行 `npm run build` | 构建通过 | [ ] |
 | 测试检查 | 验证发布测试 | 执行 `npm run test` | 测试通过 | [ ] |
 | Git 状态检查 | 验证发布流程 | 按文档执行 `git status` | 能确认发布前变更范围 | [ ] |

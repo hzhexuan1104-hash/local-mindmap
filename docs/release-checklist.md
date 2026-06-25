@@ -2,9 +2,9 @@
 
 ## 1. 发布前检查
 
-- [ ] 确认当前分支为 `v1.2-dev`。
-- [ ] 确认发布版本号为 `v1.2.0`。
-- [ ] 确认 `package.json` 和 `package-lock.json` 均为 `1.2.0`。
+- [ ] 确认当前分支为 `v1.3-dev`。
+- [ ] 确认发布版本号为 `v1.3.0`。
+- [ ] 确认 `package.json` 和 `package-lock.json` 均为 `1.3.0`。
 - [ ] 确认没有未保存的编辑器文件。
 - [ ] 确认没有新增云同步、用户登录、远程脚本或用户数据上传能力。
 - [ ] 确认 `.lmind` 基础结构未改变，旧文件可继续打开。
@@ -114,7 +114,7 @@ https://hzhexuan1104-hash.github.io/local-mindmap/
 
 | 项目 | 内容 |
 |---|---|
-| 版本号 | v1.2.0；正式发布 v1.3.0 前再升级 |
+| 版本号 | v1.3.0 |
 | 发布日期 | 2026-06-25 |
 | 发布分支 | v1.3-dev |
 | 发布负责人 | 项目维护者 |
@@ -137,7 +137,7 @@ git status
 npm run test
 npm run build
 git add .
-git commit -m "release: prepare v1.3.0 draft"
+git commit -m "release: prepare v1.3.0"
 git push origin v1.3-dev
 ```
 
