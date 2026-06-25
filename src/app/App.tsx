@@ -2673,8 +2673,9 @@ export function App() {
                 type="button"
                 className="secondary-action"
                 onClick={() => setIsRemarkPanelCollapsed(false)}
+                aria-label="展开备注面板"
               >
-                展开备注
+                ‹ 备注
               </button>
             </aside>
           ) : (
