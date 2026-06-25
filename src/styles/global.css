@@ -918,6 +918,15 @@ h3 {
   box-shadow: 0 18px 42px rgb(31 111 235 / 28%);
 }
 
+.mindmap-node.is-drop-target {
+  border-color: #2ea043;
+  box-shadow:
+    0 0 0 5px rgb(46 160 67 / 18%),
+    0 16px 36px rgb(46 160 67 / 22%);
+  outline: 2px solid rgb(46 160 67 / 55%);
+  outline-offset: 6px;
+}
+
 .box-selection-rect {
   position: absolute;
   z-index: 20;

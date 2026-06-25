@@ -115,6 +115,10 @@ import {
   type TemplateSortMode,
 } from '../features/mindmap/templates';
 import { createThemeStyle, MINDMAP_THEMES } from '../features/mindmap/themes';
+import {
+  isDescendant as isTreeDescendant,
+  moveNodeAsChild,
+} from '../features/mindmap/treeOperations';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -282,6 +286,7 @@ type MindmapTreeProps = {
   selectedNodeIds: Set<string>;
   boxSelectionPreviewIds: Set<string>;
   draggingNodeId: string | null;
+  dropTargetNodeId: string | null;
   editingNodeId: string | null;
   editingText: string;
   searchMatchNodeIds: Set<string>;
@@ -301,6 +306,7 @@ function MindmapTree({
   selectedNodeIds,
   boxSelectionPreviewIds,
   draggingNodeId,
+  dropTargetNodeId,
   editingNodeId,
   editingText,
   searchMatchNodeIds,
@@ -316,6 +322,7 @@ function MindmapTree({
   const isSelected = selectedNodeIds.has(node.id);
   const isBoxSelectionPreview = boxSelectionPreviewIds.has(node.id);
   const isPrimarySelected = node.id === selectedNodeId;
+  const isDropTarget = node.id === dropTargetNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
   const hasChildren = node.children.length > 0;
@@ -349,6 +356,7 @@ function MindmapTree({
             isBoxSelectionPreview ? 'is-box-selection-preview' : '',
             isPrimarySelected ? 'is-primary-selected' : '',
             draggingNodeId === node.id ? 'is-dragging' : '',
+            isDropTarget ? 'is-drop-target' : '',
             isSearchMatch ? 'is-search-match' : '',
             nodeType ? 'has-node-type' : '',
             nodeType ? `shape-${nodeType.shape}` : '',
@@ -479,6 +487,7 @@ export function App() {
   const lastPanPointRef = useRef({ x: 0, y: 0 });
   const dragStateRef = useRef<DragState | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const selectedNode = findNodeById(mindmap, selectedNodeId) ?? mindmap;
   const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
@@ -703,6 +712,7 @@ export function App() {
     const stopDrag = () => {
       dragStateRef.current = null;
       setDraggingNodeId(null);
+      setDropTargetNodeId(null);
     };
 
     window.addEventListener('mouseup', stopDrag);
@@ -774,6 +784,13 @@ export function App() {
 
     if (boxSelection) {
       cancelBoxSelection();
+      return;
+    }
+
+    if (dragStateRef.current) {
+      dragStateRef.current = null;
+      setDraggingNodeId(null);
+      setDropTargetNodeId(null);
       return;
     }
 
@@ -1463,6 +1480,69 @@ export function App() {
     }
   };
 
+  const getCanvasPointFromMouseEvent = (
+    event: MouseEvent<HTMLElement>,
+  ): Point => {
+    const canvasElement = canvasRef.current ?? event.currentTarget;
+    const canvasViewportRect = canvasElement.getBoundingClientRect();
+
+    return {
+      x:
+        (event.clientX -
+          canvasViewportRect.left +
+          canvasElement.scrollLeft -
+          canvasView.offsetX) /
+        canvasView.scale,
+      y:
+        (event.clientY -
+          canvasViewportRect.top +
+          canvasElement.scrollTop -
+          canvasView.offsetY) /
+        canvasView.scale,
+    };
+  };
+
+  const findDropTargetNodeId = (
+    draggedNodeId: string,
+    canvasPoint: Point,
+  ): string | null => {
+    if (draggedNodeId === mindmap.id) {
+      return null;
+    }
+
+    const currentParentNode = findParentNodeById(mindmap, draggedNodeId);
+    const hitPadding = 12;
+    const dropTargetMatches = nodeHitboxes
+      .filter((hitbox) => {
+        if (
+          hitbox.id === draggedNodeId ||
+          hitbox.id === currentParentNode?.id ||
+          isTreeDescendant(mindmap, draggedNodeId, hitbox.id)
+        ) {
+          return false;
+        }
+
+        return (
+          canvasPoint.x >= hitbox.left - hitPadding &&
+          canvasPoint.x <= hitbox.left + hitbox.width + hitPadding &&
+          canvasPoint.y >= hitbox.top - hitPadding &&
+          canvasPoint.y <= hitbox.top + hitbox.height + hitPadding
+        );
+      })
+      .map((hitbox) => {
+        const centerX = hitbox.left + hitbox.width / 2;
+        const centerY = hitbox.top + hitbox.height / 2;
+
+        return {
+          id: hitbox.id,
+          distance: Math.hypot(canvasPoint.x - centerX, canvasPoint.y - centerY),
+        };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+    return dropTargetMatches[0]?.id ?? null;
+  };
+
   const handleCanvasPointerDown = (
     event: MouseEvent<HTMLElement>,
   ) => {
@@ -1564,6 +1644,12 @@ export function App() {
       setMindmap((currentMindmap) =>
         setNodePositionById(currentMindmap, dragState.nodeId, nextPosition),
       );
+      setDropTargetNodeId(
+        findDropTargetNodeId(
+          dragState.nodeId,
+          getCanvasPointFromMouseEvent(event),
+        ),
+      );
       return;
     }
 
@@ -1581,7 +1667,9 @@ export function App() {
     isPanningRef.current = false;
   };
 
-  const handleCanvasPointerUp = () => {
+  const handleCanvasPointerUp = (
+    event: MouseEvent<HTMLElement>,
+  ) => {
     if (boxSelection) {
       if (!boxSelection.isActive) {
         clearSelectionToRoot();
@@ -1612,6 +1700,43 @@ export function App() {
       return;
     }
 
+    if (dragStateRef.current) {
+      const dragState = dragStateRef.current;
+      const finalDropTargetNodeId =
+        findDropTargetNodeId(
+          dragState.nodeId,
+          getCanvasPointFromMouseEvent(event),
+        ) ?? dropTargetNodeId;
+      const canMoveNode =
+        finalDropTargetNodeId !== null &&
+        moveNodeAsChild(mindmap, dragState.nodeId, finalDropTargetNodeId) !== null;
+
+      if (finalDropTargetNodeId && canMoveNode) {
+        if (!dragState.hasRecordedHistory) {
+          recordHistory();
+        }
+
+        setMindmap((currentMindmap) => {
+          const moveResult = moveNodeAsChild(
+            currentMindmap,
+            dragState.nodeId,
+            finalDropTargetNodeId,
+          );
+
+          return moveResult?.rootNode ?? currentMindmap;
+        });
+        setSelectedNodeId(dragState.nodeId);
+        setSelectedNodeIds([dragState.nodeId]);
+        showMessage('\u5df2\u79fb\u52a8\u4e3a\u5b50\u8282\u70b9');
+      }
+
+      dragStateRef.current = null;
+      setDraggingNodeId(null);
+      setDropTargetNodeId(null);
+      stopCanvasPan();
+      return;
+    }
+
     stopCanvasPan();
   };
 
@@ -1627,6 +1752,7 @@ export function App() {
     }
 
     isPanningRef.current = false;
+    setDropTargetNodeId(null);
     dragStateRef.current = {
       nodeId,
       pointerStart: { x: event.clientX, y: event.clientY },
@@ -2511,6 +2637,7 @@ export function App() {
                   selectedNodeIds={selectedNodeIdSet}
                   boxSelectionPreviewIds={boxSelectionPreviewIdSet}
                   draggingNodeId={draggingNodeId}
+                  dropTargetNodeId={dropTargetNodeId}
                   editingNodeId={editingNodeId}
                   editingText={editingText}
                   searchMatchNodeIds={searchMatchNodeIds}
