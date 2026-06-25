@@ -165,3 +165,12 @@ docs/acceptance-test-checklist.md
 - 更完整的主题和连接线样式配置。
 - 更完整的端到端测试。
 - Tauri 桌面端真实安装包和跨平台打包验证。
+
+## v1.3 节点类型包基础版
+
+- 支持在“节点类型”面板导出 `local-mindmap-node-types.json`，用于分享当前本地自定义节点类型。
+- 支持导入节点类型包 JSON，导入后写入浏览器 localStorage 中的本地节点类型库，刷新或新建导图后仍可使用。
+- 节点类型包格式包含 `version`、`kind`、`meta`、`nodeTypes`，其中 `kind` 固定为 `local-mindmap-node-type-pack`。
+- 节点类型包不是 `.lmind` 文件，不包含 `rootNode`，不保存用户导图内容。
+- `.lmind` 文件仍保留原有结构，仍可携带当前导图使用的 `nodeTypes`，保存和打开逻辑不变。
+- 当前不包含云同步、用户登录、远程节点类型市场或权限系统，也不会执行第三方 JavaScript。
