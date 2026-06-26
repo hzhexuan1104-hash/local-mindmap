@@ -153,6 +153,23 @@ export const BUILT_IN_PLUGINS: PluginManifest[] = [
   },
 ];
 
+export const DESKTOP_PLUGIN_COMMANDS = {
+  getDesktopPluginDir: 'get_desktop_plugin_dir',
+  listDesktopPlugins: 'list_desktop_plugins',
+  installDesktopPluginManifest: 'install_desktop_plugin_manifest',
+  setDesktopPluginEnabled: 'set_desktop_plugin_enabled',
+  uninstallDesktopPlugin: 'uninstall_desktop_plugin',
+} as const;
+
+export async function invokeTauriDesktopCommand<T>(
+  command: string,
+  args?: Record<string, unknown>,
+) {
+  const { invoke } = await import('@tauri-apps/api/core');
+
+  return invoke(command, args) as Promise<T>;
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 

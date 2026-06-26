@@ -42,6 +42,18 @@ import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
 import { exportMindmapTxt } from '../features/mindmap/exportTxt';
 import { downloadTextFile, selectLocalFile } from '../features/mindmap/fileUtils';
 import {
+  getDesktopPluginDir,
+  installDesktopPluginManifest,
+  isTauriDesktopRuntime,
+  listDesktopPlugins,
+  normalizeNativeDesktopPluginManifest,
+  readLocalNativeManifestText,
+  setDesktopPluginEnabled,
+  uninstallDesktopPlugin,
+  type DesktopPluginManifestError,
+  type NativeDesktopPluginManifest,
+} from '../features/mindmap/desktopPlugins';
+import {
   createHistoryState,
   pushHistory,
   redoHistory,
@@ -487,6 +499,15 @@ export function App() {
     createEmptyNodeTypeDraft,
   );
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
+  const [desktopPluginDir, setDesktopPluginDir] = useState('');
+  const [desktopPlugins, setDesktopPlugins] = useState<
+    NativeDesktopPluginManifest[]
+  >([]);
+  const [invalidDesktopPlugins, setInvalidDesktopPlugins] = useState<
+    DesktopPluginManifestError[]
+  >([]);
+  const [isDesktopPluginLoading, setIsDesktopPluginLoading] = useState(false);
+  const [isDesktopPluginAvailable] = useState(isTauriDesktopRuntime);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
@@ -750,6 +771,41 @@ export function App() {
     setMessage(text);
     messageTimerRef.current = window.setTimeout(() => setMessage(''), 2400);
   };
+
+  const refreshDesktopPlugins = async (showSuccessMessage = false) => {
+    if (!isDesktopPluginAvailable) {
+      return;
+    }
+
+    setIsDesktopPluginLoading(true);
+
+    try {
+      const [pluginDir, result] = await Promise.all([
+        getDesktopPluginDir(),
+        listDesktopPlugins(),
+      ]);
+
+      setDesktopPluginDir(pluginDir || result.pluginDir);
+      setDesktopPlugins(result.plugins);
+      setInvalidDesktopPlugins(result.invalidPlugins);
+
+      if (showSuccessMessage) {
+        showMessage(
+          `已扫描 ${result.plugins.length} 个 Native 插件，${result.invalidPlugins.length} 个 manifest 无效`,
+        );
+      }
+    } catch (error) {
+      showMessage(getErrorMessage(error, '桌面插件目录扫描失败'));
+    } finally {
+      setIsDesktopPluginLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isDesktopPluginAvailable) {
+      void refreshDesktopPlugins();
+    }
+  }, [isDesktopPluginAvailable]);
 
   const recordHistory = () => {
     setHistory((currentHistory) => pushHistory(currentHistory, currentProject));
@@ -1027,6 +1083,73 @@ export function App() {
     setPlugins(nextPlugins);
     savePluginRegistry(nextPlugins);
     showMessage('插件已卸载');
+  };
+
+  const handleInstallDesktopPlugin = async () => {
+    if (!isDesktopPluginAvailable) {
+      showMessage('桌面插件仅在 Tauri 桌面端可用');
+      return;
+    }
+
+    try {
+      const rawManifest = await readLocalNativeManifestText();
+
+      if (!rawManifest) {
+        return;
+      }
+
+      const manifest = normalizeNativeDesktopPluginManifest(
+        JSON.parse(rawManifest),
+      );
+
+      if (!manifest) {
+        throw new Error('Invalid native plugin manifest.');
+      }
+
+      const exists = desktopPlugins.some(
+        (plugin) => plugin.pluginId === manifest.pluginId,
+      );
+
+      if (
+        exists &&
+        !window.confirm('桌面 Native 插件已存在，是否覆盖安装 manifest？')
+      ) {
+        return;
+      }
+
+      await installDesktopPluginManifest(rawManifest, exists);
+      await refreshDesktopPlugins();
+      showMessage('桌面 Native 插件 manifest 已安装，默认禁用');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '桌面 Native 插件 manifest 格式不正确'));
+    }
+  };
+
+  const handleToggleDesktopPlugin = async (
+    pluginId: string,
+    enabled: boolean,
+  ) => {
+    try {
+      await setDesktopPluginEnabled(pluginId, enabled);
+      await refreshDesktopPlugins();
+      showMessage(enabled ? '桌面 Native 插件已启用' : '桌面 Native 插件已禁用');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '桌面 Native 插件状态更新失败'));
+    }
+  };
+
+  const handleUninstallDesktopPlugin = async (pluginId: string) => {
+    if (!window.confirm('确定要卸载这个桌面 Native 插件 manifest 吗？')) {
+      return;
+    }
+
+    try {
+      await uninstallDesktopPlugin(pluginId);
+      await refreshDesktopPlugins();
+      showMessage('桌面 Native 插件已卸载');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '桌面 Native 插件卸载失败'));
+    }
   };
 
   const handleImportJson = async () => {
@@ -2984,10 +3107,23 @@ export function App() {
       {isPluginManagerVisible ? (
         <PluginManagerPanel
           plugins={plugins}
+          desktopPluginDir={desktopPluginDir}
+          desktopPlugins={desktopPlugins}
+          invalidDesktopPlugins={invalidDesktopPlugins}
+          isDesktopPluginAvailable={isDesktopPluginAvailable}
+          isDesktopPluginLoading={isDesktopPluginLoading}
           onClose={() => setIsPluginManagerVisible(false)}
           onInstall={handleInstallPlugin}
           onToggle={handleTogglePlugin}
           onUninstall={handleUninstallPlugin}
+          onRefreshDesktopPlugins={() => void refreshDesktopPlugins(true)}
+          onInstallDesktopPlugin={() => void handleInstallDesktopPlugin()}
+          onToggleDesktopPlugin={(pluginId, enabled) =>
+            void handleToggleDesktopPlugin(pluginId, enabled)
+          }
+          onUninstallDesktopPlugin={(pluginId) =>
+            void handleUninstallDesktopPlugin(pluginId)
+          }
         />
       ) : null}
 

@@ -237,3 +237,18 @@
 - 已修复非 Shift 框选后旧 `selectedNodeId` 残留导致框外节点继续高亮的问题，主选节点会始终落在 `selectedNodeIds` 内或为空。
 - 已将点击画布空白区域调整为清空选择，中心主题不会被自动加入后续多选集合。
 - 已统一框选视觉矩形和命中计算的坐标转换，缩放、平移和滚动后框选命中与半透明框保持一致。
+# v1.4-dev 第一批：桌面端本地应用化 + Native 插件体系底座
+
+更新日期：2026-06-26
+
+- 已明确后续主线以 Tauri 桌面端本地应用为主，Web / GitHub Pages 仅作为演示或开发预览。
+- 已将 `src-tauri/tauri.conf.json` 版本同步到 `package.json` 当前版本 `1.3.1`，本批不升级到 `1.4.0`。
+- 已新增桌面插件目录能力，目录由 Tauri 应用数据目录解析并自动创建，插件位于 `plugins/plugin-id/manifest.json`。
+- 已新增 Native manifest 校验，支持 `manifestVersion`、`pluginId`、`name`、`version`、`pluginType: native`、`entry`、`capabilities`、`abi` 声明。
+- 已新增桌面插件扫描、manifest 安装、启用、禁用、卸载 Tauri commands。
+- 已新增 `desktop-plugin-registry.json` 保存启用状态，不直接修改用户原始 manifest。
+- 已在插件管理面板中新增“桌面 Native 插件”区域；非 Tauri 环境显示“桌面插件仅在桌面端可用”。
+- 已保留 Web JSON 插件、节点类型包、模板包和 `.lmind` 基础结构。
+- v1.4 当前严格不加载 DLL、不执行 DLL、不执行第三方代码。
+- `npm run build` 已通过；`npm run test` 已通过。
+- `npm run tauri:dev` / `npm run tauri:build` 当前未通过：本机 `rustup` 未配置默认 toolchain，`cargo metadata` 无法运行。

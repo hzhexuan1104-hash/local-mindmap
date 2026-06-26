@@ -93,3 +93,12 @@ v1.3.0 发布准备阶段，`package.json` 和 `package-lock.json` 已同步为 
 - 执行 GitHub Pages 发布流程并确认线上预览可打开。
 - 在 Chrome / Edge 中手动回归节点类型包、模板包、`.lmind` 保存打开和 v1.2 编辑能力。
 - 后续继续补充端到端自动化，不在 v1.3.0 发布前新增功能。
+# v1.4 后续任务建议
+
+当前第一批已完成桌面 Native 插件目录和 manifest 管理底座。下一步建议：
+
+1. 在本机执行 `rustup default stable` 或配置公司内网认可的 Rust toolchain 后，回归 `npm run tauri:dev` 和 `npm run tauri:build`。
+2. 在 Windows 上手动验证桌面插件目录创建、manifest 安装、扫描、启用、禁用、卸载。
+3. 在 macOS / Linux 上验证 Tauri app data dir 映射到预期插件目录。
+4. 继续保持 v1.4 边界：不加载 DLL、不执行第三方代码、不做远程插件市场。
+5. v1.5 再评估 Windows DLL 加载实验版，包括 ABI、可信来源、签名、崩溃隔离和权限模型。

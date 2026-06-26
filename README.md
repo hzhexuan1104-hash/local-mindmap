@@ -211,3 +211,14 @@ docs/acceptance-test-checklist.md
 - 中心主题 / root 节点可以继续向左或向上自由拖动，`position.x` / `position.y` 可以为负数并随 `.lmind` 保存和打开恢复。
 - root 的结构保护只限制删除和拖为其他节点子节点，不限制 root 的 position 拖动。
 - 非 Shift 框选结束后会替换当前选择，旧 `selectedNodeId` 不会残留为高亮节点。
+# v1.4 桌面端定位更新
+
+local-mindmap 后续以 Tauri 桌面端本地应用为主运行目标。Web / GitHub Pages 仅保留为演示、开发预览和静态构建验证入口，不再作为公司内网推广时的业务主入口。
+
+- 应用不依赖在线配置、用户登录、云同步或远程插件市场。
+- 导图文件、配置、插件优先保存到本地文件系统。
+- `.lmind` 继续保持本地 JSON 文件格式和可迁移能力。
+- 公司内网推广时，可通过安装包、绿色版压缩包或 IT 软件中心分发。
+- v1.4 新增的桌面 Native 插件目录和 manifest 管理能力仅在 Tauri 桌面端可用。
+- Web 版继续保留现有 Web JSON 插件、节点类型包和模板包能力，但不支持 DLL 插件。
+- v1.4 只管理 Native manifest，不加载 DLL，不执行 DLL，不执行任何第三方代码。

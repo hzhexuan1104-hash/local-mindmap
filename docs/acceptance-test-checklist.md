@@ -417,3 +417,20 @@
 | 节点拖拽回归 | 验证旧能力不受影响 | 按住节点拖动到空白处或拖到其他节点附近 | 节点 position 仍更新，拖拽调整父子层级仍按原规则工作 | [ ] |
 | 多选和复制粘贴回归 | 验证 v1.2 能力不受影响 | Ctrl / Shift 点击多选、Shift 框选后执行 Ctrl+C / Ctrl+V | 多选、复制、剪切、粘贴和 Ctrl+A 全选仍正常 | [ ] |
 | 自动化测试 | 验证新增覆盖 | 执行 `npm run test` | `boxSelection.test.ts` 和原有测试全部通过 | [ ] |
+# v1.4 桌面 Native 插件 manifest 管理验收
+
+| 测试项 | 测试目标 | 操作步骤 | 预期结果 | 是否通过 |
+|---|---|---|---|---|
+| 版本同步 | 验证桌面端版本号一致 | 检查 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json` | 三者当前均为 `1.3.1`，本批不升级 `1.4.0` | [ ] |
+| 桌面插件目录 | 验证目录可获取和自动创建 | 在 Tauri 桌面端打开插件管理面板 | 显示当前桌面插件目录，目录不存在时自动创建 | [ ] |
+| 合法 manifest | 验证 Native manifest 校验 | 安装合法 `manifest.json` | 插件出现在“桌面 Native 插件”区域，默认禁用 | [ ] |
+| 缺少必填字段 | 验证错误处理 | 安装缺少 `pluginId` / `name` / `version` / `entry` 的 manifest | 安装失败并提示，应用不崩溃 | [ ] |
+| pluginType 错误 | 验证类型边界 | 安装 `pluginType` 不是 `native` 的 manifest | manifest 被拒绝 | [ ] |
+| 危险字段 | 验证安全边界 | 安装包含 `code`、`script`、`eval`、`function`、`remoteUrl` 的 manifest | manifest 被拒绝 | [ ] |
+| capabilities 白名单 | 验证能力声明 | 安装包含非白名单 capability 的 manifest | manifest 被拒绝 | [ ] |
+| 扫描容错 | 验证坏插件不影响整体扫描 | 插件目录中同时放入合法和非法 manifest | 合法插件正常显示，非法 manifest 进入错误列表 | [ ] |
+| 启用禁用 | 验证状态注册表 | 对 Native 插件执行启用 / 禁用 | 状态写入 `desktop-plugin-registry.json`，不直接修改 manifest | [ ] |
+| 卸载 | 验证目录删除 | 点击卸载并确认 | 对应 `plugin-id` 目录被删除，列表刷新 | [ ] |
+| 不加载 DLL | 验证 v1.4 边界 | 插件目录中放置 `plugin.dll` | 应用只读取 manifest，不加载、不调用 DLL | [ ] |
+| Web 回归 | 验证 Web 行为保持 | 在浏览器或 GitHub Pages 构建中打开插件管理 | 桌面插件显示不可用提示，Web JSON 插件仍可用 | [ ] |
+| 自动化测试 | 验证测试覆盖 | 执行 `npm run test` | Web 插件、Native manifest、节点类型包、模板包测试通过 | [ ] |

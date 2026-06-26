@@ -1683,6 +1683,68 @@ h3 {
   padding-right: 2px;
 }
 
+.plugin-manager-content {
+  min-width: 0;
+  overflow: auto;
+  display: grid;
+  gap: 16px;
+  padding-right: 2px;
+}
+
+.plugin-manager-section {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.plugin-section-heading {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plugin-section-heading h3,
+.plugin-section-heading p,
+.plugin-dir-note,
+.invalid-plugin-list h4 {
+  margin: 0;
+}
+
+.plugin-section-heading h3 {
+  color: #172033;
+  font-size: 17px;
+}
+
+.plugin-section-heading p,
+.plugin-dir-note {
+  color: #526173;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.native-plugin-section {
+  background: #fffdf8;
+  border-color: #f4d58d;
+}
+
+.invalid-plugin-list {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.invalid-plugin-list h4 {
+  color: #7f1d1d;
+  font-size: 14px;
+}
+
 .plugin-item {
   align-items: flex-start;
   justify-content: space-between;
@@ -1751,7 +1813,8 @@ h3 {
 
 .plugin-capability-list span,
 .status-on,
-.status-off {
+.status-off,
+.status-invalid {
   padding: 3px 7px;
   border-radius: 999px;
   font-size: 12px;
@@ -1773,7 +1836,17 @@ h3 {
   background: #fee2e2;
 }
 
+.status-invalid {
+  color: #854d0e;
+  background: #fef3c7;
+}
+
 .primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.secondary-action:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
