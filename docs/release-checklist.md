@@ -1,47 +1,71 @@
-# Release 发布检查清单
+# v1.4.0 Release 发布检查清单
+
+更新日期：2026-06-26
 
 ## 1. 发布前检查
 
-- [ ] 确认当前分支为 `v1.3-dev`。
-- [ ] 确认发布版本号为 `v1.3.0`。
-- [ ] 确认 `package.json` 和 `package-lock.json` 均为 `1.3.0`。
-- [ ] 确认没有未保存的编辑器文件。
-- [ ] 确认没有新增云同步、用户登录、远程脚本或用户数据上传能力。
-- [ ] 确认 `.lmind` 基础结构未改变，旧文件可继续打开。
+- [ ] 当前分支为 `v1.4-dev`。
+- [ ] 发布版本号为 `1.4.0`。
+- [ ] `package.json` 版本为 `1.4.0`。
+- [ ] `package-lock.json` 根版本为 `1.4.0`。
+- [ ] `src-tauri/tauri.conf.json` 版本为 `1.4.0`。
+- [ ] `src-tauri/Cargo.toml` 版本为 `1.4.0`。
+- [ ] `src-tauri/Cargo.lock` 中 `local-mindmap` 版本为 `1.4.0`。
+- [ ] `.lmind` 基础结构未改变，旧文件可继续打开。
+- [ ] 未新增云同步、用户登录、在线配置、远程插件市场或用户数据上传能力。
+- [ ] 未加载 DLL、未执行 DLL、未执行第三方代码。
 
 ## 2. 必跑命令
 
 ```bash
-npm run test
 npm run build
+npm run test
+npm run tauri:dev
+npm run tauri:build
+git status --short
 ```
 
-- [ ] Vitest 全部通过。
-- [ ] TypeScript 构建通过。
-- [ ] Vite 构建通过。
-- [ ] `dist/` 产物生成。
-- [ ] 如出现 chunk 体积提醒，记录为已知提醒，不作为阻断错误。
+- [ ] `npm run build` 通过。
+- [ ] `npm run test` 通过。
+- [ ] `npm run tauri:dev` 通过，可启动桌面应用。
+- [ ] `npm run tauri:build` 通过。
+- [ ] 如出现 Vite chunk 体积提醒，记录为已知提醒，不作为阻断错误。
 
-## 3. v1.2 功能回归
+## 3. 构建产物检查
 
-- [ ] Ctrl+C 复制节点，支持完整子树。
-- [ ] Ctrl+X 剪切节点，root 不能剪切。
-- [ ] Ctrl+V 粘贴节点，新节点 ID 不重复。
-- [ ] Ctrl+D 复制为同级节点。
-- [ ] 节点右键菜单复制 / 剪切 / 粘贴入口可用。
-- [ ] 画布右键菜单粘贴到中心主题、清空内部剪贴板可用。
-- [ ] 画布空白区域框选节点可用。
-- [ ] Shift + 框选追加选择可用。
-- [ ] Ctrl+A 全选节点可用，输入框和 textarea 中不误拦截。
-- [ ] Esc 优先关闭弹窗 / 菜单 / 框选，最终清空选择。
-- [ ] 快捷键帮助弹窗可打开、可关闭、内容完整。
-- [ ] 拖拽普通节点到有效目标后可调整父子层级。
-- [ ] 拖拽目标高亮显示正常。
-- [ ] root 不能拖到其他节点下。
-- [ ] 节点不能拖到自己或自己的子孙节点下。
-- [ ] 调整层级后撤销 / 重做正常。
+- [ ] Windows MSI 安装包生成成功。
+- [ ] Windows NSIS setup.exe 生成成功。
+- [ ] 安装包文件名体现 `1.4.0`。
+- [ ] 构建产物不提交 Git。
+- [ ] `dist/` 不提交 Git。
+- [ ] `src-tauri/target/` 不提交 Git。
+- [ ] `target/` 不提交 Git。
+- [ ] `node_modules/` 不提交 Git。
+- [ ] `.msi`、`.exe`、`.pdb`、`.rlib`、`.rmeta` 不提交 Git。
 
-## 4. 既有功能回归
+Windows 预期产物路径：
+
+```text
+src-tauri/target/release/local-mindmap.exe
+src-tauri/target/release/bundle/msi/Local Mindmap_1.4.0_x64_en-US.msi
+src-tauri/target/release/bundle/nsis/Local Mindmap_1.4.0_x64-setup.exe
+```
+
+## 4. v1.4 桌面能力回归
+
+- [ ] 桌面 Native 插件区域可以显示。
+- [ ] 桌面插件目录可以获取。
+- [ ] 桌面配置目录可以获取。
+- [ ] 可以安装 Native manifest。
+- [ ] 可以扫描 Native manifest。
+- [ ] 可以启用 / 禁用 Native manifest。
+- [ ] 可以卸载 Native manifest。
+- [ ] 非法 Native manifest 不会导致应用崩溃。
+- [ ] 没有 DLL 文件也不会崩溃。
+- [ ] Web / GitHub Pages 环境下桌面 Native 插件能力安全降级，不崩溃。
+- [ ] 普通 Web JSON 插件不受影响。
+
+## 5. 既有功能回归
 
 - [ ] 新建思维导图。
 - [ ] 新增子节点 / 同级节点。
@@ -49,100 +73,105 @@ npm run build
 - [ ] 编辑节点文本。
 - [ ] 左到右自动布局和重新自动布局。
 - [ ] 节点折叠 / 展开、展开全部 / 折叠全部。
-- [ ] 节点拖拽 position、保存 / 打开恢复。
+- [ ] 节点自由拖拽 position、保存 / 打开恢复。
+- [ ] 中心主题可以向左 / 向上拖动。
 - [ ] Ctrl / Shift 多选节点。
-- [ ] 批量切换节点类型。
-- [ ] 节点右键菜单和画布右键菜单。
-- [ ] 顶部导航、左侧工具栏、抽屉、画布悬浮工具正常。
-- [ ] 右侧备注栏折叠 / 展开正常。
-- [ ] 备注面板顶部布局不拥挤，标题不被按钮遮挡。
-- [ ] 专注模式进入 / 退出正常。
+- [ ] Ctrl+A 全选节点。
+- [ ] Esc 清空选择 / 关闭弹窗。
+- [ ] Shift + 空白拖动框选节点。
+- [ ] 普通空白拖动画布平移。
+- [ ] 框选后旧选中节点不残留。
+- [ ] 点击空白处不会默认选中中心主题。
+- [ ] 多选普通节点不会自动带上中心主题。
+- [ ] 框选视觉区域与实际命中一致。
 
-## 5. 导入导出回归
+## 6. v1.2 编辑效率回归
 
-- [ ] 保存 `.lmind`。
-- [ ] 打开 `.lmind`。
-- [ ] Markdown 导入 / 导出。
-- [ ] Excel 导入 / 导出。
-- [ ] Excel 列映射导入。
-- [ ] JSON 导入 / 导出。
-- [ ] JSON 导入 / 导出继续保留 `position`。
-- [ ] PNG / JPG 导出。
-- [ ] TXT 插件启用后可导出 TXT。
+- [ ] Ctrl+C 复制节点。
+- [ ] Ctrl+X 剪切节点。
+- [ ] Ctrl+V 粘贴节点。
+- [ ] Ctrl+D 复制为同级节点。
+- [ ] 复制完整子树。
+- [ ] root 节点不能剪切。
+- [ ] 粘贴节点 ID 不重复。
+- [ ] 撤销 / 重做正常。
+- [ ] 拖拽调整父子层级正常。
+- [ ] 拖拽层级调整不会产生循环结构。
 
-## 6. 其他模块回归
+## 7. v1.3 共享能力回归
 
-- [ ] Markdown 备注编辑、实时预览、预览模式、放大预览。
-- [ ] 查找替换。
-- [ ] 模板库和官方模板。
-- [ ] 自定义节点类型。
-- [ ] 主题切换。
-- [ ] 插件管理。
-- [ ] 性能测试工具。
+- [ ] 节点类型包可导出。
+- [ ] 节点类型包可导入。
+- [ ] 模板包可导出。
+- [ ] 模板包可导入。
+- [ ] 重复 ID / 冲突 ID / 非法 JSON 有明确提示。
+- [ ] Web JSON 插件启用 / 禁用 / 卸载正常。
+- [ ] 自定义节点类型正常。
+- [ ] 自定义模板正常。
+
+## 8. 导入导出回归
+
+- [ ] `.lmind` 保存 / 打开正常。
+- [ ] Markdown 导入 / 导出正常。
+- [ ] Excel 导入 / 导出正常。
+- [ ] Excel 列映射导入正常。
+- [ ] JSON 导入 / 导出正常。
+- [ ] PNG / JPG 导出正常。
+- [ ] TXT 插件导出正常。
+
+## 9. 其他模块回归
+
+- [ ] Markdown 备注编辑、实时预览、放大预览正常。
+- [ ] 查找替换正常。
+- [ ] 模板库和官方模板正常。
+- [ ] 自定义节点类型正常。
+- [ ] 主题切换正常。
+- [ ] 插件管理正常。
+- [ ] 性能测试工具正常。
 - [ ] GitHub Pages 静态构建不受影响。
-- [ ] Tauri 配置仍存在，Web 构建不受桌面端配置影响。
+- [ ] Tauri 桌面端构建不受影响。
+- [ ] 无明显 UI 溢出或布局错乱。
 
-## 6.1 v1.3 共享包回归
+## 10. 发布文档
 
-- [ ] 节点类型包可导出为 `local-mindmap-node-types.json`。
-- [ ] 节点类型包可导入并写入当前浏览器 localStorage。
-- [ ] 模板包可导出为 `local-mindmap-templates.json`。
-- [ ] 模板包可导入并写入当前浏览器 localStorage。
-- [ ] 重复导入不会产生重复 ID。
-- [ ] ID 冲突且内容不同会生成 `原ID-imported-N`。
-- [ ] 非法 JSON 显示“文件不是有效 JSON”。
-- [ ] kind 不匹配时区分提示不是有效节点类型包或模板包。
-- [ ] 空节点类型包提示“未找到可导入的节点类型”。
-- [ ] 空模板包提示“未找到可导入的模板”。
-- [ ] 共享包不被误识别为 `.lmind`，`.lmind` 不被误识别为共享包。
-- [ ] 共享包不执行脚本、不上传文件、不依赖云端。
+- [ ] `README.md` 已更新。
+- [ ] `docs/project-status.md` 已更新。
+- [ ] `docs/next-task.md` 已更新。
+- [ ] `docs/acceptance-test-checklist.md` 已更新。
+- [ ] `docs/desktop-app-roadmap.md` 已更新。
+- [ ] `docs/desktop-plugin-system.md` 已更新。
+- [ ] `docs/desktop-deployment-guide.md` 已更新。
+- [ ] `docs/desktop-local-config.md` 已更新。
+- [ ] `docs/release-notes-v1.4.0-draft.md` 已完成。
 
-## 7. GitHub Pages 检查
-
-- [ ] 在线预览地址可打开。
-- [ ] JS/CSS 静态资源加载成功。
-- [ ] 页面无空白、无明显 UI 溢出。
-- [ ] 基础编辑、保存、打开、导入导出入口可见。
-
-在线预览地址：
-
-```text
-https://hzhexuan1104-hash.github.io/local-mindmap/
-```
-
-## 8. 版本记录
-
-| 项目 | 内容 |
-|---|---|
-| 版本号 | v1.3.0 |
-| 发布日期 | 2026-06-25 |
-| 发布分支 | v1.3-dev |
-| 发布负责人 | 项目维护者 |
-| 主要变更 | 节点类型包共享、模板包共享、共享包导入导出提示收口；继续保持完全本地运行 |
-
-## 9. 已知风险
-
-| 风险 | 影响 | 处理建议 |
-|---|---|---|
-| 主 chunk 体积超过 500 kB | 首次加载可能受影响 | 后续评估代码分包 |
-| 自动化测试以纯函数和核心解析为主 | 完整浏览器交互仍需手动回归 | 按验收清单执行关键流程 |
-| Tauri 真实安装包未发布 | 本次不交付桌面安装包 | 后续在目标平台补齐 Rust / WebView 环境后验证 |
-| 拖拽调整层级为基础版 | 不含兄弟排序、批量层级调整和智能排版 | 放入后续批次 |
-| 共享包持久化范围为 localStorage | 换浏览器、换设备或清空站点数据后需重新导入 | 在 `docs/share-packs.md` 中说明 |
-
-## 10. 发布步骤建议
+## 11. 发布步骤建议
 
 ```bash
-git status
-npm run test
+git status --short
 npm run build
-git add .
-git commit -m "release: prepare v1.3.0"
-git push origin v1.3-dev
+npm run test
+npm run tauri:dev
+npm run tauri:build
+git status --short
+git add .gitignore README.md docs package.json package-lock.json src src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json src-tauri/src/main.rs
+git commit -m "release: prepare v1.4.0"
+git push origin v1.4-dev
 ```
 
 发布后：
 
-- [ ] 确认 GitHub Actions 通过。
-- [ ] 确认 GitHub Pages 更新完成。
-- [ ] 基于 `docs/release-notes-v1.3.0-draft.md` 创建 GitHub Release 或合并到正式发布说明。
+- [ ] 创建或更新 GitHub PR，目标分支为 `main`。
+- [ ] 确认 CI / GitHub Pages 构建通过。
+- [ ] 合并到 `main` 后创建 `v1.4.0` tag。
+- [ ] 基于 `docs/release-notes-v1.4.0-draft.md` 创建 GitHub Release。
+- [ ] 将 MSI / NSIS 安装包作为 Release 附件或交给内网分发流程。
+
+## 12. 已知风险
+
+| 风险 | 影响 | 处理建议 |
+|---|---|---|
+| Vite 主 chunk 超过 500 kB | 首次加载可能受影响 | 后续评估代码分包 |
+| 自动化测试以单元和核心逻辑为主 | 完整浏览器交互仍需手动回归 | 按验收清单执行关键流程 |
+| v1.4 只管理 Native manifest | 不加载 DLL，Native 插件不能实际执行能力 | v1.5 再评估 Windows DLL 插件实验版 |
+| Tauri 打包工具可能在线下载 WiX / NSIS | 内网构建机可能无法联网下载 | 预安装、预缓存或配置可信内网镜像 |
+| `identifier` 以 `.app` 结尾 | Tauri 提示 macOS 不推荐 | 后续跨平台打包前评估是否调整 |

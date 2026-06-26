@@ -2,7 +2,7 @@
 
 更新时间：2026-06-25
 
-当前版本：v1.3.1 补丁发布准备版
+当前版本：v1.4.0 发布前收尾版
 
 ## v1.0.0 已完成
 
@@ -237,3 +237,49 @@
 - 已修复非 Shift 框选后旧 `selectedNodeId` 残留导致框外节点继续高亮的问题，主选节点会始终落在 `selectedNodeIds` 内或为空。
 - 已将点击画布空白区域调整为清空选择，中心主题不会被自动加入后续多选集合。
 - 已统一框选视觉矩形和命中计算的坐标转换，缩放、平移和滚动后框选命中与半透明框保持一致。
+# v1.4-dev 第一批：桌面端本地应用化 + Native 插件体系底座
+
+更新日期：2026-06-26
+
+- 已明确后续主线以 Tauri 桌面端本地应用为主，Web / GitHub Pages 仅作为演示或开发预览。
+- 已将 `src-tauri/tauri.conf.json` 版本同步到 `package.json` 当前版本；发布收尾阶段已升级到 `1.4.0`。
+- 已新增桌面插件目录能力，目录由 Tauri 应用数据目录解析并自动创建，插件位于 `plugins/plugin-id/manifest.json`。
+- 已新增 Native manifest 校验，支持 `manifestVersion`、`pluginId`、`name`、`version`、`pluginType: native`、`entry`、`capabilities`、`abi` 声明。
+- 已新增桌面插件扫描、manifest 安装、启用、禁用、卸载 Tauri commands。
+- 已新增 `desktop-plugin-registry.json` 保存启用状态，不直接修改用户原始 manifest。
+- 已在插件管理面板中新增“桌面 Native 插件”区域；非 Tauri 环境显示“桌面插件仅在桌面端可用”。
+- 已保留 Web JSON 插件、节点类型包、模板包和 `.lmind` 基础结构。
+- v1.4 当前严格不加载 DLL、不执行 DLL、不执行第三方代码。
+- `npm run build` 已通过；`npm run test` 已通过。
+- `npm run tauri:dev` 已在后续修复中通过；`npm run tauri:build` 在第二批中继续验证。
+
+## v1.4-dev 第一批修复补充
+
+更新日期：2026-06-26
+
+- 已将前端桌面 Native 插件功能通过 `@tauri-apps/api/core` 的 `invoke` 接入 Tauri commands。
+- 已修复 Windows 下 Vite 监听 `src-tauri/target` 导致 Rust 构建产物被占用并触发 `EBUSY` 的问题。
+- 已补齐 `src-tauri/icons/icon.ico`，解决 Windows Resource 生成阶段 `icons/icon.ico not found`。
+- `npm run tauri:dev` 已可进入 Tauri/Rust 构建并启动桌面应用。
+
+## v1.4-dev 第二批：桌面本地配置与内网分发准备
+
+更新日期：2026-06-26
+
+- 已明确桌面配置目录位于 Tauri app data dir 下的 `config`，插件目录继续位于同一 app data dir 下的 `plugins`。
+- 已新增最小 Tauri commands：`get_desktop_config_dir` 和 `ensure_desktop_config_dir`。
+- 已新增前端 `desktopConfig.ts` 包装，非 Tauri Web 环境返回 unavailable，不影响 Web / GitHub Pages。
+- 已新增 `docs/desktop-local-config.md`，记录 `config/app-settings.json` registry 草案和 localStorage 迁移路线。
+- 已新增 `docs/desktop-deployment-guide.md`，记录 Windows 内网分发方式、断网使用说明、数据保存位置和 `tauri:build` 验证规则。
+- 已完成 Windows 本机 `npm run tauri:build` 验证，生成 MSI 和 NSIS setup exe；构建产物位于 `src-tauri/target/`，不得提交。
+- 本批不迁移全部 localStorage，不修改 `.lmind` 基础结构，不加载 DLL，不执行 DLL，不执行第三方代码。
+
+## v1.4.0 发布前收尾
+
+更新日期：2026-06-26
+
+- 已将 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 同步到 `1.4.0`。
+- `src-tauri/Cargo.lock` 已随 Cargo 元数据同步到 `local-mindmap 1.4.0`。
+- 发布目标仍是 Tauri 桌面端本地应用；Web / GitHub Pages 仅作为演示和开发预览。
+- v1.4.0 发布包聚焦桌面 Native 插件 manifest 管理、本地配置目录、内网分发准备和 Windows 安装包验证。
+- 仍不加载 DLL、不执行 DLL、不执行第三方代码，不修改 `.lmind` 基础结构。

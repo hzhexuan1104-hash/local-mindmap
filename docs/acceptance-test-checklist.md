@@ -218,7 +218,7 @@
 |---|---|---|---|---|
 | Release 文档存在 | 验证发布文档交付 | 打开 `docs/release-checklist.md` | 文档包含发布前、构建、测试、Pages、回归、导入导出、插件、性能检查 | [ ] |
 | Release Notes 存在 | 验证版本说明交付 | 打开 `docs/release-notes-v1.0.0.md` | 文档包含 v1.0.0、在线预览、核心功能、运行/构建/测试方式、数据安全、已知限制和后续计划 | [ ] |
-| package 版本号 | 验证发布版本 | 查看 `package.json` 和 `package-lock.json` | `version` 均为 `1.3.0` | [ ] |
+| package 版本号 | 验证发布版本 | 查看 `package.json` 和 `package-lock.json` | `version` 均为 `1.4.0` | [ ] |
 | 构建检查 | 验证发布构建 | 执行 `npm run build` | 构建通过 | [ ] |
 | 测试检查 | 验证发布测试 | 执行 `npm run test` | 测试通过 | [ ] |
 | Git 状态检查 | 验证发布流程 | 按文档执行 `git status` | 能确认发布前变更范围 | [ ] |
@@ -417,3 +417,40 @@
 | 节点拖拽回归 | 验证旧能力不受影响 | 按住节点拖动到空白处或拖到其他节点附近 | 节点 position 仍更新，拖拽调整父子层级仍按原规则工作 | [ ] |
 | 多选和复制粘贴回归 | 验证 v1.2 能力不受影响 | Ctrl / Shift 点击多选、Shift 框选后执行 Ctrl+C / Ctrl+V | 多选、复制、剪切、粘贴和 Ctrl+A 全选仍正常 | [ ] |
 | 自动化测试 | 验证新增覆盖 | 执行 `npm run test` | `boxSelection.test.ts` 和原有测试全部通过 | [ ] |
+# v1.4 桌面 Native 插件 manifest 管理验收
+
+| 测试项 | 测试目标 | 操作步骤 | 预期结果 | 是否通过 |
+|---|---|---|---|---|
+| 版本同步 | 验证桌面端版本号一致 | 检查 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` | 四者当前均为 `1.4.0` | [ ] |
+| 桌面插件目录 | 验证目录可获取和自动创建 | 在 Tauri 桌面端打开插件管理面板 | 显示当前桌面插件目录，目录不存在时自动创建 | [ ] |
+| 合法 manifest | 验证 Native manifest 校验 | 安装合法 `manifest.json` | 插件出现在“桌面 Native 插件”区域，默认禁用 | [ ] |
+| 缺少必填字段 | 验证错误处理 | 安装缺少 `pluginId` / `name` / `version` / `entry` 的 manifest | 安装失败并提示，应用不崩溃 | [ ] |
+| pluginType 错误 | 验证类型边界 | 安装 `pluginType` 不是 `native` 的 manifest | manifest 被拒绝 | [ ] |
+| 危险字段 | 验证安全边界 | 安装包含 `code`、`script`、`eval`、`function`、`remoteUrl` 的 manifest | manifest 被拒绝 | [ ] |
+| capabilities 白名单 | 验证能力声明 | 安装包含非白名单 capability 的 manifest | manifest 被拒绝 | [ ] |
+| 扫描容错 | 验证坏插件不影响整体扫描 | 插件目录中同时放入合法和非法 manifest | 合法插件正常显示，非法 manifest 进入错误列表 | [ ] |
+| 启用禁用 | 验证状态注册表 | 对 Native 插件执行启用 / 禁用 | 状态写入 `desktop-plugin-registry.json`，不直接修改 manifest | [ ] |
+| 卸载 | 验证目录删除 | 点击卸载并确认 | 对应 `plugin-id` 目录被删除，列表刷新 | [ ] |
+| 不加载 DLL | 验证 v1.4 边界 | 插件目录中放置 `plugin.dll` | 应用只读取 manifest，不加载、不调用 DLL | [ ] |
+| Web 回归 | 验证 Web 行为保持 | 在浏览器或 GitHub Pages 构建中打开插件管理 | 桌面插件显示不可用提示，Web JSON 插件仍可用 | [ ] |
+| 自动化测试 | 验证测试覆盖 | 执行 `npm run test` | Web 插件、Native manifest、节点类型包、模板包测试通过 | [ ] |
+
+## 36. v1.4 桌面端本地化与内网分发验收
+
+| 测试项 | 测试目标 | 操作步骤 | 预期结果 | 是否通过 |
+|---|---|---|---|---|
+| Web 构建 | 验证 GitHub Pages / Web 构建不受影响 | 执行 `npm run build` | 构建通过，产物输出到 `dist/`，不提交构建产物 | [ ] |
+| 自动化测试 | 验证现有能力不回退 | 执行 `npm run test` | Web JSON 插件、Native manifest、节点类型包、模板包等测试通过 | [ ] |
+| 桌面开发启动 | 验证 Tauri dev 可用 | 执行 `npm run tauri:dev` | 桌面窗口可启动，或失败原因不是 Vite watch `src-tauri/target` / icon 缺失 | [ ] |
+| 桌面打包尝试 | 验证打包环境 | 执行 `npm run tauri:build` | 通过则记录产物路径；失败则记录代码问题或环境原因 | [ ] |
+| 离线启动 | 验证内网使用边界 | 断网后启动桌面应用 | 基础编辑、`.lmind` 保存打开和本地配置读取可用 | [ ] |
+| 桌面插件目录 | 验证插件目录能力 | 打开插件管理面板或调用 `get_desktop_plugin_dir` | 返回 app data dir 下的 `plugins` 目录，目录不存在时自动创建 | [ ] |
+| 桌面配置目录 | 验证配置目录能力 | 调用 `get_desktop_config_dir` / `ensure_desktop_config_dir` | 返回 app data dir 下的 `config` 目录，ensure 可创建目录 | [ ] |
+| Native manifest 生命周期 | 验证第一批能力不受影响 | 安装、扫描、启用、禁用、卸载 Native manifest | 只管理 manifest 和 registry，不加载 DLL | [ ] |
+| Web JSON 插件回归 | 验证 Web 插件不受影响 | 在 Web 环境安装、启用、禁用、卸载 JSON 插件 | 仍使用 localStorage，功能正常 | [ ] |
+| 节点类型包回归 | 验证共享包不受影响 | 导入 / 导出节点类型包 | 功能正常，不改变 `.lmind` 基础结构 | [ ] |
+| 模板包回归 | 验证共享包不受影响 | 导入 / 导出模板包 | 功能正常，不改变 `.lmind` 基础结构 | [ ] |
+| `.lmind` 回归 | 验证导图文件兼容 | 保存并重新打开 `.lmind` | 节点、备注、主题、节点类型和 position 正常恢复 | [ ] |
+| 构建产物忽略 | 验证 Git 忽略规则 | 检查 `.gitignore` 和 `git status --ignored` | `src-tauri/target/`、`target/`、`dist/` 不会被提交 | [ ] |
+| 图标和锁文件 | 验证必要文件可跟踪 | 检查 `src-tauri/icons/icon.ico` 和 `src-tauri/Cargo.lock` | 不被 `.gitignore` 忽略 | [ ] |
+| 安全边界 | 验证 v1.4 限制 | 检查代码和文档 | 不加载 DLL、不执行 DLL、不执行第三方代码 | [ ] |

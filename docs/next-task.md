@@ -93,3 +93,32 @@ v1.3.0 发布准备阶段，`package.json` 和 `package-lock.json` 已同步为 
 - 执行 GitHub Pages 发布流程并确认线上预览可打开。
 - 在 Chrome / Edge 中手动回归节点类型包、模板包、`.lmind` 保存打开和 v1.2 编辑能力。
 - 后续继续补充端到端自动化，不在 v1.3.0 发布前新增功能。
+# v1.4 后续任务建议
+
+当前第一批已完成桌面 Native 插件目录和 manifest 管理底座。下一步建议：
+
+1. 在本机执行 `rustup default stable` 或配置公司内网认可的 Rust toolchain 后，回归 `npm run tauri:dev` 和 `npm run tauri:build`。
+2. 在 Windows 上手动验证桌面插件目录创建、manifest 安装、扫描、启用、禁用、卸载。
+3. 在 macOS / Linux 上验证 Tauri app data dir 映射到预期插件目录。
+4. 继续保持 v1.4 边界：不加载 DLL、不执行第三方代码、不做远程插件市场。
+5. v1.5 再评估 Windows DLL 加载实验版，包括 ABI、可信来源、签名、崩溃隔离和权限模型。
+
+## v1.4 第二批后续任务建议
+
+当前第二批目标是桌面端本地配置与内网分发准备，不做大规模状态迁移。
+
+1. 验证 `get_desktop_config_dir` 和 `ensure_desktop_config_dir` 在 Windows / macOS / Linux 上均映射到预期 app data dir。
+2. 继续保持 Web / GitHub Pages 的 `localStorage` 行为，不因桌面配置目录不可用而崩溃。
+3. 后续按优先级迁移：桌面插件 registry、自定义节点类型、自定义模板、最近打开文件、主题偏好。
+4. 在迁移每类配置前补充兼容策略和回归测试，避免破坏 Web JSON 插件、节点类型包、模板包和 `.lmind` 保存打开。
+5. 完成 `npm run tauri:build` 环境验证后，记录 Windows 安装包、绿色包和 IT 软件中心分发路径。
+6. v1.4 继续只管理 manifest 和本地配置目录，不加载 DLL、不执行 DLL、不执行第三方代码。
+
+## v1.4.0 发布后建议
+
+1. 在 GitHub 上创建或更新从 `v1.4-dev` 到 `main` 的 PR。
+2. 确认 CI、GitHub Pages 构建和必要手动验收通过。
+3. 合并到 `main` 后创建 `v1.4.0` tag。
+4. 基于 `docs/release-notes-v1.4.0-draft.md` 创建 GitHub Release。
+5. 将 Windows MSI / NSIS 安装包作为 Release 附件或交给公司内网分发流程。
+6. v1.5 开始前先完成 DLL 插件 ABI、安全审查、可信来源、签名、崩溃隔离和回滚方案设计。

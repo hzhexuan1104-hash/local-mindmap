@@ -1,6 +1,6 @@
 # 本地化思维导图工具
 
-一个纯本地运行的思维导图 Web 工具，使用 React + TypeScript + Vite 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前版本：v1.3.1。
+一个纯本地运行的思维导图工具，使用 React + TypeScript + Vite + Tauri 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前版本：v1.4.0。
 
 ## 在线预览
 
@@ -37,6 +37,7 @@
 - v1.2.0 第三批：拖拽调整父子层级基础版、拖拽目标高亮、root 节点保护、禁止移动到自己或子孙节点下、树结构安全校验。
 - v1.3.0：节点类型包共享、模板包共享和共享包体验收口；共享包是本地 JSON 配置，不等同于 `.lmind`。
 - v1.3.1：补丁修复框选、空白点击、多选、框选坐标和中心主题左上拖动的画布交互问题。
+- v1.4.0：桌面端本地应用化、Native 插件 manifest 管理底座、桌面配置目录和 Windows 安装包构建准备。
 
 ## 当前完成度
 
@@ -153,6 +154,7 @@ docs/release-notes-v1.1.0-draft.md
 docs/release-notes-v1.1.1-draft.md
 docs/release-notes-v1.2.0-draft.md
 docs/release-notes-v1.3.0-draft.md
+docs/release-notes-v1.4.0-draft.md
 docs/share-packs.md
 ```
 
@@ -211,3 +213,33 @@ docs/acceptance-test-checklist.md
 - 中心主题 / root 节点可以继续向左或向上自由拖动，`position.x` / `position.y` 可以为负数并随 `.lmind` 保存和打开恢复。
 - root 的结构保护只限制删除和拖为其他节点子节点，不限制 root 的 position 拖动。
 - 非 Shift 框选结束后会替换当前选择，旧 `selectedNodeId` 不会残留为高亮节点。
+# v1.4 桌面端定位更新
+
+local-mindmap 后续以 Tauri 桌面端本地应用为主运行目标。Web / GitHub Pages 仅保留为演示、开发预览和静态构建验证入口，不再作为公司内网推广时的业务主入口。
+
+- 应用不依赖在线配置、用户登录、云同步或远程插件市场。
+- 导图文件、配置、插件优先保存到本地文件系统。
+- `.lmind` 继续保持本地 JSON 文件格式和可迁移能力。
+- 公司内网推广时，可通过安装包、绿色版压缩包或 IT 软件中心分发。
+- v1.4 新增的桌面 Native 插件目录和 manifest 管理能力仅在 Tauri 桌面端可用。
+- Web 版继续保留现有 Web JSON 插件、节点类型包和模板包能力，但不支持 DLL 插件。
+- v1.4 只管理 Native manifest，不加载 DLL，不执行 DLL，不执行任何第三方代码。
+
+## v1.4 第二批：桌面本地配置与内网分发准备
+
+第二批继续保持桌面端本地应用方向，补齐配置目录、配置 registry 草案和内网分发文档，不大规模迁移现有 `localStorage` 状态。
+
+桌面端本地目录：
+
+- 配置目录：`app data dir/config`
+  - Windows: `%APPDATA%/Local Mindmap/config`
+  - macOS: `~/Library/Application Support/Local Mindmap/config`
+  - Linux: `~/.local/share/local-mindmap/config`
+- 插件目录：`app data dir/plugins`
+  - Windows: `%APPDATA%/Local Mindmap/plugins`
+  - macOS: `~/Library/Application Support/Local Mindmap/plugins`
+  - Linux: `~/.local/share/local-mindmap/plugins`
+
+本批新增最小 Tauri command：`get_desktop_config_dir` 和 `ensure_desktop_config_dir`，用于获取和创建桌面端本地配置目录。现有 Web JSON 插件、节点类型包、模板包仍保留原逻辑。
+
+配置 registry 草案见 `docs/desktop-local-config.md`，内网分发说明见 `docs/desktop-deployment-guide.md`。v1.4 仍不加载 DLL、不执行 DLL、不执行第三方代码。

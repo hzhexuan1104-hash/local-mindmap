@@ -1,0 +1,74 @@
+# 桌面端本地应用路线图
+
+更新日期：2026-06-26
+
+## 定位
+
+local-mindmap 后续以 Tauri 桌面端本地应用为主运行目标。Web 版和 GitHub Pages 可以继续保留为演示、开发预览和静态构建验证入口，但不再作为公司内网推广时的业务主入口。
+
+核心原则保持不变：
+
+- 不上传用户文件、导图内容、模板、节点类型包或插件配置。
+- 不依赖在线配置、用户登录、云同步或远程插件市场。
+- `.lmind` 继续作为可迁移的本地 JSON 文件格式。
+- 导图文件、配置和桌面插件优先保存到本地文件系统。
+
+## 分发方式
+
+面向公司内网推广时，优先考虑以下方式：
+
+- Windows / macOS / Linux 安装包。
+- 绿色版压缩包。
+- 公司 IT 软件中心或内网文件分发系统。
+
+## 版本节奏
+
+### v1.4.0
+
+v1.4 只建立桌面端本地插件目录和 Native manifest 管理底座：
+
+- 明确 Tauri 桌面端为主运行目标。
+- 同步 Tauri 桌面端版本号到 `package.json` 当前版本。
+- 新增桌面插件目录。
+- 新增 Native 插件 manifest 类型和校验。
+- 支持扫描、安装、启用、禁用、卸载 Native manifest。
+- 前端插件管理面板新增“桌面 Native 插件”区域。
+- 新增桌面端配置目录 `config` 的最小 Tauri command，作为本地配置 registry 的后续迁移底座。
+- 形成 `config/app-settings.json` 草案、localStorage 迁移优先级和公司内网分发说明。
+
+v1.4 不加载 DLL、不执行 DLL、不执行任何第三方代码。
+
+v1.4.0 发布收尾阶段已将 npm、Tauri 和 Cargo 版本同步到 `1.4.0`，并通过 Windows `tauri:build` 生成 MSI 和 NSIS 安装包。
+
+### v1.4 本地目录规划
+
+桌面端目录均通过 Tauri app data dir 解析，不硬编码绝对路径：
+
+```text
+Windows:
+  %APPDATA%/Local Mindmap/config
+  %APPDATA%/Local Mindmap/plugins
+
+macOS:
+  ~/Library/Application Support/Local Mindmap/config
+  ~/Library/Application Support/Local Mindmap/plugins
+
+Linux:
+  ~/.local/share/local-mindmap/config
+  ~/.local/share/local-mindmap/plugins
+```
+
+`config` 用于后续应用设置 registry，`plugins` 用于 Native 插件 manifest 和 `desktop-plugin-registry.json`。v1.4 第二批只完成目录能力和设计说明，不迁移全部 `localStorage`。
+
+### v1.5
+
+v1.5 再评估 Windows DLL 加载实验版。进入该阶段前需要补齐：
+
+- Native ABI 稳定草案。
+- 插件签名或可信来源策略。
+- 沙箱、权限、崩溃隔离和日志边界。
+- 最小可回滚的 DLL 加载实验。
+
+## GitHub Pages
+
+GitHub Pages 仍用于演示和开发预览。Web 版不支持 DLL 插件，不支持桌面插件目录管理，不改变 `.lmind` 基础结构。
