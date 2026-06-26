@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager};
 
 const REGISTRY_FILE_NAME: &str = "desktop-plugin-registry.json";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
+const CONFIG_DIR_NAME: &str = "config";
 const ALLOWED_CAPABILITIES: &[&str] = &[
     "exportText",
     "themePack",
@@ -74,6 +75,23 @@ fn plugin_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
     fs::create_dir_all(&dir)
         .map_err(|error| format!("Failed to create desktop plugin directory: {error}"))?;
+
+    Ok(dir)
+}
+
+fn config_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?
+        .join(CONFIG_DIR_NAME))
+}
+
+fn ensure_config_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = config_root_dir(app)?;
+
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Failed to create desktop config directory: {error}"))?;
 
     Ok(dir)
 }
@@ -231,6 +249,16 @@ fn get_desktop_plugin_dir(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_desktop_config_dir(app: AppHandle) -> Result<String, String> {
+    Ok(config_root_dir(&app)?.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn ensure_desktop_config_dir(app: AppHandle) -> Result<String, String> {
+    Ok(ensure_config_root_dir(&app)?.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn list_desktop_plugins(app: AppHandle) -> Result<DesktopPluginListResult, String> {
     let plugin_dir = plugin_root_dir(&app)?;
     let registry = load_registry(&plugin_dir);
@@ -316,8 +344,11 @@ fn install_desktop_plugin_manifest(
 
     fs::create_dir_all(&target_dir)
         .map_err(|error| format!("Failed to create plugin directory: {error}"))?;
-    fs::write(target_dir.join(MANIFEST_FILE_NAME), manifest_to_json(&manifest)?)
-        .map_err(|error| format!("Failed to install manifest.json: {error}"))?;
+    fs::write(
+        target_dir.join(MANIFEST_FILE_NAME),
+        manifest_to_json(&manifest)?,
+    )
+    .map_err(|error| format!("Failed to install manifest.json: {error}"))?;
 
     let mut registry = load_registry(&plugin_dir);
     registry.enabled.insert(manifest.plugin_id.clone(), false);
@@ -378,6 +409,8 @@ fn uninstall_desktop_plugin(app: AppHandle, plugin_id: String) -> Result<(), Str
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            get_desktop_config_dir,
+            ensure_desktop_config_dir,
             get_desktop_plugin_dir,
             list_desktop_plugins,
             install_desktop_plugin_manifest,

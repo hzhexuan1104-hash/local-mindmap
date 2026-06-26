@@ -102,3 +102,14 @@ v1.3.0 发布准备阶段，`package.json` 和 `package-lock.json` 已同步为 
 3. 在 macOS / Linux 上验证 Tauri app data dir 映射到预期插件目录。
 4. 继续保持 v1.4 边界：不加载 DLL、不执行第三方代码、不做远程插件市场。
 5. v1.5 再评估 Windows DLL 加载实验版，包括 ABI、可信来源、签名、崩溃隔离和权限模型。
+
+## v1.4 第二批后续任务建议
+
+当前第二批目标是桌面端本地配置与内网分发准备，不做大规模状态迁移。
+
+1. 验证 `get_desktop_config_dir` 和 `ensure_desktop_config_dir` 在 Windows / macOS / Linux 上均映射到预期 app data dir。
+2. 继续保持 Web / GitHub Pages 的 `localStorage` 行为，不因桌面配置目录不可用而崩溃。
+3. 后续按优先级迁移：桌面插件 registry、自定义节点类型、自定义模板、最近打开文件、主题偏好。
+4. 在迁移每类配置前补充兼容策略和回归测试，避免破坏 Web JSON 插件、节点类型包、模板包和 `.lmind` 保存打开。
+5. 完成 `npm run tauri:build` 环境验证后，记录 Windows 安装包、绿色包和 IT 软件中心分发路径。
+6. v1.4 继续只管理 manifest 和本地配置目录，不加载 DLL、不执行 DLL、不执行第三方代码。

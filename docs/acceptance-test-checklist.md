@@ -434,3 +434,23 @@
 | 不加载 DLL | 验证 v1.4 边界 | 插件目录中放置 `plugin.dll` | 应用只读取 manifest，不加载、不调用 DLL | [ ] |
 | Web 回归 | 验证 Web 行为保持 | 在浏览器或 GitHub Pages 构建中打开插件管理 | 桌面插件显示不可用提示，Web JSON 插件仍可用 | [ ] |
 | 自动化测试 | 验证测试覆盖 | 执行 `npm run test` | Web 插件、Native manifest、节点类型包、模板包测试通过 | [ ] |
+
+## 36. v1.4 桌面端本地化与内网分发验收
+
+| 测试项 | 测试目标 | 操作步骤 | 预期结果 | 是否通过 |
+|---|---|---|---|---|
+| Web 构建 | 验证 GitHub Pages / Web 构建不受影响 | 执行 `npm run build` | 构建通过，产物输出到 `dist/`，不提交构建产物 | [ ] |
+| 自动化测试 | 验证现有能力不回退 | 执行 `npm run test` | Web JSON 插件、Native manifest、节点类型包、模板包等测试通过 | [ ] |
+| 桌面开发启动 | 验证 Tauri dev 可用 | 执行 `npm run tauri:dev` | 桌面窗口可启动，或失败原因不是 Vite watch `src-tauri/target` / icon 缺失 | [ ] |
+| 桌面打包尝试 | 验证打包环境 | 执行 `npm run tauri:build` | 通过则记录产物路径；失败则记录代码问题或环境原因 | [ ] |
+| 离线启动 | 验证内网使用边界 | 断网后启动桌面应用 | 基础编辑、`.lmind` 保存打开和本地配置读取可用 | [ ] |
+| 桌面插件目录 | 验证插件目录能力 | 打开插件管理面板或调用 `get_desktop_plugin_dir` | 返回 app data dir 下的 `plugins` 目录，目录不存在时自动创建 | [ ] |
+| 桌面配置目录 | 验证配置目录能力 | 调用 `get_desktop_config_dir` / `ensure_desktop_config_dir` | 返回 app data dir 下的 `config` 目录，ensure 可创建目录 | [ ] |
+| Native manifest 生命周期 | 验证第一批能力不受影响 | 安装、扫描、启用、禁用、卸载 Native manifest | 只管理 manifest 和 registry，不加载 DLL | [ ] |
+| Web JSON 插件回归 | 验证 Web 插件不受影响 | 在 Web 环境安装、启用、禁用、卸载 JSON 插件 | 仍使用 localStorage，功能正常 | [ ] |
+| 节点类型包回归 | 验证共享包不受影响 | 导入 / 导出节点类型包 | 功能正常，不改变 `.lmind` 基础结构 | [ ] |
+| 模板包回归 | 验证共享包不受影响 | 导入 / 导出模板包 | 功能正常，不改变 `.lmind` 基础结构 | [ ] |
+| `.lmind` 回归 | 验证导图文件兼容 | 保存并重新打开 `.lmind` | 节点、备注、主题、节点类型和 position 正常恢复 | [ ] |
+| 构建产物忽略 | 验证 Git 忽略规则 | 检查 `.gitignore` 和 `git status --ignored` | `src-tauri/target/`、`target/`、`dist/` 不会被提交 | [ ] |
+| 图标和锁文件 | 验证必要文件可跟踪 | 检查 `src-tauri/icons/icon.ico` 和 `src-tauri/Cargo.lock` | 不被 `.gitignore` 忽略 | [ ] |
+| 安全边界 | 验证 v1.4 限制 | 检查代码和文档 | 不加载 DLL、不执行 DLL、不执行第三方代码 | [ ] |

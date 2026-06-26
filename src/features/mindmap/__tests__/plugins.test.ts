@@ -8,6 +8,7 @@ import {
   setDesktopPluginEnabled,
   uninstallDesktopPlugin,
 } from '../desktopPlugins';
+import { ensureDesktopConfigDir, getDesktopConfigDir } from '../desktopConfig';
 import { normalizePluginManifest } from '../plugins';
 
 const validManifest = {
@@ -153,5 +154,21 @@ describe('desktop plugin API web fallback', () => {
     await expect(uninstallDesktopPlugin('my-native-plugin')).rejects.toThrow(
       '桌面插件仅在桌面端可用',
     );
+  });
+});
+
+describe('desktop config API web fallback', () => {
+  it('returns unavailable config directory state outside Tauri', async () => {
+    await expect(getDesktopConfigDir()).resolves.toEqual({
+      configDir: '',
+      isAvailable: false,
+    });
+  });
+
+  it('does not create a config directory outside Tauri', async () => {
+    await expect(ensureDesktopConfigDir()).resolves.toEqual({
+      configDir: '',
+      isAvailable: false,
+    });
   });
 });

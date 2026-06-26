@@ -251,4 +251,25 @@
 - 已保留 Web JSON 插件、节点类型包、模板包和 `.lmind` 基础结构。
 - v1.4 当前严格不加载 DLL、不执行 DLL、不执行第三方代码。
 - `npm run build` 已通过；`npm run test` 已通过。
-- `npm run tauri:dev` / `npm run tauri:build` 当前未通过：本机 `rustup` 未配置默认 toolchain，`cargo metadata` 无法运行。
+- `npm run tauri:dev` 已在后续修复中通过；`npm run tauri:build` 在第二批中继续验证。
+
+## v1.4-dev 第一批修复补充
+
+更新日期：2026-06-26
+
+- 已将前端桌面 Native 插件功能通过 `@tauri-apps/api/core` 的 `invoke` 接入 Tauri commands。
+- 已修复 Windows 下 Vite 监听 `src-tauri/target` 导致 Rust 构建产物被占用并触发 `EBUSY` 的问题。
+- 已补齐 `src-tauri/icons/icon.ico`，解决 Windows Resource 生成阶段 `icons/icon.ico not found`。
+- `npm run tauri:dev` 已可进入 Tauri/Rust 构建并启动桌面应用。
+
+## v1.4-dev 第二批：桌面本地配置与内网分发准备
+
+更新日期：2026-06-26
+
+- 已明确桌面配置目录位于 Tauri app data dir 下的 `config`，插件目录继续位于同一 app data dir 下的 `plugins`。
+- 已新增最小 Tauri commands：`get_desktop_config_dir` 和 `ensure_desktop_config_dir`。
+- 已新增前端 `desktopConfig.ts` 包装，非 Tauri Web 环境返回 unavailable，不影响 Web / GitHub Pages。
+- 已新增 `docs/desktop-local-config.md`，记录 `config/app-settings.json` registry 草案和 localStorage 迁移路线。
+- 已新增 `docs/desktop-deployment-guide.md`，记录 Windows 内网分发方式、断网使用说明、数据保存位置和 `tauri:build` 验证规则。
+- 已完成 Windows 本机 `npm run tauri:build` 验证，生成 MSI 和 NSIS setup exe；构建产物位于 `src-tauri/target/`，不得提交。
+- 本批不迁移全部 localStorage，不修改 `.lmind` 基础结构，不加载 DLL，不执行 DLL，不执行第三方代码。

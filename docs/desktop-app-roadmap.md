@@ -33,8 +33,30 @@ v1.4 只建立桌面端本地插件目录和 Native manifest 管理底座：
 - 新增 Native 插件 manifest 类型和校验。
 - 支持扫描、安装、启用、禁用、卸载 Native manifest。
 - 前端插件管理面板新增“桌面 Native 插件”区域。
+- 新增桌面端配置目录 `config` 的最小 Tauri command，作为本地配置 registry 的后续迁移底座。
+- 形成 `config/app-settings.json` 草案、localStorage 迁移优先级和公司内网分发说明。
 
 v1.4 不加载 DLL、不执行 DLL、不执行任何第三方代码。
+
+### v1.4 本地目录规划
+
+桌面端目录均通过 Tauri app data dir 解析，不硬编码绝对路径：
+
+```text
+Windows:
+  %APPDATA%/Local Mindmap/config
+  %APPDATA%/Local Mindmap/plugins
+
+macOS:
+  ~/Library/Application Support/Local Mindmap/config
+  ~/Library/Application Support/Local Mindmap/plugins
+
+Linux:
+  ~/.local/share/local-mindmap/config
+  ~/.local/share/local-mindmap/plugins
+```
+
+`config` 用于后续应用设置 registry，`plugins` 用于 Native 插件 manifest 和 `desktop-plugin-registry.json`。v1.4 第二批只完成目录能力和设计说明，不迁移全部 `localStorage`。
 
 ### v1.5
 

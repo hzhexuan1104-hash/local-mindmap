@@ -222,3 +222,22 @@ local-mindmap 后续以 Tauri 桌面端本地应用为主运行目标。Web / Gi
 - v1.4 新增的桌面 Native 插件目录和 manifest 管理能力仅在 Tauri 桌面端可用。
 - Web 版继续保留现有 Web JSON 插件、节点类型包和模板包能力，但不支持 DLL 插件。
 - v1.4 只管理 Native manifest，不加载 DLL，不执行 DLL，不执行任何第三方代码。
+
+## v1.4 第二批：桌面本地配置与内网分发准备
+
+第二批继续保持桌面端本地应用方向，补齐配置目录、配置 registry 草案和内网分发文档，不大规模迁移现有 `localStorage` 状态。
+
+桌面端本地目录：
+
+- 配置目录：`app data dir/config`
+  - Windows: `%APPDATA%/Local Mindmap/config`
+  - macOS: `~/Library/Application Support/Local Mindmap/config`
+  - Linux: `~/.local/share/local-mindmap/config`
+- 插件目录：`app data dir/plugins`
+  - Windows: `%APPDATA%/Local Mindmap/plugins`
+  - macOS: `~/Library/Application Support/Local Mindmap/plugins`
+  - Linux: `~/.local/share/local-mindmap/plugins`
+
+本批新增最小 Tauri command：`get_desktop_config_dir` 和 `ensure_desktop_config_dir`，用于获取和创建桌面端本地配置目录。现有 Web JSON 插件、节点类型包、模板包仍保留原逻辑。
+
+配置 registry 草案见 `docs/desktop-local-config.md`，内网分发说明见 `docs/desktop-deployment-guide.md`。v1.4 仍不加载 DLL、不执行 DLL、不执行第三方代码。
