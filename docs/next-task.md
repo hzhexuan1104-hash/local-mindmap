@@ -113,3 +113,12 @@ v1.3.0 发布准备阶段，`package.json` 和 `package-lock.json` 已同步为 
 4. 在迁移每类配置前补充兼容策略和回归测试，避免破坏 Web JSON 插件、节点类型包、模板包和 `.lmind` 保存打开。
 5. 完成 `npm run tauri:build` 环境验证后，记录 Windows 安装包、绿色包和 IT 软件中心分发路径。
 6. v1.4 继续只管理 manifest 和本地配置目录，不加载 DLL、不执行 DLL、不执行第三方代码。
+
+## v1.4.0 发布后建议
+
+1. 在 GitHub 上创建或更新从 `v1.4-dev` 到 `main` 的 PR。
+2. 确认 CI、GitHub Pages 构建和必要手动验收通过。
+3. 合并到 `main` 后创建 `v1.4.0` tag。
+4. 基于 `docs/release-notes-v1.4.0-draft.md` 创建 GitHub Release。
+5. 将 Windows MSI / NSIS 安装包作为 Release 附件或交给公司内网分发流程。
+6. v1.5 开始前先完成 DLL 插件 ABI、安全审查、可信来源、签名、崩溃隔离和回滚方案设计。

@@ -93,8 +93,8 @@ target/
 
 ```text
 src-tauri/target/release/local-mindmap.exe
-src-tauri/target/release/bundle/msi/Local Mindmap_1.3.1_x64_en-US.msi
-src-tauri/target/release/bundle/nsis/Local Mindmap_1.3.1_x64-setup.exe
+src-tauri/target/release/bundle/msi/Local Mindmap_1.4.0_x64_en-US.msi
+src-tauri/target/release/bundle/nsis/Local Mindmap_1.4.0_x64-setup.exe
 ```
 
 注意事项：
@@ -102,6 +102,17 @@ src-tauri/target/release/bundle/nsis/Local Mindmap_1.3.1_x64-setup.exe
 - 构建过程中 Tauri 下载了 WiX 和 NSIS 打包工具。公司内网构建机需要预安装、预缓存或配置可信内网镜像。
 - 当前 `identifier` 为 `com.localmindmap.app`，Tauri 提示该值以 `.app` 结尾在 macOS 上不推荐，后续跨平台打包前应评估是否调整。
 - 上述产物位于 `src-tauri/target/`，属于构建产物，不提交到 Git。
+
+### v1.4.0 发布构建要求
+
+发布前重新执行 `npm run tauri:build`，安装包名称应体现 `1.4.0`：
+
+```text
+src-tauri/target/release/bundle/msi/Local Mindmap_1.4.0_x64_en-US.msi
+src-tauri/target/release/bundle/nsis/Local Mindmap_1.4.0_x64-setup.exe
+```
+
+这些文件只作为发布附件或内网分发产物，不提交到 Git 仓库。
 
 ## 安全说明
 

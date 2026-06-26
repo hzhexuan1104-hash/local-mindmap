@@ -218,7 +218,7 @@
 |---|---|---|---|---|
 | Release 文档存在 | 验证发布文档交付 | 打开 `docs/release-checklist.md` | 文档包含发布前、构建、测试、Pages、回归、导入导出、插件、性能检查 | [ ] |
 | Release Notes 存在 | 验证版本说明交付 | 打开 `docs/release-notes-v1.0.0.md` | 文档包含 v1.0.0、在线预览、核心功能、运行/构建/测试方式、数据安全、已知限制和后续计划 | [ ] |
-| package 版本号 | 验证发布版本 | 查看 `package.json` 和 `package-lock.json` | `version` 均为 `1.3.0` | [ ] |
+| package 版本号 | 验证发布版本 | 查看 `package.json` 和 `package-lock.json` | `version` 均为 `1.4.0` | [ ] |
 | 构建检查 | 验证发布构建 | 执行 `npm run build` | 构建通过 | [ ] |
 | 测试检查 | 验证发布测试 | 执行 `npm run test` | 测试通过 | [ ] |
 | Git 状态检查 | 验证发布流程 | 按文档执行 `git status` | 能确认发布前变更范围 | [ ] |
@@ -421,7 +421,7 @@
 
 | 测试项 | 测试目标 | 操作步骤 | 预期结果 | 是否通过 |
 |---|---|---|---|---|
-| 版本同步 | 验证桌面端版本号一致 | 检查 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json` | 三者当前均为 `1.3.1`，本批不升级 `1.4.0` | [ ] |
+| 版本同步 | 验证桌面端版本号一致 | 检查 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` | 四者当前均为 `1.4.0` | [ ] |
 | 桌面插件目录 | 验证目录可获取和自动创建 | 在 Tauri 桌面端打开插件管理面板 | 显示当前桌面插件目录，目录不存在时自动创建 | [ ] |
 | 合法 manifest | 验证 Native manifest 校验 | 安装合法 `manifest.json` | 插件出现在“桌面 Native 插件”区域，默认禁用 | [ ] |
 | 缺少必填字段 | 验证错误处理 | 安装缺少 `pluginId` / `name` / `version` / `entry` 的 manifest | 安装失败并提示，应用不崩溃 | [ ] |
