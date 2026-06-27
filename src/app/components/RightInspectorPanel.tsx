@@ -91,58 +91,64 @@ export function RightInspectorPanel({
       <div className="inspector-content">
         {activeTab === 'style' ? (
           <div className="inspector-section">
-            <label className="stacked-control">
-              <span>
-                节点类型
-                {selectedCount > 1 ? `（应用到 ${selectedCount} 个节点）` : ''}
-              </span>
-              <select
-                value={selectedNode.nodeTypeId ?? ''}
-                onChange={(event) =>
-                  onSelectedNodeTypeChange(event.target.value)
-                }
-              >
-                <option value="">普通节点</option>
-                {nodeTypes.map((nodeType) => (
-                  <option key={nodeType.id} value={nodeType.id}>
-                    {nodeType.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <section className="inspector-control-group">
+              <h3>主题样式</h3>
+              <label className="stacked-control">
+                <span>画布主题</span>
+                <select
+                  value={themeId}
+                  onChange={(event) => onThemeChange(event.target.value)}
+                >
+                  {themes.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
 
-            <label className="stacked-control">
-              <span>新增子节点类型</span>
-              <select
-                value={childNodeTypeId}
-                onChange={(event) => onChildNodeTypeChange(event.target.value)}
-              >
-                <option value="">普通节点</option>
-                {nodeTypes.map((nodeType) => (
-                  <option key={nodeType.id} value={nodeType.id}>
-                    {nodeType.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <section className="inspector-control-group">
+              <h3>节点样式</h3>
+              <label className="stacked-control">
+                <span>
+                  节点类型
+                  {selectedCount > 1 ? `（应用到 ${selectedCount} 个节点）` : ''}
+                </span>
+                <select
+                  value={selectedNode.nodeTypeId ?? ''}
+                  onChange={(event) =>
+                    onSelectedNodeTypeChange(event.target.value)
+                  }
+                >
+                  <option value="">普通节点</option>
+                  {nodeTypes.map((nodeType) => (
+                    <option key={nodeType.id} value={nodeType.id}>
+                      {nodeType.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            <label className="stacked-control">
-              <span>画布主题</span>
-              <select
-                value={themeId}
-                onChange={(event) => onThemeChange(event.target.value)}
-              >
-                {themes.map((theme) => (
-                  <option key={theme.id} value={theme.id}>
-                    {theme.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <label className="stacked-control">
+                <span>新增子节点类型</span>
+                <select
+                  value={childNodeTypeId}
+                  onChange={(event) => onChildNodeTypeChange(event.target.value)}
+                >
+                  <option value="">普通节点</option>
+                  {nodeTypes.map((nodeType) => (
+                    <option key={nodeType.id} value={nodeType.id}>
+                      {nodeType.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
 
-            <div className="style-summary">
+            <section className="style-summary inspector-control-group">
               <div className="inspector-section-heading">
-                <span>样式摘要</span>
+                <h3>类型细节</h3>
                 <button type="button" onClick={onManageNodeTypes}>
                   管理类型
                 </button>
@@ -178,7 +184,7 @@ export function RightInspectorPanel({
               ) : (
                 <p>当前使用主题中的默认节点样式。</p>
               )}
-            </div>
+            </section>
           </div>
         ) : null}
 

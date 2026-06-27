@@ -90,7 +90,6 @@ import { getKeyboardShortcutAction } from '../features/mindmap/keyboardShortcuts
 import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
-  createNodeFromType,
   findNodeTypeById,
   loadLocalNodeTypes,
   mergeWithLocalNodeTypes,
@@ -159,6 +158,12 @@ import {
   isDescendant as isTreeDescendant,
   moveNodeAsChild,
 } from '../features/mindmap/treeOperations';
+import {
+  addTypedChildNode,
+  addTypedSiblingNode,
+  getNodeTypeCreationOptions,
+  type TypedNodeCreationResult,
+} from '../features/mindmap/typedNodeCreation';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -200,21 +205,6 @@ const updateNodeById = (
     ),
   };
 };
-
-const addSiblingById = (
-  node: MindmapNode,
-  nodeId: string,
-  sibling: MindmapNode,
-): MindmapNode => ({
-  ...node,
-  children: node.children.flatMap((child) => {
-    if (child.id === nodeId) {
-      return [child, sibling];
-    }
-
-    return [addSiblingById(child, nodeId, sibling)];
-  }),
-});
 
 const deleteNodeById = (node: MindmapNode, nodeId: string): MindmapNode => ({
   ...node,
@@ -315,6 +305,7 @@ type ToolDrawer = ResourceView;
 
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
+  isRoot: boolean;
   nodeTypes: MindmapNodeType[];
   selectedNodeId: string | null;
   selectedNodeIds: Set<string>;
@@ -335,6 +326,7 @@ type MindmapTreeProps = {
 
 function MindmapTree({
   layoutNode,
+  isRoot,
   nodeTypes,
   selectedNodeId,
   selectedNodeIds,
@@ -392,6 +384,7 @@ function MindmapTree({
             draggingNodeId === node.id ? 'is-dragging' : '',
             isDropTarget ? 'is-drop-target' : '',
             isSearchMatch ? 'is-search-match' : '',
+            isRoot ? 'is-root' : '',
             nodeType ? 'has-node-type' : '',
             nodeType ? `shape-${nodeType.shape}` : '',
           ]
@@ -499,6 +492,7 @@ export function App() {
   const [templateSortMode, setTemplateSortMode] =
     useState<TemplateSortMode>('created-desc');
   const [childNodeTypeId, setChildNodeTypeId] = useState('');
+  const [siblingNodeTypeId, setSiblingNodeTypeId] = useState('');
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
     createEmptyNodeTypeDraft,
   );
@@ -601,6 +595,10 @@ export function App() {
         ).values(),
       ),
     [nodeTypes, pluginNodeTypes],
+  );
+  const nodeTypeCreationOptions = useMemo(
+    () => getNodeTypeCreationOptions(availableNodeTypes),
+    [availableNodeTypes],
   );
   const canExportTxt = useMemo(
     () => isTxtExportPluginEnabled(plugins),
@@ -1238,45 +1236,42 @@ export function App() {
     }
   };
 
-  const createTypedNode = (position?: MindmapNode['position']) => {
-    const node = createNodeFromType(findNodeTypeById(availableNodeTypes, childNodeTypeId));
-
-    return {
-      ...node,
-      ...(position ? { position } : {}),
-    };
-  };
-
-  const createChildNodeForParent = (parent: MindmapNode) =>
-    createTypedNode(
-      parent.position
-        ? {
-            x: parent.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
-            y: parent.position.y + parent.children.length * 96,
-          }
-        : undefined,
-    );
-
-  const handleAddChild = () => {
-    const parentNodeId = selectedNodeId ?? mindmap.id;
-    const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
-    const newNode = createChildNodeForParent(parentNode);
-
-    recordHistory();
-    setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, parentNodeId, (node) => ({
-        ...node,
-        children: [...node.children, newNode],
-      })),
-    );
-    setSelectedNodeId(newNode.id);
-    setSelectedNodeIds([newNode.id]);
+  const applyTypedNodeCreation = (result: TypedNodeCreationResult) => {
+    setMindmap(result.rootNode);
+    setSelectedNodeId(result.selectedNodeId);
+    setSelectedNodeIds(result.selectedNodeIds);
     setEditingNodeId(null);
   };
 
-  const handleAddSibling = () => {
+  const handleAddChild = (nodeTypeId = childNodeTypeId) => {
+    const parentNodeId = selectedNodeId ?? mindmap.id;
+    const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
+    const position = parentNode.position
+      ? {
+          x: parentNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
+          y: parentNode.position.y + parentNode.children.length * 96,
+        }
+      : undefined;
+    const result = addTypedChildNode(
+      mindmap,
+      parentNodeId,
+      availableNodeTypes,
+      nodeTypeId,
+      position,
+    );
+
+    if (!result) {
+      showMessage('无法新增子节点');
+      return;
+    }
+
+    recordHistory();
+    applyTypedNodeCreation(result);
+  };
+
+  const handleAddSibling = (nodeTypeId = childNodeTypeId) => {
     if (!selectedNodeId) {
-      showMessage('璇峰厛閫夋嫨鑺傜偣');
+      showMessage('请先选择节点');
       return;
     }
 
@@ -1295,15 +1290,21 @@ export function App() {
               selectedLayoutNode.y - POSITIONED_LAYOUT.canvasPadding + 96,
           }
         : undefined;
-    const newNode = createTypedNode(siblingPosition);
+    const result = addTypedSiblingNode(
+      mindmap,
+      selectedNodeId,
+      availableNodeTypes,
+      nodeTypeId,
+      siblingPosition,
+    );
+
+    if (!result) {
+      showMessage('无法新增同级节点');
+      return;
+    }
 
     recordHistory();
-    setMindmap((currentMindmap) =>
-      addSiblingById(currentMindmap, selectedNodeId, newNode),
-    );
-    setSelectedNodeId(newNode.id);
-    setSelectedNodeIds([newNode.id]);
-    setEditingNodeId(null);
+    applyTypedNodeCreation(result);
   };
 
   const handleDeleteNode = () => {
@@ -2156,8 +2157,11 @@ export function App() {
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    const menuWidth = 220;
-    const menuHeight = nextContextMenu.type === 'node' ? 480 : 360;
+    const menuWidth = nextContextMenu.type === 'node' ? 244 : 220;
+    const menuHeight =
+      nextContextMenu.type === 'node'
+        ? Math.min(650, window.innerHeight - 24)
+        : 360;
     setContextMenu({
       ...nextContextMenu,
       x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
@@ -2370,6 +2374,15 @@ export function App() {
 
             {activeDrawer === 'templates' ? (
               <section className="feature-panel" aria-label="模板库">
+                <label className="resource-search-shell">
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    type="search"
+                    value={templateKeyword}
+                    placeholder="搜索模板或文件"
+                    onChange={(event) => setTemplateKeyword(event.target.value)}
+                  />
+                </label>
                 <div className="resource-file-card">
                   <div>
                     <span>当前导图</span>
@@ -2433,12 +2446,6 @@ export function App() {
 
                 <div className="template-manager">
                   <div className="compact-form">
-                    <input
-                      type="search"
-                      value={templateKeyword}
-                      placeholder="搜索模板"
-                      onChange={(event) => setTemplateKeyword(event.target.value)}
-                    />
                     <select
                       value={templateSortMode}
                       onChange={(event) =>
@@ -2941,6 +2948,7 @@ export function App() {
                 <MindmapTree
                   key={layoutNode.id}
                   layoutNode={layoutNode}
+                  isRoot={layoutNode.id === mindmap.id}
                   nodeTypes={availableNodeTypes}
                   selectedNodeId={selectedNodeId}
                   selectedNodeIds={selectedNodeIdSet}
@@ -3115,20 +3123,66 @@ export function App() {
         >
           {contextMenu.type === 'node' ? (
             <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runContextMenuAction(handleAddChild)}
-              >
-                新增子节点
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runContextMenuAction(handleAddSibling)}
-              >
-                新增同级节点
-              </button>
+              <div className="context-menu-type-action">
+                <span>新增子节点类型</span>
+                <div>
+                  <select
+                    value={childNodeTypeId}
+                    aria-label="新增子节点类型"
+                    onChange={(event) => setChildNodeTypeId(event.target.value)}
+                  >
+                    {nodeTypeCreationOptions.map((option) => (
+                      <option key={option.value || 'default'} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() =>
+                      runContextMenuAction(() =>
+                        handleAddChild(childNodeTypeId),
+                      )
+                    }
+                  >
+                    新增
+                  </button>
+                </div>
+              </div>
+              <div className="context-menu-type-action">
+                <span>新增同级节点类型</span>
+                <div>
+                  <select
+                    value={siblingNodeTypeId}
+                    aria-label="新增同级节点类型"
+                    onChange={(event) => setSiblingNodeTypeId(event.target.value)}
+                  >
+                    {nodeTypeCreationOptions.map((option) => (
+                      <option key={option.value || 'default'} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={selectedNode.id === mindmap.id}
+                    title={
+                      selectedNode.id === mindmap.id
+                        ? '中心主题不能新增同级节点'
+                        : '新增同级节点'
+                    }
+                    onClick={() =>
+                      runContextMenuAction(() =>
+                        handleAddSibling(siblingNodeTypeId),
+                      )
+                    }
+                  >
+                    新增
+                  </button>
+                </div>
+              </div>
               <button
                 type="button"
                 role="menuitem"
@@ -3198,10 +3252,9 @@ export function App() {
                     )
                   }
                 >
-                  <option value="">普通节点</option>
-                  {availableNodeTypes.map((nodeType) => (
-                    <option key={nodeType.id} value={nodeType.id}>
-                      {nodeType.name}
+                  {nodeTypeCreationOptions.map((option) => (
+                    <option key={option.value || 'default'} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </select>

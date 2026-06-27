@@ -73,9 +73,14 @@ export function TopMenuBar({
           LM
         </span>
         <div className="top-brand-copy">
-          <strong id="app-title">Local Mindmap</strong>
-          <span title={currentTitle}>{currentTitle}</span>
+          <strong id="app-title">本地化思维导图工具</strong>
+          <span>Local Mindmap</span>
         </div>
+      </div>
+
+      <div className="top-document-title" title={currentTitle}>
+        <span className="document-status-dot" aria-hidden="true" />
+        <strong>{currentTitle}</strong>
       </div>
 
       <nav className="top-menu-nav" aria-label="顶部菜单" ref={menuBarRef}>
