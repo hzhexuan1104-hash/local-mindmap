@@ -10,7 +10,8 @@ type RemarkPanelProps = {
   mode: RemarkMode;
   onModeChange: (mode: RemarkMode) => void;
   onRemarkChange: (remark: string) => void;
-  onCollapse: () => void;
+  onCollapse?: () => void;
+  embedded?: boolean;
 };
 
 export function RemarkPanel({
@@ -19,25 +20,31 @@ export function RemarkPanel({
   onModeChange,
   onRemarkChange,
   onCollapse,
+  embedded = false,
 }: RemarkPanelProps) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   return (
     <>
-      <aside className="remark-panel" aria-labelledby="remark-panel-title">
+      <section
+        className={embedded ? 'remark-panel is-embedded' : 'remark-panel'}
+        aria-labelledby="remark-panel-title"
+      >
         <div className="remark-panel-header">
-          <div className="remark-header-top">
-            <p className="eyebrow">Remark</p>
-            <button
-              type="button"
-              className="remark-collapse-button secondary-action"
-              onClick={onCollapse}
-              aria-label="收起备注面板"
-              title="收起备注"
-            >
-              &rsaquo;
-            </button>
-          </div>
+          {!embedded ? (
+            <div className="remark-header-top">
+              <p className="eyebrow">Remark</p>
+              <button
+                type="button"
+                className="remark-collapse-button secondary-action"
+                onClick={onCollapse}
+                aria-label="收起备注面板"
+                title="收起备注"
+              >
+                &rsaquo;
+              </button>
+            </div>
+          ) : null}
 
           <div className="remark-panel-actions">
             <button
@@ -84,7 +91,7 @@ export function RemarkPanel({
         ) : (
           <MarkdownPreview content={selectedNode.remark} />
         )}
-      </aside>
+      </section>
 
       {isPreviewOpen ? (
         <RemarkPreviewDialog

@@ -7,6 +7,16 @@ import {
   useRef,
   useState,
 } from 'react';
+import { CanvasControls } from './components/CanvasControls';
+import {
+  LeftResourcePanel,
+  type ResourceView,
+} from './components/LeftResourcePanel';
+import { RightInspectorPanel } from './components/RightInspectorPanel';
+import {
+  TopMenuBar,
+  type TopMenuGroup,
+} from './components/TopMenuBar';
 import {
   centerCanvasView,
   DEFAULT_CANVAS_VIEW,
@@ -80,7 +90,6 @@ import { getKeyboardShortcutAction } from '../features/mindmap/keyboardShortcuts
 import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
-  createNodeFromType,
   findNodeTypeById,
   loadLocalNodeTypes,
   mergeWithLocalNodeTypes,
@@ -113,7 +122,6 @@ import {
   uninstallPlugin,
   type PluginManifest,
 } from '../features/mindmap/plugins';
-import { RemarkPanel } from '../features/mindmap/RemarkPanel';
 import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
 import {
   findMindmapMatches,
@@ -150,6 +158,12 @@ import {
   isDescendant as isTreeDescendant,
   moveNodeAsChild,
 } from '../features/mindmap/treeOperations';
+import {
+  addTypedChildNode,
+  addTypedSiblingNode,
+  getNodeTypeCreationOptions,
+  type TypedNodeCreationResult,
+} from '../features/mindmap/typedNodeCreation';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -191,21 +205,6 @@ const updateNodeById = (
     ),
   };
 };
-
-const addSiblingById = (
-  node: MindmapNode,
-  nodeId: string,
-  sibling: MindmapNode,
-): MindmapNode => ({
-  ...node,
-  children: node.children.flatMap((child) => {
-    if (child.id === nodeId) {
-      return [child, sibling];
-    }
-
-    return [addSiblingById(child, nodeId, sibling)];
-  }),
-});
 
 const deleteNodeById = (node: MindmapNode, nodeId: string): MindmapNode => ({
   ...node,
@@ -302,15 +301,11 @@ type CanvasPanState = {
   hasMoved: boolean;
 };
 
-type ToolDrawer =
-  | 'templates'
-  | 'node-types'
-  | 'search'
-  | 'performance'
-  | 'plugins';
+type ToolDrawer = ResourceView;
 
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
+  isRoot: boolean;
   nodeTypes: MindmapNodeType[];
   selectedNodeId: string | null;
   selectedNodeIds: Set<string>;
@@ -331,6 +326,7 @@ type MindmapTreeProps = {
 
 function MindmapTree({
   layoutNode,
+  isRoot,
   nodeTypes,
   selectedNodeId,
   selectedNodeIds,
@@ -388,6 +384,7 @@ function MindmapTree({
             draggingNodeId === node.id ? 'is-dragging' : '',
             isDropTarget ? 'is-drop-target' : '',
             isSearchMatch ? 'is-search-match' : '',
+            isRoot ? 'is-root' : '',
             nodeType ? 'has-node-type' : '',
             nodeType ? `shape-${nodeType.shape}` : '',
           ]
@@ -495,6 +492,7 @@ export function App() {
   const [templateSortMode, setTemplateSortMode] =
     useState<TemplateSortMode>('created-desc');
   const [childNodeTypeId, setChildNodeTypeId] = useState('');
+  const [siblingNodeTypeId, setSiblingNodeTypeId] = useState('');
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
     createEmptyNodeTypeDraft,
   );
@@ -511,7 +509,8 @@ export function App() {
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
-  const [activeDrawer, setActiveDrawer] = useState<ToolDrawer | null>(null);
+  const [activeDrawer, setActiveDrawer] =
+    useState<ToolDrawer | null>('templates');
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [internalClipboard, setInternalClipboard] =
@@ -597,6 +596,10 @@ export function App() {
       ),
     [nodeTypes, pluginNodeTypes],
   );
+  const nodeTypeCreationOptions = useMemo(
+    () => getNodeTypeCreationOptions(availableNodeTypes),
+    [availableNodeTypes],
+  );
   const canExportTxt = useMemo(
     () => isTxtExportPluginEnabled(plugins),
     [plugins],
@@ -668,6 +671,7 @@ export function App() {
     search: '查找替换',
     performance: '性能测试',
     plugins: '插件管理',
+    settings: '设置',
   } as const;
 
   useEffect(() => {
@@ -1232,45 +1236,42 @@ export function App() {
     }
   };
 
-  const createTypedNode = (position?: MindmapNode['position']) => {
-    const node = createNodeFromType(findNodeTypeById(availableNodeTypes, childNodeTypeId));
-
-    return {
-      ...node,
-      ...(position ? { position } : {}),
-    };
-  };
-
-  const createChildNodeForParent = (parent: MindmapNode) =>
-    createTypedNode(
-      parent.position
-        ? {
-            x: parent.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
-            y: parent.position.y + parent.children.length * 96,
-          }
-        : undefined,
-    );
-
-  const handleAddChild = () => {
-    const parentNodeId = selectedNodeId ?? mindmap.id;
-    const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
-    const newNode = createChildNodeForParent(parentNode);
-
-    recordHistory();
-    setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, parentNodeId, (node) => ({
-        ...node,
-        children: [...node.children, newNode],
-      })),
-    );
-    setSelectedNodeId(newNode.id);
-    setSelectedNodeIds([newNode.id]);
+  const applyTypedNodeCreation = (result: TypedNodeCreationResult) => {
+    setMindmap(result.rootNode);
+    setSelectedNodeId(result.selectedNodeId);
+    setSelectedNodeIds(result.selectedNodeIds);
     setEditingNodeId(null);
   };
 
-  const handleAddSibling = () => {
+  const handleAddChild = (nodeTypeId = childNodeTypeId) => {
+    const parentNodeId = selectedNodeId ?? mindmap.id;
+    const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
+    const position = parentNode.position
+      ? {
+          x: parentNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
+          y: parentNode.position.y + parentNode.children.length * 96,
+        }
+      : undefined;
+    const result = addTypedChildNode(
+      mindmap,
+      parentNodeId,
+      availableNodeTypes,
+      nodeTypeId,
+      position,
+    );
+
+    if (!result) {
+      showMessage('无法新增子节点');
+      return;
+    }
+
+    recordHistory();
+    applyTypedNodeCreation(result);
+  };
+
+  const handleAddSibling = (nodeTypeId = childNodeTypeId) => {
     if (!selectedNodeId) {
-      showMessage('璇峰厛閫夋嫨鑺傜偣');
+      showMessage('请先选择节点');
       return;
     }
 
@@ -1289,15 +1290,21 @@ export function App() {
               selectedLayoutNode.y - POSITIONED_LAYOUT.canvasPadding + 96,
           }
         : undefined;
-    const newNode = createTypedNode(siblingPosition);
+    const result = addTypedSiblingNode(
+      mindmap,
+      selectedNodeId,
+      availableNodeTypes,
+      nodeTypeId,
+      siblingPosition,
+    );
+
+    if (!result) {
+      showMessage('无法新增同级节点');
+      return;
+    }
 
     recordHistory();
-    setMindmap((currentMindmap) =>
-      addSiblingById(currentMindmap, selectedNodeId, newNode),
-    );
-    setSelectedNodeId(newNode.id);
-    setSelectedNodeIds([newNode.id]);
-    setEditingNodeId(null);
+    applyTypedNodeCreation(result);
   };
 
   const handleDeleteNode = () => {
@@ -2150,8 +2157,11 @@ export function App() {
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    const menuWidth = 220;
-    const menuHeight = nextContextMenu.type === 'node' ? 480 : 360;
+    const menuWidth = nextContextMenu.type === 'node' ? 244 : 220;
+    const menuHeight =
+      nextContextMenu.type === 'node'
+        ? Math.min(650, window.innerHeight - 24)
+        : 360;
     setContextMenu({
       ...nextContextMenu,
       x: Math.min(event.clientX, window.innerWidth - menuWidth - 12),
@@ -2196,6 +2206,138 @@ export function App() {
     }
   };
 
+  const topMenus: TopMenuGroup[] = [
+    {
+      id: 'file',
+      label: '文件',
+      items: [
+        { label: '新建思维导图', onSelect: handleCreateMindmap },
+        { label: '保存 .lmind', onSelect: handleSaveMindmap },
+        {
+          label: '打开 .lmind',
+          onSelect: () => void handleOpenMindmap(),
+        },
+      ],
+    },
+    {
+      id: 'edit',
+      label: '编辑',
+      items: [
+        { label: '撤销', onSelect: handleUndo },
+        { label: '重做', onSelect: handleRedo },
+        { label: '复制', onSelect: handleCopyNodes, dividerBefore: true },
+        { label: '剪切', onSelect: handleCutNodes },
+        { label: '粘贴', onSelect: () => handlePasteNodes() },
+        { label: '复制为同级节点', onSelect: handleDuplicateNodeAsSibling },
+        { label: '删除节点', onSelect: handleDeleteNode, dividerBefore: true },
+        {
+          label: '查找替换',
+          onSelect: () => setActiveDrawer('search'),
+          dividerBefore: true,
+        },
+      ],
+    },
+    {
+      id: 'insert',
+      label: '插入',
+      items: [
+        { label: '添加子节点', onSelect: handleAddChild },
+        { label: '添加同级节点', onSelect: handleAddSibling },
+      ],
+    },
+    {
+      id: 'view',
+      label: '视图',
+      items: [
+        {
+          label: '放大',
+          onSelect: () =>
+            setCanvasView((view) => zoomCanvasView(view, 'in')),
+        },
+        {
+          label: '缩小',
+          onSelect: () =>
+            setCanvasView((view) => zoomCanvasView(view, 'out')),
+        },
+        {
+          label: '一键居中',
+          onSelect: () => setCanvasView(centerCanvasView()),
+        },
+        {
+          label: '重新自动布局',
+          onSelect: handleResetAutoLayout,
+          dividerBefore: true,
+        },
+        { label: '展开全部', onSelect: handleExpandAll },
+        { label: '折叠全部', onSelect: handleCollapseAll },
+        {
+          label: '专注模式',
+          onSelect: () => setIsFocusMode(true),
+          dividerBefore: true,
+        },
+      ],
+    },
+    {
+      id: 'import-export',
+      label: '导入导出',
+      items: [
+        { label: '导入 Markdown', onSelect: () => void handleImportMarkdown() },
+        { label: '导出 Markdown', onSelect: handleExportMarkdown },
+        { label: '导入 Excel', onSelect: () => void handleImportExcel() },
+        { label: '导出 Excel', onSelect: handleExportExcel },
+        {
+          label: '导入 JSON',
+          onSelect: () => void handleImportJson(),
+          dividerBefore: true,
+        },
+        { label: '导出 JSON', onSelect: handleExportJson },
+        {
+          label: '导出 PNG',
+          onSelect: () => void handleExportImage('png'),
+          dividerBefore: true,
+        },
+        {
+          label: '导出 JPG',
+          onSelect: () => void handleExportImage('jpg'),
+        },
+        {
+          label: canExportTxt ? '导出 TXT' : '导出 TXT（需启用插件）',
+          onSelect: handleExportTxt,
+          disabled: !canExportTxt,
+        },
+        {
+          label: '导入节点类型包',
+          onSelect: () => void handleImportNodeTypePack(),
+          dividerBefore: true,
+        },
+        { label: '导出节点类型包', onSelect: handleExportNodeTypePack },
+        {
+          label: '导入模板包',
+          onSelect: () => void handleImportTemplatePack(),
+        },
+        { label: '导出模板包', onSelect: handleExportTemplatePack },
+      ],
+    },
+    {
+      id: 'more',
+      label: '更多',
+      items: [
+        {
+          label: '插件管理',
+          onSelect: () => setActiveDrawer('plugins'),
+        },
+        {
+          label: '性能测试',
+          onSelect: () => setActiveDrawer('performance'),
+        },
+        {
+          label: '快捷键帮助',
+          onSelect: () => setIsShortcutHelpVisible(true),
+        },
+      ],
+    },
+  ];
+
   return (
     <main
       className="app-shell"
@@ -2203,213 +2345,13 @@ export function App() {
       onMouseDown={() => setContextMenu(null)}
     >
       {!isFocusMode ? (
-        <>
-          <header className="app-header" aria-labelledby="app-title">
-            <div className="app-title-group">
-              <p className="eyebrow">Local Mindmap</p>
-              <h1 id="app-title">本地化思维导图工具</h1>
-            </div>
-
-            <div className="quick-actions" aria-label="高频文件操作">
-              <button
-                type="button"
-                className="primary-action"
-                onClick={handleCreateMindmap}
-              >
-                新建思维导图
-              </button>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={handleSaveMindmap}
-              >
-                保存 .lmind
-              </button>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={handleOpenMindmap}
-              >
-                打开 .lmind
-              </button>
-            </div>
-
-            <nav className="menu-bar" aria-label="顶部菜单">
-              <details className="menu-dropdown">
-                <summary>文件</summary>
-                <div className="menu-popover">
-                  <button type="button" onClick={handleCreateMindmap}>
-                    新建思维导图
-                  </button>
-                  <button type="button" onClick={handleSaveMindmap}>
-                    保存 .lmind
-                  </button>
-                  <button type="button" onClick={handleOpenMindmap}>
-                    打开 .lmind
-                  </button>
-                </div>
-              </details>
-              <details className="menu-dropdown">
-                <summary>导入导出</summary>
-                <div className="menu-popover">
-                  <button type="button" onClick={handleImportJson}>
-                    导入 JSON
-                  </button>
-                  <button type="button" onClick={handleImportMarkdown}>
-                    导入 Markdown
-                  </button>
-                  <button type="button" onClick={handleImportExcel}>
-                    导入 Excel
-                  </button>
-                  <button type="button" onClick={handleExportMarkdown}>
-                    导出 Markdown
-                  </button>
-                  <button type="button" onClick={handleExportExcel}>
-                    导出 Excel
-                  </button>
-                  <button type="button" onClick={handleExportJson}>
-                    导出 JSON
-                  </button>
-                  <button type="button" onClick={() => handleExportImage('png')}>
-                    导出 PNG
-                  </button>
-                  <button type="button" onClick={() => handleExportImage('jpg')}>
-                    导出 JPG
-                  </button>
-                  {canExportTxt ? (
-                    <button type="button" onClick={handleExportTxt}>
-                      导出 TXT
-                    </button>
-                  ) : null}
-                </div>
-              </details>
-              <details className="menu-dropdown">
-                <summary>编辑</summary>
-                <div className="menu-popover">
-                  <button type="button" onClick={handleUndo}>
-                    撤销
-                  </button>
-                  <button type="button" onClick={handleRedo}>
-                    重做
-                  </button>
-                  <button type="button" onClick={handleCopyNodes}>
-                    复制节点
-                  </button>
-                  <button type="button" onClick={handleCutNodes}>
-                    剪切节点
-                  </button>
-                  <button type="button" onClick={() => handlePasteNodes()}>
-                    粘贴节点
-                  </button>
-                  <button type="button" onClick={handleDuplicateNodeAsSibling}>
-                    复制为同级节点
-                  </button>
-                  <button type="button" onClick={handleAddChild}>
-                    新增子节点
-                  </button>
-                  <button type="button" onClick={handleAddSibling}>
-                    新增同级节点
-                  </button>
-                  <button type="button" onClick={handleDeleteNode}>
-                    删除节点
-                  </button>
-                </div>
-              </details>
-              <details className="menu-dropdown">
-                <summary>视图</summary>
-                <div className="menu-popover">
-                  <button type="button" onClick={handleExpandAll}>
-                    展开全部
-                  </button>
-                  <button type="button" onClick={handleCollapseAll}>
-                    折叠全部
-                  </button>
-                  <button type="button" onClick={handleResetAutoLayout}>
-                    重新自动布局
-                  </button>
-                  <button type="button" onClick={() => setIsFocusMode(true)}>
-                    专注模式
-                  </button>
-                </div>
-              </details>
-              <details className="menu-dropdown">
-                <summary>工具</summary>
-                <div className="menu-popover">
-                  <button type="button" onClick={() => setActiveDrawer('plugins')}>
-                    插件管理
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveDrawer('performance')}
-                  >
-                    性能测试
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsShortcutHelpVisible(true)}
-                  >
-                    快捷键帮助
-                  </button>
-                </div>
-              </details>
-            </nav>
-          </header>
-
-          <section className="node-toolbar" aria-label="节点操作">
-            <span className="toolbar-label">节点</span>
-            <span className="selection-count">已选 {selectedNodeIds.length} 个</span>
-            <button type="button" className="secondary-action" onClick={handleAddChild}>
-              新增子节点
-            </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={handleAddSibling}
-            >
-              新增同级节点
-            </button>
-            <button
-              type="button"
-              className="secondary-action danger-action"
-              onClick={handleDeleteNode}
-            >
-              删除节点
-            </button>
-            <label className="inline-control">
-              子节点类型
-              <select
-                value={childNodeTypeId}
-                onChange={(event) => setChildNodeTypeId(event.target.value)}
-              >
-                <option value="">普通节点</option>
-                {availableNodeTypes.map((nodeType) => (
-                  <option key={nodeType.id} value={nodeType.id}>
-                    {nodeType.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="inline-control">
-              当前节点类型
-              <select
-                value={selectedNode.nodeTypeId ?? ''}
-                onChange={(event) => handleSelectedNodeTypeChange(event.target.value)}
-              >
-                <option value="">普通节点</option>
-                {availableNodeTypes.map((nodeType) => (
-                  <option key={nodeType.id} value={nodeType.id}>
-                    {nodeType.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {message ? (
-              <span className="operation-message" role="status">
-                {message}
-              </span>
-            ) : null}
-          </section>
-        </>
+        <TopMenuBar
+          currentTitle={mindmap.text || '未命名导图'}
+          menus={topMenus}
+          message={message}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+        />
       ) : null}
 
       <div
@@ -2422,52 +2364,42 @@ export function App() {
           .join(' ')}
       >
         {!isFocusMode ? (
-          <aside className="side-toolrail" aria-label="工具栏">
-            {[
-              ['templates', '模板库'],
-              ['node-types', '节点类型'],
-              ['search', '查找替换'],
-              ['performance', '性能测试'],
-              ['plugins', '插件管理'],
-            ].map(([drawer, label]) => (
-              <button
-                key={drawer}
-                type="button"
-                className={activeDrawer === drawer ? 'is-active' : ''}
-                onClick={() =>
-                  setActiveDrawer((currentDrawer) =>
-                    currentDrawer === drawer ? null : (drawer as ToolDrawer),
-                  )
-                }
-              >
-                {label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={isShortcutHelpVisible ? 'is-active' : ''}
-              onClick={() => setIsShortcutHelpVisible(true)}
-            >
-              快捷键
-            </button>
-          </aside>
-        ) : null}
-
-        {!isFocusMode && activeDrawer ? (
-          <aside className="tool-drawer" aria-label={drawerTitle[activeDrawer]}>
-            <div className="drawer-header">
-              <h2>{drawerTitle[activeDrawer]}</h2>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={() => setActiveDrawer(null)}
-              >
-                关闭
-              </button>
-            </div>
+          <LeftResourcePanel
+            activeView={activeDrawer}
+            title={activeDrawer ? drawerTitle[activeDrawer] : '资源'}
+            onViewChange={setActiveDrawer}
+          >
+            {activeDrawer ? (
+              <>
 
             {activeDrawer === 'templates' ? (
               <section className="feature-panel" aria-label="模板库">
+                <label className="resource-search-shell">
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    type="search"
+                    value={templateKeyword}
+                    placeholder="搜索模板或文件"
+                    onChange={(event) => setTemplateKeyword(event.target.value)}
+                  />
+                </label>
+                <div className="resource-file-card">
+                  <div>
+                    <span>当前导图</span>
+                    <strong title={mindmap.text}>{mindmap.text}</strong>
+                  </div>
+                  <div className="resource-file-actions">
+                    <button type="button" onClick={handleCreateMindmap}>
+                      新建
+                    </button>
+                    <button type="button" onClick={() => void handleOpenMindmap()}>
+                      打开
+                    </button>
+                    <button type="button" onClick={handleSaveMindmap}>
+                      保存
+                    </button>
+                  </div>
+                </div>
                 <div className="panel-heading">
                   <h2>保存当前导图为模板</h2>
                   <button
@@ -2514,12 +2446,6 @@ export function App() {
 
                 <div className="template-manager">
                   <div className="compact-form">
-                    <input
-                      type="search"
-                      value={templateKeyword}
-                      placeholder="搜索模板"
-                      onChange={(event) => setTemplateKeyword(event.target.value)}
-                    />
                     <select
                       value={templateSortMode}
                       onChange={(event) =>
@@ -2918,10 +2844,39 @@ export function App() {
               </section>
             ) : null}
 
-          </aside>
+            {activeDrawer === 'settings' ? (
+              <section className="feature-panel" aria-label="界面设置">
+                <div className="panel-heading">
+                  <h2>界面设置</h2>
+                </div>
+                <label className="stacked-control">
+                  <span>画布主题</span>
+                  <select
+                    value={themeId}
+                    onChange={(event) => handleThemeChange(event.target.value)}
+                  >
+                    {availableThemes.map((theme) => (
+                      <option key={theme.id} value={theme.id}>
+                        {theme.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => setIsShortcutHelpVisible(true)}
+                >
+                  查看快捷键
+                </button>
+              </section>
+            ) : null}
+              </>
+            ) : null}
+          </LeftResourcePanel>
         ) : null}
 
-      <div
+        <div
         className={[
           'workspace-layout',
           isRemarkPanelCollapsed || isFocusMode ? 'is-remark-collapsed' : '',
@@ -2946,61 +2901,19 @@ export function App() {
           onContextMenu={handleCanvasContextMenu}
         >
           <div className="canvas-grid" aria-hidden="true" />
-          <div className="canvas-floating-toolbar" aria-label="画布工具">
-            <span className="canvas-zoom-label">
-              {Math.round(canvasView.scale * 100)}%
-            </span>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={() => setCanvasView((view) => zoomCanvasView(view, 'in'))}
-            >
-              放大
-            </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={() => setCanvasView((view) => zoomCanvasView(view, 'out'))}
-            >
-              缩小
-            </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={() => setCanvasView(centerCanvasView())}
-            >
-              一键居中
-            </button>
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={handleResetAutoLayout}
-            >
-              重新自动布局
-            </button>
-            <label className="inline-control">
-              主题
-              <select
-                value={themeId}
-                onChange={(event) => handleThemeChange(event.target.value)}
-              >
-                {availableThemes.map((theme) => (
-                  <option key={theme.id} value={theme.id}>
-                    {theme.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {isFocusMode ? (
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={() => setIsFocusMode(false)}
-              >
-                退出专注模式
-              </button>
-            ) : null}
-          </div>
+          <CanvasControls
+            scale={canvasView.scale}
+            isFocusMode={isFocusMode}
+            onZoomIn={() =>
+              setCanvasView((view) => zoomCanvasView(view, 'in'))
+            }
+            onZoomOut={() =>
+              setCanvasView((view) => zoomCanvasView(view, 'out'))
+            }
+            onCenter={() => setCanvasView(centerCanvasView())}
+            onAutoLayout={handleResetAutoLayout}
+            onExitFocusMode={() => setIsFocusMode(false)}
+          />
           <div
             className="mindmap-pan-layer"
             style={panLayerStyle}
@@ -3035,6 +2948,7 @@ export function App() {
                 <MindmapTree
                   key={layoutNode.id}
                   layoutNode={layoutNode}
+                  isRoot={layoutNode.id === mindmap.id}
                   nodeTypes={availableNodeTypes}
                   selectedNodeId={selectedNodeId}
                   selectedNodeIds={selectedNodeIdSet}
@@ -3071,26 +2985,32 @@ export function App() {
 
         {!isFocusMode ? (
           isRemarkPanelCollapsed ? (
-            <aside className="remark-collapsed-bar" aria-label="备注面板已折叠">
+            <aside className="inspector-collapsed-bar" aria-label="属性面板已收起">
               <button
                 type="button"
-                className="secondary-action"
                 onClick={() => setIsRemarkPanelCollapsed(false)}
-                aria-label="展开备注面板"
+                aria-label="展开属性面板"
               >
-                ‹ 备注
+                ‹ 属性
               </button>
             </aside>
           ) : (
-            <div className="remark-panel-shell">
-              <RemarkPanel
-                selectedNode={selectedNode}
-                mode={remarkMode}
-                onModeChange={setRemarkMode}
-                onRemarkChange={handleRemarkChange}
-                onCollapse={() => setIsRemarkPanelCollapsed(true)}
-              />
-            </div>
+            <RightInspectorPanel
+              selectedNode={selectedNode}
+              selectedCount={selectedNodeIds.length}
+              nodeTypes={availableNodeTypes}
+              childNodeTypeId={childNodeTypeId}
+              themeId={themeId}
+              themes={availableThemes}
+              remarkMode={remarkMode}
+              onChildNodeTypeChange={setChildNodeTypeId}
+              onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+              onThemeChange={handleThemeChange}
+              onRemarkModeChange={setRemarkMode}
+              onRemarkChange={handleRemarkChange}
+              onManageNodeTypes={() => setActiveDrawer('node-types')}
+              onCollapse={() => setIsRemarkPanelCollapsed(true)}
+            />
           )
         ) : null}
       </div>
@@ -3203,20 +3123,66 @@ export function App() {
         >
           {contextMenu.type === 'node' ? (
             <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runContextMenuAction(handleAddChild)}
-              >
-                新增子节点
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runContextMenuAction(handleAddSibling)}
-              >
-                新增同级节点
-              </button>
+              <div className="context-menu-type-action">
+                <span>新增子节点类型</span>
+                <div>
+                  <select
+                    value={childNodeTypeId}
+                    aria-label="新增子节点类型"
+                    onChange={(event) => setChildNodeTypeId(event.target.value)}
+                  >
+                    {nodeTypeCreationOptions.map((option) => (
+                      <option key={option.value || 'default'} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() =>
+                      runContextMenuAction(() =>
+                        handleAddChild(childNodeTypeId),
+                      )
+                    }
+                  >
+                    新增
+                  </button>
+                </div>
+              </div>
+              <div className="context-menu-type-action">
+                <span>新增同级节点类型</span>
+                <div>
+                  <select
+                    value={siblingNodeTypeId}
+                    aria-label="新增同级节点类型"
+                    onChange={(event) => setSiblingNodeTypeId(event.target.value)}
+                  >
+                    {nodeTypeCreationOptions.map((option) => (
+                      <option key={option.value || 'default'} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={selectedNode.id === mindmap.id}
+                    title={
+                      selectedNode.id === mindmap.id
+                        ? '中心主题不能新增同级节点'
+                        : '新增同级节点'
+                    }
+                    onClick={() =>
+                      runContextMenuAction(() =>
+                        handleAddSibling(siblingNodeTypeId),
+                      )
+                    }
+                  >
+                    新增
+                  </button>
+                </div>
+              </div>
               <button
                 type="button"
                 role="menuitem"
@@ -3286,10 +3252,9 @@ export function App() {
                     )
                   }
                 >
-                  <option value="">普通节点</option>
-                  {availableNodeTypes.map((nodeType) => (
-                    <option key={nodeType.id} value={nodeType.id}>
-                      {nodeType.name}
+                  {nodeTypeCreationOptions.map((option) => (
+                    <option key={option.value || 'default'} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
