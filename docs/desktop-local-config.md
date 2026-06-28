@@ -28,7 +28,7 @@ macOS: ~/Library/Application Support/Local Mindmap/plugins
 Linux: ~/.local/share/local-mindmap/plugins
 ```
 
-代码中不硬编码绝对路径。Tauri command 通过 `app.path().app_data_dir()` 解析实际目录。
+代码中不硬编码绝对路径。Tauri command 通过 `app.path().app_data_dir()` 解析实际目录。v1.6 identifier 为 `com.localmindmap.desktop`；Windows 实际根目录为 `%APPDATA%\com.localmindmap.desktop`。旧 `com.localmindmap.app` 目录只用于首次兼容复制。
 
 ## Tauri Commands
 

@@ -1,141 +1,141 @@
-# 插件开发规范
+# 声明式插件开发规范
 
-## 1. 设计目标
+适用范围：v1.6 第一批
 
-插件管理系统基础版用于在纯本地环境中扩展思维导图工具的可用资源。当前版本采用“插件描述文件 + 本地注册表 + 数据驱动扩展”的方式，不执行第三方 JavaScript 代码。
+## 设计边界
 
-目标：
+插件是本地 `.json` 或 `.lmplugin` 数据包。应用只解析声明，不执行插件中的 JavaScript、DLL、Shell、命令或远程代码。插件贡献只能映射到应用内置 `builtin.` handler。
 
-- 支持用户从本地 JSON 文件安装插件。
-- 支持主题包、图标包、节点类型包、导出格式描述和工具入口描述。
-- 支持启用、禁用、卸载和本地持久化。
-- 保持离线运行，不上传用户数据。
-
-## 2. Manifest JSON 结构
+## Manifest 示例
 
 ```json
 {
-  "pluginId": "example-theme-pack",
-  "name": "示例主题包",
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.export.txt.example",
+  "name": "TXT 导出插件",
   "version": "1.0.0",
   "author": "Local Mindmap",
-  "description": "提供额外主题。",
-  "category": "theme",
-  "capabilities": ["themePack"],
+  "description": "提供 TXT 导出能力",
+  "pluginType": "import-export",
+  "capabilities": ["export"],
   "enabled": true,
-  "installedAt": "2026-06-24T10:00:00.000Z",
-  "config": {},
   "contributions": {
-    "themes": [
+    "exporters": [
       {
-        "id": "example-purple",
-        "name": "示例紫色",
-        "canvasBackground": "#fbf7ff",
-        "gridColor": "#eadcff",
-        "nodeBackground": "#f3e8ff",
-        "nodeBorder": "#8b5cf6",
-        "nodeText": "#3b0764",
-        "lineColor": "#b794f4"
-      }
-    ],
-    "icons": [
-      {
-        "value": "🚀",
-        "label": "🚀 启动"
-      }
-    ],
-    "nodeTypes": [
-      {
-        "id": "example-task",
-        "name": "任务节点",
-        "icon": "✅",
-        "shape": "rounded",
-        "backgroundColor": "#eef5ff",
-        "borderColor": "#1f6feb",
-        "textColor": "#14315f",
-        "fontSize": 18,
-        "bold": true,
-        "defaultText": "新任务",
-        "defaultRemark": ""
-      }
-    ],
-    "exportFormats": [
-      {
-        "formatId": "txt",
-        "label": "导出 TXT",
+        "id": "exportText",
+        "label": "TXT 导出",
         "fileName": "mindmap.txt",
-        "handlerId": "builtin-txt"
-      }
-    ],
-    "tools": [
-      {
-        "toolId": "example-tool",
-        "label": "示例工具",
-        "description": "仅作为入口描述，不执行外部代码。"
+        "handler": "builtin.exportText"
       }
     ]
   }
 }
 ```
 
-## 3. 字段说明
+必填字段：
 
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| pluginId | 是 | 插件唯一标识，重复安装时会提示覆盖。 |
-| name | 是 | 插件名称。 |
-| version | 是 | 插件版本。 |
-| author | 否 | 作者名称，缺省为“未知作者”。 |
-| description | 否 | 插件说明。 |
-| category | 是 | 插件分类。 |
-| capabilities | 否 | 插件声明的能力列表。 |
-| enabled | 否 | 是否启用，安装后默认启用。 |
-| installedAt | 否 | 安装时间，缺省为当前时间。 |
-| config | 否 | 插件配置数据，当前基础版仅保存，不执行。 |
-| contributions | 否 | 插件贡献的数据。 |
+- `manifestVersion`：当前为正整数 `1`。
+- `pluginId`：只允许字母、数字、点、下划线和短横线。
+- `name`、`version`、`pluginType`。
+- `capabilities`：字符串数组，可在插件管理中查看。
 
-## 4. 支持的插件分类
+可选字段：
 
-- `import-export`：导入导出相关插件。
-- `theme`：主题包插件。
-- `icon-pack`：图标包插件。
-- `node-type`：节点类型包插件。
-- `tool`：工具入口插件。
+- `author`、`description`、`enabled`、`config`、`contributions`。
+- `installedAt` 由安装流程写入当前时间，不建议插件包自行伪造。
 
-## 5. 支持的能力范围
+## 插件类型
 
-- `exportText`：文本导出能力声明。
-- `themePack`：主题包能力。
-- `iconPack`：图标包能力。
-- `nodeTypePack`：节点类型包能力。
-- `toolPanel`：工具面板入口描述。
+- `theme-pack`
+- `icon-pack`
+- `import-export`
+- `node-type-pack`
+- `template-pack`
+- `tool`
 
-当前只有 `handlerId: "builtin-txt"` 会触发应用内置的安全 TXT 导出 handler。插件文件本身不会提供、加载或执行代码。
+`exporter` 仅作为旧 registry 的兼容读取别名；新导入插件必须使用 `import-export`。
 
-## 6. 当前基础版限制
+支持的 `capabilities`：
 
-- 不执行第三方 JavaScript。
-- 不使用 `eval`。
-- 不使用 `new Function`。
-- 不加载远程脚本。
-- 不联网下载插件。
-- 不支持真正动态代码扩展。
-- 主要支持主题包、图标包、节点类型包，以及应用内置的安全导出 handler。
+- `themes`
+- `icons`
+- `export`
+- `nodeTypes`
+- `templates`
+- `tools`
 
-## 7. 安全原则
+`contributions` 在 v1.6 第一批不是必填字段。用于验证安装与持久化底座的最小合法示例见
+[`docs/examples/persistence-test-plugin.json`](examples/persistence-test-plugin.json)。
 
-- 插件安装来自用户选择的本地 JSON 文件。
-- 插件数据保存在浏览器 localStorage 中。
-- 不上传用户文件。
-- 不上传节点内容、备注内容或操作数据。
-- 不执行未知代码。
-- 禁用插件后，插件贡献的主题、图标、节点类型和导出格式不再进入新选择列表。
+## 贡献点
 
-## 8. 后续扩展方向
+### exporters
 
-- 桌面端插件目录。
-- 插件签名与来源校验。
-- 沙箱执行环境。
-- 明确的插件 API。
-- 更细粒度的插件权限模型。
+每项包含 `id`、`label`、`handler`，可选 `fileName`。第一批只提供 `builtin.exportText`；其他 handler 即使使用 `builtin.` 前缀，也只有应用已实现时才能产生实际功能。
 
+### nodeTypePacks
+
+数组中的每项沿用现有节点类型包结构：
+
+```text
+version + kind + meta + nodeTypes
+```
+
+`kind` 必须为 `local-mindmap-node-type-pack`。启用插件后节点类型进入候选列表，禁用或卸载后隐藏。导图中已使用的节点类型数据不会因此从 `.lmind` 删除。
+
+### templatePacks
+
+数组中的每项沿用现有模板包结构：
+
+```text
+version + kind + meta + templates
+```
+
+`kind` 必须为 `local-mindmap-template-pack`。启用插件后模板进入候选列表，禁用或卸载后隐藏。
+
+主题、图标和旧版 `nodeTypes` 数据贡献仍可兼容读取；新插件优先使用上述 v1 结构。
+
+## 安全校验
+
+manifest 任意层级出现以下字段都会被拒绝：
+
+```text
+script
+eval
+function
+remoteUrl
+code
+command
+shell
+executable
+```
+
+此外：
+
+- exporter handler 必须以 `builtin.` 开头。
+- `capabilities` 不是数组时拒绝安装。
+- `pluginId` 含路径分隔符或 `..` 时拒绝安装。
+- 非法贡献内容会被跳过并提示；非法 manifest 不会导致页面崩溃。
+
+## 存储
+
+桌面端：
+
+```text
+plugins/
+  plugin-registry.json
+  installed/
+    <pluginId>/
+      manifest.json
+```
+
+Web 端继续使用 localStorage fallback，并保留旧 Web JSON 插件数据。插件不会写入安装目录。
+
+安装失败时，插件管理面板会保留最近一次具体错误，包括 JSON 解析、必填字段、类型或 capability 不受支持、非法字段、重复 ID，以及用户目录写入失败。外部插件的 `installedAt` 由应用在安装时写入当前时间。
+
+## 当前限制
+
+- 无插件市场和远程下载。
+- 无任意 JS、DLL、WASM 或脚本执行。
+- 无网络权限、文件系统任意路径权限或当前导图任意读取 API。
+- exporter 菜单尚未完全数据驱动；第一批仅接入内置 TXT handler。

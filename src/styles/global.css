@@ -1729,6 +1729,22 @@ h3 {
   word-break: break-word;
 }
 
+.plugin-install-error {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #f0b8b8;
+  border-radius: 8px;
+  color: #8f2424;
+  background: #fff6f6;
+  overflow-wrap: anywhere;
+}
+
+.plugin-install-error p {
+  margin: 0;
+  line-height: 1.5;
+}
+
 .native-plugin-section {
   background: #fffdf8;
   border-color: #f4d58d;

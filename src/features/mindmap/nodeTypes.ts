@@ -3,9 +3,19 @@ import {
   createNodeTypePack,
   importNodeTypesFromPack,
   normalizeImportedNodeType,
+  parseNodeTypePack,
+  type NodeTypePack,
 } from './nodeTypePacks';
-
-const LOCAL_NODE_TYPES_STORAGE_KEY = 'local-mindmap.node-types.v1';
+import {
+  isDesktopRuntime,
+  isDirectUserJsonFile,
+  listUserFiles,
+  loadUserNodeTypes,
+  readUserJson,
+  saveUserNodeTypes,
+  USER_DATA_PATHS,
+  writeUserJson,
+} from '../storage/userDataStorage';
 
 export const NODE_TYPE_ICONS = [
   { value: '✅', label: '✅ 任务' },
@@ -93,38 +103,88 @@ export function createNodeFromType(nodeType?: MindmapNodeType | null): MindmapNo
   };
 }
 
-export function loadLocalNodeTypes(): MindmapNodeType[] {
-  const rawValue = window.localStorage.getItem(LOCAL_NODE_TYPES_STORAGE_KEY);
-
-  if (!rawValue) {
-    return [];
-  }
-
-  try {
-    const parsedValue: unknown = JSON.parse(rawValue);
-
-    if (!Array.isArray(parsedValue)) {
-      return [];
-    }
-
-    return parsedValue
-      .map(normalizeImportedNodeType)
-      .filter((nodeType): nodeType is MindmapNodeType => Boolean(nodeType));
-  } catch {
-    return [];
-  }
+export function normalizeUserNodeTypes(value: unknown): MindmapNodeType[] {
+  return Array.isArray(value)
+    ? value
+        .map(normalizeImportedNodeType)
+        .filter((nodeType): nodeType is MindmapNodeType => Boolean(nodeType))
+    : [];
 }
 
-export function saveLocalNodeTypes(nodeTypes: MindmapNodeType[]) {
-  window.localStorage.setItem(
-    LOCAL_NODE_TYPES_STORAGE_KEY,
-    JSON.stringify(nodeTypes),
+export async function loadLocalNodeTypes(): Promise<MindmapNodeType[]> {
+  const nodeTypes = normalizeUserNodeTypes(await loadUserNodeTypes());
+  console.info('[user-data][node-types] custom node types normalized', {
+    desktop: isDesktopRuntime(),
+    count: nodeTypes.length,
+    names: nodeTypes.map((nodeType) => nodeType.name),
+  });
+  return nodeTypes;
+}
+
+export async function saveLocalNodeTypes(nodeTypes: MindmapNodeType[]) {
+  await saveUserNodeTypes(nodeTypes);
+}
+
+export async function loadStoredNodeTypePacks(): Promise<NodeTypePack[]> {
+  const files = await listUserFiles(USER_DATA_PATHS.nodeTypePacks);
+  const packFiles = files.filter((path) =>
+    isDirectUserJsonFile(path, USER_DATA_PATHS.nodeTypePacks),
+  );
+  const packs: NodeTypePack[] = [];
+
+  for (const file of packFiles) {
+    const value = await readUserJson<unknown | null>(file, null);
+    if (value === null) {
+      continue;
+    }
+    try {
+      packs.push(parseNodeTypePack(JSON.stringify(value)));
+    } catch (error) {
+      console.error('[user-data][node-types] node type pack ignored', {
+        file,
+        error,
+      });
+    }
+  }
+
+  console.info('[user-data][node-types] packs loaded', {
+    desktop: isDesktopRuntime(),
+    fileCount: packFiles.length,
+    packCount: packs.length,
+  });
+  return packs;
+}
+
+export async function saveImportedNodeTypePack(pack: NodeTypePack) {
+  const safeName =
+    pack.meta.name
+      .trim()
+      .replace(/[^A-Za-z0-9\u4e00-\u9fff._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'node-types';
+  const suffix = new Date().toISOString().replace(/[:.]/g, '-');
+  await writeUserJson(
+    `${USER_DATA_PATHS.nodeTypePacks}/${safeName}-${suffix}.json`,
+    pack,
   );
 }
 
-export function mergeWithLocalNodeTypes(nodeTypes: MindmapNodeType[]) {
+export async function loadAllUserNodeTypes() {
+  let nodeTypes = await loadLocalNodeTypes();
+  const packs = await loadStoredNodeTypePacks();
+  for (const pack of packs) {
+    nodeTypes = importNodeTypesFromPack(nodeTypes, pack).nodeTypes;
+  }
+  console.info('[user-data][node-types] final user node types', {
+    desktop: isDesktopRuntime(),
+    count: nodeTypes.length,
+    names: nodeTypes.map((nodeType) => nodeType.name),
+  });
+  return nodeTypes;
+}
+
+export async function mergeWithLocalNodeTypes(nodeTypes: MindmapNodeType[]) {
   return importNodeTypesFromPack(
     nodeTypes,
-    createNodeTypePack(loadLocalNodeTypes()),
+    createNodeTypePack(await loadAllUserNodeTypes()),
   ).nodeTypes;
 }

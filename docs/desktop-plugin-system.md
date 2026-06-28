@@ -1,119 +1,57 @@
-# 桌面 Native 插件系统
+# 桌面插件与用户目录
 
-更新日期：2026-06-26
+更新日期：2026-06-27
 
-适用版本：v1.4.0
+适用版本：v1.6 第一批
 
-## 当前范围
+## 当前定位
 
-v1.4 只实现桌面插件目录和 Native manifest 管理，不加载 DLL，不执行 DLL，不执行任何第三方代码。
+桌面端与 Web 端共享同一套声明式 JSON 插件模型。桌面端负责把 manifest 和 registry 写入 Tauri 用户数据目录；Web 端使用 localStorage fallback。
 
-Native 插件属于本机扩展能力。未来版本可能加载本地二进制文件。请只安装可信来源插件。
+当前不加载 DLL，不执行 JavaScript、Shell、命令或其他插件代码，也不支持远程插件下载。
 
-## 插件目录
-
-优先使用 Tauri / Rust 推荐的应用数据目录，并在其下创建 `plugins` 子目录。目录不存在时自动创建。
-
-- Windows：`%APPDATA%/Local Mindmap/plugins`
-- macOS：`~/Library/Application Support/Local Mindmap/plugins`
-- Linux：`~/.local/share/local-mindmap/plugins`
-
-每个插件使用独立子目录：
-
-```text
-plugins/
-  plugin-id/
-    manifest.json
-    plugin.dll
-```
-
-v1.4 只读取 `manifest.json`。`plugin.dll` 可以作为未来结构占位，但不会被复制、加载或执行。
-
-## manifest.json 示例
-
-```json
-{
-  "manifestVersion": 1,
-  "pluginId": "my-native-plugin",
-  "name": "Native 插件",
-  "version": "1.0.0",
-  "author": "作者",
-  "description": "桌面端 Native 插件示例",
-  "pluginType": "native",
-  "platform": "windows",
-  "arch": "x64",
-  "entry": "my-native-plugin.dll",
-  "capabilities": ["exportText"],
-  "enabled": false,
-  "abi": {
-    "version": 1,
-    "exports": {
-      "info": "lm_plugin_info",
-      "execute": "lm_plugin_execute",
-      "free": "lm_plugin_free"
-    }
-  }
-}
-```
-
-## 校验规则
-
-- `manifestVersion` 必须存在且为正整数。
-- `pluginId` 必填，只允许字母、数字、点、下划线和短横线。
-- `name` 必填。
-- `version` 必填。
-- `pluginType` 必须为 `native`。
-- `entry` 必填。
-- `enabled` 缺省为 `false`。
-- `capabilities` 必须来自白名单：`exportText`、`themePack`、`iconPack`、`nodeTypePack`、`toolPanel`。
-- `abi` 只作为声明，不执行。
-- 顶层禁止 `code`、`script`、`eval`、`function`、`remoteUrl` 字段。
-- 非法 manifest 只进入错误列表，不导致应用崩溃。
-
-## Tauri commands
-
-- `get_desktop_plugin_dir`：返回当前桌面插件目录。
-- `list_desktop_plugins`：扫描插件目录，返回合法插件列表和非法 manifest 错误列表。
-- `install_desktop_plugin_manifest`：安装用户选择的 `manifest.json` 到 `plugins/plugin-id/manifest.json`。
-- `set_desktop_plugin_enabled`：写入 `desktop-plugin-registry.json`，不直接改用户原始 manifest。
-- `uninstall_desktop_plugin`：删除对应插件目录，并移除注册表状态。
-
-## 与桌面配置目录的关系
-
-v1.4 第二批新增桌面配置目录 `config`，但插件 manifest 仍保存在 `plugins` 目录。
+## 当前目录
 
 ```text
 app data dir/
-  config/
-    app-settings.json   # 后续应用设置 registry 草案
   plugins/
-    desktop-plugin-registry.json
-    plugin-id/
-      manifest.json
-      plugin.dll        # v1.4 不复制、不加载、不执行
+    plugin-registry.json
+    installed/
+      <pluginId>/
+        manifest.json
 ```
 
-后续 `config/app-settings.json` 可以通过 `pluginRegistryPath` 引用 `../plugins/desktop-plugin-registry.json`，但 v1.4 仍以插件目录中的 registry 为实际启用状态来源。
+用户数据根由 Tauri `app_data_dir` 按平台和应用标识解析。v1.6 identifier 为 `com.localmindmap.desktop`，Windows 根目录为 `%APPDATA%\com.localmindmap.desktop`。插件管理面板显示实际路径。
+
+旧 identifier `com.localmindmap.app` 仅作为迁移来源保留：首次启动新版本时复制旧数据，不删除旧目录、不覆盖新目录已有文件。v1.6 发布后不得在没有新迁移方案的情况下再次修改 identifier。
+
+## Tauri commands
+
+- `get_user_data_dir`
+- `ensure_user_data_dirs`
+- `read_user_json`
+- `write_user_json`
+- `list_user_files`
+- `install_plugin_to_user_dir`
+- `uninstall_plugin_from_user_dir`
+- `open_user_data_dir`
+
+所有文件参数都是用户数据根下的相对路径。绝对路径、`.`、`..`、路径穿越和符号链接逃逸会被拒绝。
+
+## v1.4 Native manifest 兼容说明
+
+仓库仍保留 v1.4 的 `get_desktop_plugin_dir`、`list_desktop_plugins`、`install_desktop_plugin_manifest`、`set_desktop_plugin_enabled`、`uninstall_desktop_plugin` 命令和前端兼容模块，避免直接删除旧代码。
+
+这些 legacy commands 不在 v1.6 插件管理 UI 中使用，也不会加载或执行 `entry` 指向的二进制文件。v1.6 新安装流程只接受声明式 manifest，并写入 `plugins/installed/`。
+
+后续若决定彻底移除 legacy Native manifest 壳层，应单独做迁移和兼容评审；不得在没有签名、权限、隔离和回滚设计的情况下启用二进制执行。
 
 ## 安全边界
 
-v1.4 明确禁止：
-
-- 加载 DLL。
-- 调用 DLL。
-- 执行插件代码。
-- 使用 `eval` 或 `new Function`。
-- 动态 import 用户文件。
-- 从远程 URL 安装插件。
-- 插件读取当前导图数据。
-- 插件访问任意本地目录。
-
-## ABI 草案
-
-当前 ABI 只作为 manifest 声明保存：
-
-- `lm_plugin_info`：未来用于读取插件元信息。
-- `lm_plugin_execute`：未来用于执行受控能力。
-- `lm_plugin_free`：未来用于释放插件返回内存。
-
-v1.5 之前不绑定 ABI、不加载符号、不调用任何 DLL 函数。
+- 不使用 `eval` 或 `new Function`。
+- 不动态 import 用户插件文件。
+- 不加载 DLL。
+- 不执行远程 URL 内容。
+- handler 只允许 `builtin.` 命名空间。
+- 插件不能获得任意路径读写能力。
+- 非法 manifest 返回清晰错误，不影响应用启动。

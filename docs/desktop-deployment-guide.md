@@ -100,7 +100,9 @@ src-tauri/target/release/bundle/nsis/Local Mindmap_1.4.0_x64-setup.exe
 注意事项：
 
 - 构建过程中 Tauri 下载了 WiX 和 NSIS 打包工具。公司内网构建机需要预安装、预缓存或配置可信内网镜像。
-- 当前 `identifier` 为 `com.localmindmap.app`，Tauri 提示该值以 `.app` 结尾在 macOS 上不推荐，后续跨平台打包前应评估是否调整。
+- v1.6 发布前已将 `identifier` 固定为 `com.localmindmap.desktop`，不再使用以 `.app` 结尾的旧值。
+- identifier 变更会把 Windows 用户目录调整为 `%APPDATA%\com.localmindmap.desktop`；应用首次启动时从旧目录 `%APPDATA%\com.localmindmap.app` 复制数据，源目录保留。
+- identifier 同时影响安装包身份和持久化路径，v1.6 发布后不得无迁移方案随意修改。
 - 上述产物位于 `src-tauri/target/`，属于构建产物，不提交到 Git。
 
 ### v1.4.0 发布构建要求

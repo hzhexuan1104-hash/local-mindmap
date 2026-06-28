@@ -1,6 +1,6 @@
 # 本地化思维导图工具
 
-一个纯本地运行的思维导图工具，使用 React + TypeScript + Vite + Tauri 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前阶段：v1.5 开发中（第二批高质感极简 UI 视觉精修）。
+一个纯本地运行的思维导图工具，使用 React + TypeScript + Vite + Tauri 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前阶段：v1.6 第一批（用户目录分离与声明式插件体系基础版）。
 
 ## 在线预览
 
@@ -17,7 +17,7 @@
 - Markdown 导入导出增强：使用 `LMIND_NODE` 注释区分真实节点标题和备注中的 Markdown 标题。
 - Excel 导入增强：支持列映射配置，可选择节点层级、节点文本、节点备注、节点类型、创建顺序列。
 - 查找替换：支持节点文本、备注内容、全部范围的查找、跳转、单次替换、全部替换。
-- 模板管理：内置官方默认模板库，自定义模板保存到 localStorage，支持分类、备注、缩略图、搜索、排序、筛选、删除和从模板新建。
+- 模板管理：内置官方默认模板库；桌面端自定义模板保存到用户目录，Web 端使用 localStorage fallback。
 - 自定义节点类型：支持图标、形状、颜色、字号、加粗、默认文本、默认备注。
 - 共享包：支持节点类型包和模板包导入 / 导出，用于分享本地自定义节点类型和自定义模板。
 - 主题系统：内置默认蓝、清新绿、活力橙、暗色黑、简洁灰。
@@ -40,6 +40,7 @@
 - v1.4.0：桌面端本地应用化、Native 插件 manifest 管理底座、桌面配置目录和 Windows 安装包构建准备。
 - v1.5 第一批：顶部菜单收纳、轻量左侧资源区、右侧属性检查器和右下角画布控制条，扩大画布主视觉区域。
 - v1.5 第二批：以参考 UI 图为视觉方向，统一浅色视觉系统，精修顶部、左右面板、画布、节点、菜单和控件质感。
+- v1.6 第一批：安装目录与用户目录分离；统一桌面 / Web 用户数据存储；声明式 JSON 插件安装、校验、启停、卸载和贡献点基础版。
 
 ## v1.5 第一批：画布优先的极简 UI 基础结构
 
@@ -59,6 +60,47 @@
 - 画布改为暖白纸感与极浅点阵，节点使用弱边框、柔和阴影和低饱和主题混色；中心主题获得独立视觉层级。
 - 顶部菜单、右键菜单、悬浮控制条、按钮、输入框、下拉框、弹窗统一为相同圆角、阴影和 hover / focus 语言。
 - 本批不新增业务功能，不修改 `.lmind`、节点类型包或模板包格式，不新增 npm 依赖。
+
+## v1.6 第一批：用户目录与插件体系
+
+- 桌面端使用 Tauri `app_data_dir` 作为用户数据根目录，安装目录仅保存程序本体。
+- v1.6 发布前将 Tauri identifier 固定为 `com.localmindmap.desktop`；Windows 用户数据根为 `%APPDATA%\com.localmindmap.desktop`。
+- 首次使用新 identifier 时会从同级旧目录 `com.localmindmap.app` 复制已有数据；不删除旧目录、不覆盖新目录已有文件。
+- 自定义节点类型、节点类型包、自定义模板、模板包、插件 registry、插件 manifest、配置、备份目录均位于用户数据目录。
+- Web 端继续使用原有 localStorage key，保留 Web JSON 插件和既有用户数据。
+- 首次桌面启动会备份可识别的旧 localStorage 数据，再迁移到用户目录；迁移成功写入 flag，不删除旧数据。
+- 插件格式支持 `.json` 和 `.lmplugin`，只解析声明式 manifest；贡献点支持 exporters、nodeTypePacks、templatePacks，以及兼容的主题 / 图标数据。
+- 插件 handler 只允许 `builtin.` 前缀；拒绝 `script`、`eval`、`function`、`remoteUrl`、`code`、`command`、`shell`、`executable`。
+- 新导入插件统一使用 `theme-pack`、`icon-pack`、`import-export`、`node-type-pack`、`template-pack` 或 `tool`；支持的 capabilities 为 `themes`、`icons`、`export`、`nodeTypes`、`templates`、`tools`。
+- 可直接导入的最小示例见 `docs/examples/persistence-test-plugin.json`；具体安装错误会保留在插件管理面板。
+- 当前不支持插件市场、远程下载、任意 JavaScript、DLL 或其他可执行代码。
+- `.lmind` 基础结构和 v1.5 UI 主布局保持不变；查找替换 bug、备注查找高亮和写作模块顺延。
+
+桌面用户目录结构：
+
+```text
+com.localmindmap.desktop/
+  mindmaps/
+  autosave/
+  node-types/
+    custom-node-types.json
+    packs/
+  templates/
+    custom-templates.json
+    packs/
+  plugins/
+    plugin-registry.json
+    installed/<pluginId>/manifest.json
+  config/
+    app-settings.json
+    recent-files.json
+    user-preferences.json
+    migration-v1.6.json
+  backups/
+```
+
+实际路径由 Tauri 按当前平台和应用标识解析，可在插件管理面板中查看、复制和打开。
+identifier 会参与安装包身份和用户目录解析，v1.6 发布后不得在没有迁移方案的情况下修改。
 
 ## 当前完成度
 

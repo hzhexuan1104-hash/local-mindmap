@@ -52,18 +52,6 @@ import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
 import { exportMindmapTxt } from '../features/mindmap/exportTxt';
 import { downloadTextFile, selectLocalFile } from '../features/mindmap/fileUtils';
 import {
-  getDesktopPluginDir,
-  installDesktopPluginManifest,
-  isTauriDesktopRuntime,
-  listDesktopPlugins,
-  normalizeNativeDesktopPluginManifest,
-  readLocalNativeManifestText,
-  setDesktopPluginEnabled,
-  uninstallDesktopPlugin,
-  type DesktopPluginManifestError,
-  type NativeDesktopPluginManifest,
-} from '../features/mindmap/desktopPlugins';
-import {
   createHistoryState,
   pushHistory,
   redoHistory,
@@ -91,15 +79,16 @@ import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
   findNodeTypeById,
-  loadLocalNodeTypes,
-  mergeWithLocalNodeTypes,
+  loadAllUserNodeTypes,
   NODE_TYPE_ICONS,
   NODE_TYPE_SHAPES,
+  saveImportedNodeTypePack,
   saveLocalNodeTypes,
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import { updateNodePositionById } from '../features/mindmap/nodePositions';
 import {
+  createNodeTypePack,
   exportNodeTypesToPack,
   importNodeTypesFromPack,
   parseNodeTypePack,
@@ -112,14 +101,16 @@ import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
   getPluginNodeTypes,
+  getPluginTemplates,
   getPluginThemes,
-  installPluginManifest,
+  installPlugin,
   isTxtExportPluginEnabled,
   loadPluginRegistry,
   readLocalPluginManifest,
   savePluginRegistry,
   setPluginEnabled,
   uninstallPlugin,
+  PluginManifestError,
   type PluginManifest,
 } from '../features/mindmap/plugins';
 import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
@@ -137,13 +128,12 @@ import {
   resolveNodeClickSelection,
 } from '../features/mindmap/selection';
 import {
-  addMindmapTemplate,
   cloneTemplateProject,
   createTemplateFromMindmap,
-  deleteMindmapTemplate,
   filterAndSortTemplates,
   getTemplateCategories,
-  loadMindmapTemplates,
+  loadAllUserTemplates,
+  saveImportedTemplatePack,
   saveMindmapTemplates,
   type MindmapTemplate,
   type TemplateSortMode,
@@ -164,6 +154,15 @@ import {
   getNodeTypeCreationOptions,
   type TypedNodeCreationResult,
 } from '../features/mindmap/typedNodeCreation';
+import {
+  ensureUserDataDirs,
+  getUserDataDir,
+  installPluginToUserDir,
+  isDesktopRuntime,
+  migrateLegacyLocalStorageToUserData,
+  openUserDataDir,
+  uninstallPluginFromUserDir,
+} from '../features/storage/userDataStorage';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -187,7 +186,11 @@ const setAllNodesCollapsed = (
 });
 
 const getErrorMessage = (error: unknown, fallback: string) =>
-  error instanceof Error && error.message ? error.message : fallback;
+  typeof error === 'string' && error.trim()
+    ? error
+    : error instanceof Error && error.message
+      ? error.message
+      : fallback;
 
 const updateNodeById = (
   node: MindmapNode,
@@ -467,6 +470,7 @@ function MindmapTree({
 export function App() {
   const [mindmap, setMindmap] = useState<MindmapNode>(createCenterNode);
   const [nodeTypes, setNodeTypes] = useState<MindmapNodeType[]>([]);
+  const [userNodeTypes, setUserNodeTypes] = useState<MindmapNodeType[]>([]);
   const [themeId, setThemeId] = useState('default-blue');
   const [history, setHistory] = useState<HistoryState>(createHistoryState);
   const [canvasView, setCanvasView] =
@@ -497,15 +501,9 @@ export function App() {
     createEmptyNodeTypeDraft,
   );
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
-  const [desktopPluginDir, setDesktopPluginDir] = useState('');
-  const [desktopPlugins, setDesktopPlugins] = useState<
-    NativeDesktopPluginManifest[]
-  >([]);
-  const [invalidDesktopPlugins, setInvalidDesktopPlugins] = useState<
-    DesktopPluginManifestError[]
-  >([]);
-  const [isDesktopPluginLoading, setIsDesktopPluginLoading] = useState(false);
-  const [isDesktopPluginAvailable] = useState(isTauriDesktopRuntime);
+  const [lastPluginInstallError, setLastPluginInstallError] = useState('');
+  const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
+  const [isDesktopApp] = useState(isDesktopRuntime);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
@@ -604,6 +602,14 @@ export function App() {
     () => isTxtExportPluginEnabled(plugins),
     [plugins],
   );
+  const pluginTemplates = useMemo(
+    () => getPluginTemplates(plugins),
+    [plugins],
+  );
+  const availableOfficialTemplates = useMemo(
+    () => [...OFFICIAL_TEMPLATES, ...pluginTemplates],
+    [pluginTemplates],
+  );
   const currentProject = useMemo(
     () => ({ rootNode: mindmap, nodeTypes, themeId }),
     [mindmap, nodeTypes, themeId],
@@ -644,17 +650,22 @@ export function App() {
   );
   const activeMatch = searchMatches[activeMatchIndex] ?? null;
   const templateCategories = useMemo(
-    () => getTemplateCategories([...OFFICIAL_TEMPLATES, ...templates]),
-    [templates],
+    () => getTemplateCategories([...availableOfficialTemplates, ...templates]),
+    [availableOfficialTemplates, templates],
   );
   const visibleOfficialTemplates = useMemo(
     () =>
-      filterAndSortTemplates(OFFICIAL_TEMPLATES, {
+      filterAndSortTemplates(availableOfficialTemplates, {
         keyword: templateKeyword,
         category: templateCategoryFilter,
         sortMode: templateSortMode,
       }),
-    [templateCategoryFilter, templateKeyword, templateSortMode],
+    [
+      availableOfficialTemplates,
+      templateCategoryFilter,
+      templateKeyword,
+      templateSortMode,
+    ],
   );
   const visibleCustomTemplates = useMemo(
     () =>
@@ -675,11 +686,109 @@ export function App() {
   } as const;
 
   useEffect(() => {
-    setTemplates(loadMindmapTemplates());
-    setPlugins(loadPluginRegistry());
-    setNodeTypes(loadLocalNodeTypes());
+    let isActive = true;
+
+    void (async () => {
+      console.info('[user-data] runtime detected', {
+        desktop: isDesktopApp,
+      });
+      const migration = await migrateLegacyLocalStorageToUserData();
+
+      try {
+        await ensureUserDataDirs();
+        const [
+          templatesResult,
+          pluginsResult,
+          nodeTypesResult,
+          userDataDirResult,
+        ] = await Promise.allSettled([
+            loadAllUserTemplates(),
+            loadPluginRegistry(),
+            loadAllUserNodeTypes(),
+            getUserDataDir(),
+          ]);
+        let pluginStorageSyncFailed = false;
+
+        if (isDesktopApp && pluginsResult.status === 'fulfilled') {
+          try {
+            await Promise.all(
+              pluginsResult.value
+                .filter((plugin) => !plugin.builtIn)
+                .map((plugin) => installPluginToUserDir(plugin, true)),
+            );
+            await savePluginRegistry(pluginsResult.value);
+          } catch {
+            pluginStorageSyncFailed = true;
+          }
+        }
+
+        if (!isActive) {
+          return;
+        }
+
+        const loadFailures: string[] = [];
+        if (templatesResult.status === 'fulfilled') {
+          setTemplates(templatesResult.value);
+        } else {
+          loadFailures.push('templates');
+          console.error(
+            '[user-data][templates] startup load failed',
+            templatesResult.reason,
+          );
+        }
+        if (pluginsResult.status === 'fulfilled') {
+          setPlugins(pluginsResult.value);
+        } else {
+          loadFailures.push('plugins');
+          console.error(
+            '[user-data][plugins] startup load failed',
+            pluginsResult.reason,
+          );
+        }
+        if (nodeTypesResult.status === 'fulfilled') {
+          setNodeTypes(nodeTypesResult.value);
+          setUserNodeTypes(nodeTypesResult.value);
+          console.info('[user-data][node-types] applied to UI state', {
+            count: nodeTypesResult.value.length,
+            names: nodeTypesResult.value.map((nodeType) => nodeType.name),
+          });
+        } else {
+          loadFailures.push('nodeTypes');
+          console.error(
+            '[user-data][node-types] startup load failed',
+            nodeTypesResult.reason,
+          );
+        }
+        if (userDataDirResult.status === 'fulfilled') {
+          setUserDataDir(userDataDirResult.value);
+        } else {
+          loadFailures.push('userDataDir');
+          console.error(
+            '[user-data] user data directory lookup failed',
+            userDataDirResult.reason,
+          );
+        }
+
+        if (migration.migrated) {
+          showMessage(`已迁移 ${migration.migratedKeys.length} 项旧版用户数据`);
+        } else if (migration.error) {
+          console.error('[user-data] localStorage migration failed', migration.error);
+          showMessage('用户数据迁移失败，未读取旧 localStorage');
+        } else if (pluginStorageSyncFailed) {
+          showMessage('插件用户目录同步失败，已保留当前可用状态');
+        } else if (loadFailures.length > 0) {
+          showMessage(`用户数据读取失败：${loadFailures.join(', ')}`);
+        }
+      } catch (error) {
+        if (isActive) {
+          console.error('[user-data] startup initialization failed', error);
+          showMessage(getErrorMessage(error, '用户数据目录初始化失败，应用仍可继续使用'));
+        }
+      }
+    })();
 
     return () => {
+      isActive = false;
       window.clearTimeout(messageTimerRef.current);
     };
   }, []);
@@ -776,41 +885,6 @@ export function App() {
     messageTimerRef.current = window.setTimeout(() => setMessage(''), 2400);
   };
 
-  const refreshDesktopPlugins = async (showSuccessMessage = false) => {
-    if (!isDesktopPluginAvailable) {
-      return;
-    }
-
-    setIsDesktopPluginLoading(true);
-
-    try {
-      const [pluginDir, result] = await Promise.all([
-        getDesktopPluginDir(),
-        listDesktopPlugins(),
-      ]);
-
-      setDesktopPluginDir(pluginDir || result.pluginDir);
-      setDesktopPlugins(result.plugins);
-      setInvalidDesktopPlugins(result.invalidPlugins);
-
-      if (showSuccessMessage) {
-        showMessage(
-          `已扫描 ${result.plugins.length} 个 Native 插件，${result.invalidPlugins.length} 个 manifest 无效`,
-        );
-      }
-    } catch (error) {
-      showMessage(getErrorMessage(error, '桌面插件目录扫描失败'));
-    } finally {
-      setIsDesktopPluginLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isDesktopPluginAvailable) {
-      void refreshDesktopPlugins();
-    }
-  }, [isDesktopPluginAvailable]);
-
   const recordHistory = () => {
     setHistory((currentHistory) => pushHistory(currentHistory, currentProject));
   };
@@ -900,7 +974,12 @@ export function App() {
         : 'default-blue';
 
     setMindmap(project.rootNode);
-    setNodeTypes(mergeWithLocalNodeTypes(project.nodeTypes));
+    setNodeTypes(
+      importNodeTypesFromPack(
+        project.nodeTypes,
+        createNodeTypePack(userNodeTypes),
+      ).nodeTypes,
+    );
     setThemeId(nextThemeId);
     if (project.themeId && project.themeId !== nextThemeId) {
       showMessage('文件使用的插件主题未启用，已切回默认主题');
@@ -946,7 +1025,7 @@ export function App() {
   const handleCreateMindmap = () => {
     recordHistory();
     setMindmap(createCenterNode());
-    setNodeTypes(loadLocalNodeTypes());
+    setNodeTypes(userNodeTypes);
     setThemeId('default-blue');
     setSelectedNodeId(null);
     setSelectedNodeIds([]);
@@ -1028,7 +1107,11 @@ export function App() {
       if (result.importedCount > 0) {
         recordHistory();
         setNodeTypes(result.nodeTypes);
-        saveLocalNodeTypes(result.nodeTypes);
+        setUserNodeTypes(result.nodeTypes);
+        await Promise.all([
+          saveLocalNodeTypes(result.nodeTypes),
+          saveImportedNodeTypePack(pack),
+        ]);
       }
 
       const nameConflictText =
@@ -1058,101 +1141,81 @@ export function App() {
         (plugin) => plugin.pluginId === manifest.pluginId,
       );
 
-      if (exists && !window.confirm('插件已存在，是否覆盖安装？')) {
+      if (exists && !window.confirm('插件已安装，是否覆盖安装？')) {
+        const duplicateMessage = `插件已安装：${manifest.pluginId}`;
+        setLastPluginInstallError(duplicateMessage);
+        showMessage(duplicateMessage);
         return;
       }
 
-      const nextPlugins = installPluginManifest(plugins, manifest);
+      const {
+        plugins: nextPlugins,
+        manifest: installedManifest,
+      } = await installPlugin(plugins, manifest, exists);
       setPlugins(nextPlugins);
-      savePluginRegistry(nextPlugins);
-      showMessage('插件安装成功');
-    } catch {
-      showMessage('插件格式不正确');
+      setLastPluginInstallError('');
+      showMessage(
+        installedManifest.validationWarnings?.length
+          ? `插件安装成功；${installedManifest.validationWarnings.join(' ')}`
+          : '插件安装成功',
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof PluginManifestError
+          ? error.message
+          : getErrorMessage(error, '插件安装失败：未知错误');
+      setLastPluginInstallError(errorMessage);
+      showMessage(errorMessage);
     }
   };
 
-  const handleTogglePlugin = (pluginId: string, enabled: boolean) => {
+  const handleTogglePlugin = async (pluginId: string, enabled: boolean) => {
     const nextPlugins = setPluginEnabled(plugins, pluginId, enabled);
-    setPlugins(nextPlugins);
-    savePluginRegistry(nextPlugins);
-    showMessage(enabled ? '插件已启用' : '插件已禁用');
+    try {
+      await savePluginRegistry(nextPlugins);
+      setPlugins(nextPlugins);
+      showMessage(enabled ? '插件已启用' : '插件已禁用');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '插件状态保存失败'));
+    }
   };
 
-  const handleUninstallPlugin = (pluginId: string) => {
+  const handleUninstallPlugin = async (pluginId: string) => {
+    const targetPlugin = plugins.find((plugin) => plugin.pluginId === pluginId);
+    if (targetPlugin?.builtIn) {
+      showMessage('内置插件不能卸载，可选择禁用');
+      return;
+    }
     if (!window.confirm('确定要卸载这个插件吗？')) {
       return;
     }
 
     const nextPlugins = uninstallPlugin(plugins, pluginId);
-    setPlugins(nextPlugins);
-    savePluginRegistry(nextPlugins);
-    showMessage('插件已卸载');
-  };
-
-  const handleInstallDesktopPlugin = async () => {
-    if (!isDesktopPluginAvailable) {
-      showMessage('桌面插件仅在 Tauri 桌面端可用');
-      return;
-    }
-
     try {
-      const rawManifest = await readLocalNativeManifestText();
-
-      if (!rawManifest) {
-        return;
-      }
-
-      const manifest = normalizeNativeDesktopPluginManifest(
-        JSON.parse(rawManifest),
-      );
-
-      if (!manifest) {
-        throw new Error('Invalid native plugin manifest.');
-      }
-
-      const exists = desktopPlugins.some(
-        (plugin) => plugin.pluginId === manifest.pluginId,
-      );
-
-      if (
-        exists &&
-        !window.confirm('桌面 Native 插件已存在，是否覆盖安装 manifest？')
-      ) {
-        return;
-      }
-
-      await installDesktopPluginManifest(rawManifest, exists);
-      await refreshDesktopPlugins();
-      showMessage('桌面 Native 插件 manifest 已安装，默认禁用');
+      await uninstallPluginFromUserDir(pluginId);
+      await savePluginRegistry(nextPlugins);
+      setPlugins(nextPlugins);
+      showMessage('插件已卸载');
     } catch (error) {
-      showMessage(getErrorMessage(error, '桌面 Native 插件 manifest 格式不正确'));
+      showMessage(getErrorMessage(error, '插件卸载失败'));
     }
   };
 
-  const handleToggleDesktopPlugin = async (
-    pluginId: string,
-    enabled: boolean,
-  ) => {
+  const handleCopyUserDataDir = async () => {
     try {
-      await setDesktopPluginEnabled(pluginId, enabled);
-      await refreshDesktopPlugins();
-      showMessage(enabled ? '桌面 Native 插件已启用' : '桌面 Native 插件已禁用');
-    } catch (error) {
-      showMessage(getErrorMessage(error, '桌面 Native 插件状态更新失败'));
+      await navigator.clipboard.writeText(userDataDir);
+      showMessage('用户数据目录路径已复制');
+    } catch {
+      showMessage('复制失败，请手动选择路径');
     }
   };
 
-  const handleUninstallDesktopPlugin = async (pluginId: string) => {
-    if (!window.confirm('确定要卸载这个桌面 Native 插件 manifest 吗？')) {
-      return;
-    }
-
+  const handleOpenUserDataDir = async () => {
     try {
-      await uninstallDesktopPlugin(pluginId);
-      await refreshDesktopPlugins();
-      showMessage('桌面 Native 插件已卸载');
+      await openUserDataDir();
+      showMessage('已打开用户数据目录');
     } catch (error) {
-      showMessage(getErrorMessage(error, '桌面 Native 插件卸载失败'));
+      showMessage(getErrorMessage(error, '无法打开用户数据目录'));
     }
   };
 
@@ -1590,7 +1653,7 @@ export function App() {
     showMessage(`已替换 ${searchMatches.length} 处内容`);
   };
 
-  const handleSaveTemplate = () => {
+  const handleSaveTemplate = async () => {
     const template = createTemplateFromMindmap(
       templateName || mindmap.text,
       templateCategory,
@@ -1599,10 +1662,16 @@ export function App() {
       nodeTypes,
       themeId,
     );
-    setTemplates(addMindmapTemplate(template));
-    setTemplateName('');
-    setTemplateDescription('');
-    showMessage('已保存为模板');
+    const nextTemplates = [template, ...templates];
+    try {
+      await saveMindmapTemplates(nextTemplates);
+      setTemplates(nextTemplates);
+      setTemplateName('');
+      setTemplateDescription('');
+      showMessage('已保存为模板');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '模板保存失败'));
+    }
   };
 
   const handleExportTemplatePack = () => {
@@ -1641,7 +1710,10 @@ export function App() {
 
       if (result.importedCount > 0) {
         setTemplates(result.templates);
-        saveMindmapTemplates(result.templates);
+        await Promise.all([
+          saveMindmapTemplates(result.templates),
+          saveImportedTemplatePack(pack),
+        ]);
       }
 
       const nameConflictText =
@@ -1661,9 +1733,17 @@ export function App() {
     showMessage('已从模板新建思维导图');
   };
 
-  const handleDeleteTemplate = (templateId: string) => {
-    setTemplates(deleteMindmapTemplate(templateId));
-    showMessage('已删除模板');
+  const handleDeleteTemplate = async (templateId: string) => {
+    const nextTemplates = templates.filter(
+      (template) => template.id !== templateId,
+    );
+    try {
+      await saveMindmapTemplates(nextTemplates);
+      setTemplates(nextTemplates);
+      showMessage('已删除模板');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '模板删除失败'));
+    }
   };
 
   const handleGeneratePerformanceMindmap = (
@@ -1677,7 +1757,7 @@ export function App() {
     showMessage(`已生成 ${result.nodeCount} 节点性能测试导图`);
   };
 
-  const handleCreateNodeType = () => {
+  const handleCreateNodeType = async () => {
     const nodeType = createMindmapNodeType(nodeTypeDraft);
 
     if (!nodeType) {
@@ -1686,13 +1766,16 @@ export function App() {
     }
 
     recordHistory();
-    setNodeTypes((currentNodeTypes) => {
-      const nextNodeTypes = [...currentNodeTypes, nodeType];
-      saveLocalNodeTypes(nextNodeTypes);
-      return nextNodeTypes;
-    });
-    setNodeTypeDraft(createEmptyNodeTypeDraft());
-    showMessage('已创建节点类型');
+    const nextNodeTypes = [...nodeTypes, nodeType];
+    try {
+      await saveLocalNodeTypes(nextNodeTypes);
+      setNodeTypes(nextNodeTypes);
+      setUserNodeTypes(nextNodeTypes);
+      setNodeTypeDraft(createEmptyNodeTypeDraft());
+      showMessage('已创建节点类型');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '节点类型保存失败'));
+    }
   };
 
   const handleSelectedNodeTypeChange = (nodeTypeId: string) => {
@@ -3027,23 +3110,17 @@ export function App() {
       {isPluginManagerVisible ? (
         <PluginManagerPanel
           plugins={plugins}
-          desktopPluginDir={desktopPluginDir}
-          desktopPlugins={desktopPlugins}
-          invalidDesktopPlugins={invalidDesktopPlugins}
-          isDesktopPluginAvailable={isDesktopPluginAvailable}
-          isDesktopPluginLoading={isDesktopPluginLoading}
+          lastInstallError={lastPluginInstallError}
+          userDataDir={userDataDir}
+          isDesktopApp={isDesktopApp}
           onClose={() => setIsPluginManagerVisible(false)}
           onInstall={handleInstallPlugin}
-          onToggle={handleTogglePlugin}
-          onUninstall={handleUninstallPlugin}
-          onRefreshDesktopPlugins={() => void refreshDesktopPlugins(true)}
-          onInstallDesktopPlugin={() => void handleInstallDesktopPlugin()}
-          onToggleDesktopPlugin={(pluginId, enabled) =>
-            void handleToggleDesktopPlugin(pluginId, enabled)
+          onToggle={(pluginId, enabled) =>
+            void handleTogglePlugin(pluginId, enabled)
           }
-          onUninstallDesktopPlugin={(pluginId) =>
-            void handleUninstallDesktopPlugin(pluginId)
-          }
+          onUninstall={(pluginId) => void handleUninstallPlugin(pluginId)}
+          onCopyUserDataDir={() => void handleCopyUserDataDir()}
+          onOpenUserDataDir={() => void handleOpenUserDataDir()}
         />
       ) : null}
 

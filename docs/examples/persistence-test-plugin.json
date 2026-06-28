@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.test.persistence.theme",
+  "name": "持久化测试主题插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Test",
+  "description": "用于验证插件安装、启用、禁用、卸载、重启后状态保持，以及用户目录持久化。",
+  "pluginType": "theme-pack",
+  "capabilities": [
+    "themes"
+  ],
+  "enabled": true
+}

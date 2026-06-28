@@ -1,6 +1,15 @@
 import type { MindmapNode, MindmapNodeType } from './types';
-
-const TEMPLATE_STORAGE_KEY = 'local-mindmap.templates.v1';
+import type { TemplatePack } from './templatePacks';
+import {
+  isDesktopRuntime,
+  isDirectUserJsonFile,
+  listUserFiles,
+  loadUserTemplates,
+  readUserJson,
+  saveUserTemplates,
+  USER_DATA_PATHS,
+  writeUserJson,
+} from '../storage/userDataStorage';
 
 export type MindmapTemplate = {
   id: string;
@@ -41,7 +50,7 @@ export function createTemplateThumbnail(rootNode: MindmapNode) {
   return `${rootNode.text || '未命名导图'}\n${countNodes(rootNode)} 个节点`;
 }
 
-function normalizeTemplate(value: unknown): MindmapTemplate | null {
+export function normalizeTemplate(value: unknown): MindmapTemplate | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
@@ -69,27 +78,26 @@ function normalizeTemplate(value: unknown): MindmapTemplate | null {
   };
 }
 
-export function loadMindmapTemplates(): MindmapTemplate[] {
-  const rawTemplates = window.localStorage.getItem(TEMPLATE_STORAGE_KEY);
-
-  if (!rawTemplates) {
-    return [];
-  }
-
-  try {
-    const parsedTemplates = JSON.parse(rawTemplates);
-    return Array.isArray(parsedTemplates)
-      ? parsedTemplates
-          .map(normalizeTemplate)
-          .filter((template): template is MindmapTemplate => Boolean(template))
-      : [];
-  } catch {
-    return [];
-  }
+export function normalizeUserTemplates(value: unknown): MindmapTemplate[] {
+  return Array.isArray(value)
+    ? value
+        .map(normalizeTemplate)
+        .filter((template): template is MindmapTemplate => Boolean(template))
+    : [];
 }
 
-export function saveMindmapTemplates(templates: MindmapTemplate[]) {
-  window.localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(templates));
+export async function loadMindmapTemplates(): Promise<MindmapTemplate[]> {
+  const templates = normalizeUserTemplates(await loadUserTemplates());
+  console.info('[user-data][templates] custom templates normalized', {
+    desktop: isDesktopRuntime(),
+    count: templates.length,
+    names: templates.map((template) => template.name),
+  });
+  return templates;
+}
+
+export async function saveMindmapTemplates(templates: MindmapTemplate[]) {
+  await saveUserTemplates(templates);
 }
 
 export function createTemplateFromMindmap(
@@ -113,19 +121,78 @@ export function createTemplateFromMindmap(
   };
 }
 
-export function addMindmapTemplate(template: MindmapTemplate) {
-  const templates = loadMindmapTemplates();
+export async function addMindmapTemplate(template: MindmapTemplate) {
+  const templates = await loadMindmapTemplates();
   const nextTemplates = [template, ...templates];
-  saveMindmapTemplates(nextTemplates);
+  await saveMindmapTemplates(nextTemplates);
   return nextTemplates;
 }
 
-export function deleteMindmapTemplate(templateId: string) {
-  const nextTemplates = loadMindmapTemplates().filter(
+export async function deleteMindmapTemplate(templateId: string) {
+  const nextTemplates = (await loadMindmapTemplates()).filter(
     (template) => template.id !== templateId,
   );
-  saveMindmapTemplates(nextTemplates);
+  await saveMindmapTemplates(nextTemplates);
   return nextTemplates;
+}
+
+export async function loadStoredTemplatePacks(): Promise<TemplatePack[]> {
+  const { parseTemplatePack } = await import('./templatePacks');
+  const files = await listUserFiles(USER_DATA_PATHS.templatePacks);
+  const packFiles = files.filter((path) =>
+    isDirectUserJsonFile(path, USER_DATA_PATHS.templatePacks),
+  );
+  const packs: TemplatePack[] = [];
+
+  for (const file of packFiles) {
+    const value = await readUserJson<unknown | null>(file, null);
+    if (value === null) {
+      continue;
+    }
+    try {
+      packs.push(parseTemplatePack(JSON.stringify(value)));
+    } catch (error) {
+      console.error('[user-data][templates] template pack ignored', {
+        file,
+        error,
+      });
+    }
+  }
+
+  console.info('[user-data][templates] packs loaded', {
+    desktop: isDesktopRuntime(),
+    fileCount: packFiles.length,
+    packCount: packs.length,
+  });
+  return packs;
+}
+
+export async function saveImportedTemplatePack(pack: TemplatePack) {
+  const safeName =
+    pack.meta.name
+      .trim()
+      .replace(/[^A-Za-z0-9\u4e00-\u9fff._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'templates';
+  const suffix = new Date().toISOString().replace(/[:.]/g, '-');
+  await writeUserJson(
+    `${USER_DATA_PATHS.templatePacks}/${safeName}-${suffix}.json`,
+    pack,
+  );
+}
+
+export async function loadAllUserTemplates() {
+  const { importTemplatesFromPack } = await import('./templatePacks');
+  let templates = await loadMindmapTemplates();
+  const packs = await loadStoredTemplatePacks();
+  for (const pack of packs) {
+    templates = importTemplatesFromPack(templates, pack).templates;
+  }
+  console.info('[user-data][templates] final user templates', {
+    desktop: isDesktopRuntime(),
+    count: templates.length,
+    names: templates.map((template) => template.name),
+  });
+  return templates;
 }
 
 export function cloneTemplateProject(template: MindmapTemplate) {
