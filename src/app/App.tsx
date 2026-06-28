@@ -127,9 +127,11 @@ import {
   type RecentFileEntry,
 } from '../features/mindmap/recentFiles';
 import {
+  findNextMatchIndex,
   findMindmapMatches,
   replaceAllInMindmap,
   replaceMatchInMindmap,
+  type SearchMatch,
   type SearchScope,
 } from '../features/mindmap/searchReplace';
 import {
@@ -330,6 +332,7 @@ type MindmapTreeProps = {
   editingNodeId: string | null;
   editingText: string;
   searchMatchNodeIds: Set<string>;
+  activeSearchMatch: SearchMatch | null;
   onToggleCollapse: (nodeId: string) => void;
   onSelectNode: (nodeId: string, append: boolean) => void;
   onStartEdit: (node: MindmapNode) => void;
@@ -351,6 +354,7 @@ function MindmapTree({
   editingNodeId,
   editingText,
   searchMatchNodeIds,
+  activeSearchMatch,
   onToggleCollapse,
   onSelectNode,
   onStartEdit,
@@ -366,6 +370,10 @@ function MindmapTree({
   const isDropTarget = node.id === dropTargetNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
+  const activeTextMatch =
+    activeSearchMatch?.nodeId === node.id && activeSearchMatch.field === 'text'
+      ? activeSearchMatch
+      : null;
   const hasChildren = node.children.length > 0;
   const nodeType = findNodeTypeById(nodeTypes, node.nodeTypeId);
   const nodeStyle = nodeType
@@ -458,7 +466,19 @@ function MindmapTree({
                   {nodeType.icon}
                 </span>
               ) : null}
-              <span>{node.text}</span>
+              <span>
+                {activeTextMatch ? (
+                  <>
+                    {node.text.slice(0, activeTextMatch.start)}
+                    <mark className="node-search-highlight">
+                      {node.text.slice(activeTextMatch.start, activeTextMatch.end)}
+                    </mark>
+                    {node.text.slice(activeTextMatch.end)}
+                  </>
+                ) : (
+                  node.text
+                )}
+              </span>
             </>
           )}
         </div>
@@ -836,6 +856,25 @@ export function App() {
       setActiveMatchIndex(searchMatches.length - 1);
     }
   }, [activeMatchIndex, searchMatches.length]);
+
+  useEffect(() => {
+    if (!activeMatch) {
+      return;
+    }
+
+    setSelectedNodeId(activeMatch.nodeId);
+    setSelectedNodeIds([activeMatch.nodeId]);
+
+    if (activeMatch.field === 'remark') {
+      setIsRemarkPanelCollapsed(false);
+      setRemarkMode('edit');
+    }
+  }, [
+    activeMatch?.end,
+    activeMatch?.field,
+    activeMatch?.nodeId,
+    activeMatch?.start,
+  ]);
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
@@ -1798,21 +1837,36 @@ export function App() {
   };
 
   const handleReplaceCurrent = () => {
-    if (!searchQuery.trim() || !activeMatch) {
+    const query = searchQuery.trim();
+
+    if (!query || !activeMatch) {
       showMessage('没有可替换的匹配项');
       return;
     }
 
-    recordHistory();
-    setMindmap((currentMindmap) =>
-      replaceMatchInMindmap(
-        currentMindmap,
-        activeMatch,
-        searchQuery.trim(),
-        replacementText,
-      ),
+    const nextMindmap = replaceMatchInMindmap(
+      mindmap,
+      activeMatch,
+      query,
+      replacementText,
     );
-    showMessage('已替换当前匹配项');
+    const nextMatches = findMindmapMatches(nextMindmap, query, searchScope);
+    const nextMatchIndex = findNextMatchIndex(nextMindmap, nextMatches, {
+      nodeId: activeMatch.nodeId,
+      field: activeMatch.field,
+      offset: activeMatch.start + replacementText.length,
+    });
+
+    recordHistory();
+    setMindmap(nextMindmap);
+    setActiveMatchIndex(Math.max(0, nextMatchIndex));
+
+    const nextMatch = nextMatches[nextMatchIndex];
+    if (nextMatch) {
+      setSelectedNodeId(nextMatch.nodeId);
+      setSelectedNodeIds([nextMatch.nodeId]);
+    }
+    showMessage('已替换 1 处');
   };
 
   const handleReplaceAll = () => {
@@ -3060,9 +3114,12 @@ export function App() {
                   <span className="panel-note">
                     {searchMatches.length > 0
                       ? `${activeMatchIndex + 1} / ${searchMatches.length}`
-                      : '0 个结果'}
+                      : '未找到匹配项'}
                   </span>
                 </div>
+                {activeMatch?.field === 'remark' ? (
+                  <p className="search-match-location">当前匹配位于备注</p>
+                ) : null}
                 <div className="compact-form drawer-form">
                   <input
                     type="search"
@@ -3261,6 +3318,7 @@ export function App() {
                   editingNodeId={editingNodeId}
                   editingText={editingText}
                   searchMatchNodeIds={searchMatchNodeIds}
+                  activeSearchMatch={activeMatch}
                   onToggleCollapse={handleToggleCollapse}
                   onSelectNode={selectNode}
                   onStartEdit={handleStartEdit}
@@ -3306,6 +3364,9 @@ export function App() {
               themeId={themeId}
               themes={availableThemes}
               remarkMode={remarkMode}
+              activeRemarkMatch={
+                activeMatch?.field === 'remark' ? activeMatch : null
+              }
               onChildNodeTypeChange={setChildNodeTypeId}
               onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
               onThemeChange={handleThemeChange}

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MarkdownPreview } from './MarkdownPreview';
 import { RemarkPreviewDialog } from './remarkPreview';
+import type { SearchMatch } from './searchReplace';
 import type { MindmapNode } from './types';
 
 type RemarkMode = 'edit' | 'preview';
@@ -12,6 +13,7 @@ type RemarkPanelProps = {
   onRemarkChange: (remark: string) => void;
   onCollapse?: () => void;
   embedded?: boolean;
+  activeMatch?: SearchMatch | null;
 };
 
 export function RemarkPanel({
@@ -21,8 +23,39 @@ export function RemarkPanel({
   onRemarkChange,
   onCollapse,
   embedded = false,
+  activeMatch = null,
 }: RemarkPanelProps) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const remarkMatch =
+    activeMatch?.field === 'remark' && activeMatch.nodeId === selectedNode.id
+      ? activeMatch
+      : null;
+  const contextStart = remarkMatch
+    ? Math.max(0, remarkMatch.start - 24)
+    : 0;
+  const contextEnd = remarkMatch
+    ? Math.min(selectedNode.remark.length, remarkMatch.end + 24)
+    : 0;
+
+  useEffect(() => {
+    if (!remarkMatch || mode !== 'edit') {
+      return;
+    }
+
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    editor.focus();
+    editor.setSelectionRange(remarkMatch.start, remarkMatch.end);
+  }, [
+    remarkMatch?.end,
+    remarkMatch?.start,
+    mode,
+    selectedNode.id,
+  ]);
 
   return (
     <>
@@ -77,7 +110,19 @@ export function RemarkPanel({
 
         {mode === 'edit' ? (
           <div className="remark-edit-layout">
+            {remarkMatch ? (
+              <div className="remark-search-context" role="status">
+                <span>{contextStart > 0 ? '…' : ''}</span>
+                {selectedNode.remark.slice(contextStart, remarkMatch.start)}
+                <mark>
+                  {selectedNode.remark.slice(remarkMatch.start, remarkMatch.end)}
+                </mark>
+                {selectedNode.remark.slice(remarkMatch.end, contextEnd)}
+                <span>{contextEnd < selectedNode.remark.length ? '…' : ''}</span>
+              </div>
+            ) : null}
             <textarea
+              ref={editorRef}
               className="remark-editor"
               value={selectedNode.remark}
               onChange={(event) => onRemarkChange(event.target.value)}

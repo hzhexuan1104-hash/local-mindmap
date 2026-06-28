@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { RemarkPanel } from '../../features/mindmap/RemarkPanel';
+import type { SearchMatch } from '../../features/mindmap/searchReplace';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -20,6 +21,7 @@ type RightInspectorPanelProps = {
   themeId: string;
   themes: ThemeOption[];
   remarkMode: 'edit' | 'preview';
+  activeRemarkMatch: SearchMatch | null;
   onChildNodeTypeChange: (nodeTypeId: string) => void;
   onSelectedNodeTypeChange: (nodeTypeId: string) => void;
   onThemeChange: (themeId: string) => void;
@@ -37,6 +39,7 @@ export function RightInspectorPanel({
   themeId,
   themes,
   remarkMode,
+  activeRemarkMatch,
   onChildNodeTypeChange,
   onSelectedNodeTypeChange,
   onThemeChange,
@@ -48,6 +51,17 @@ export function RightInspectorPanel({
   const [activeTab, setActiveTab] = useState<InspectorTab>('style');
   const selectedNodeType =
     nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
+
+  useEffect(() => {
+    if (activeRemarkMatch?.nodeId === selectedNode.id) {
+      setActiveTab('remark');
+    }
+  }, [
+    activeRemarkMatch?.end,
+    activeRemarkMatch?.nodeId,
+    activeRemarkMatch?.start,
+    selectedNode.id,
+  ]);
 
   return (
     <aside className="inspector-panel" aria-label="节点检查器">
@@ -194,6 +208,7 @@ export function RightInspectorPanel({
             mode={remarkMode}
             onModeChange={onRemarkModeChange}
             onRemarkChange={onRemarkChange}
+            activeMatch={activeRemarkMatch}
             embedded
           />
         ) : null}

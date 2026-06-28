@@ -3538,6 +3538,30 @@ textarea::placeholder {
   outline-offset: 4px;
 }
 
+.node-search-highlight,
+.remark-search-context mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  color: inherit;
+  background: #fde68a;
+}
+
+.search-match-location,
+.remark-search-context {
+  margin: 0;
+  color: #92400e;
+  font-size: 12px;
+}
+
+.remark-search-context {
+  padding: 8px 10px;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  background: #fffbeb;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .mindmap-node.is-dragging {
   filter: none;
   box-shadow:
