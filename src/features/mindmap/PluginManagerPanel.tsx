@@ -12,6 +12,8 @@ type PluginManagerPanelProps = {
   onUninstall: (pluginId: string) => void;
   onCopyUserDataDir: () => void;
   onOpenUserDataDir: () => void;
+  onOpenPluginDir: () => void;
+  onCopyPluginId: (pluginId: string) => void;
 };
 
 const CATEGORY_OPTIONS: Array<{ value: '' | PluginCategory; label: string }> = [
@@ -35,6 +37,35 @@ function countContributions(plugin: PluginManifest) {
   );
 }
 
+function contributionSummary(plugin: PluginManifest) {
+  const contributions = plugin.contributions;
+  return {
+    themes: contributions?.themes?.length ?? 0,
+    icons: contributions?.icons?.length ?? 0,
+    exporters: contributions?.exporters?.length ?? 0,
+    nodeTypes:
+      (contributions?.nodeTypes?.length ?? 0) +
+      (contributions?.nodeTypePacks?.reduce(
+        (sum, pack) => sum + pack.nodeTypes.length,
+        0,
+      ) ?? 0),
+    templates:
+      contributions?.templatePacks?.reduce(
+        (sum, pack) => sum + pack.templates.length,
+        0,
+      ) ?? 0,
+    menus: contributions?.menus?.length ?? 0,
+    tools: contributions?.tools?.length ?? 0,
+  };
+}
+
+function joinUserPath(root: string, relativePath: string) {
+  if (!root || root === '浏览器本地存储') {
+    return relativePath;
+  }
+  return `${root.replace(/[\\/]$/, '')}/${relativePath}`;
+}
+
 export function PluginManagerPanel({
   plugins,
   lastInstallError,
@@ -46,6 +77,8 @@ export function PluginManagerPanel({
   onUninstall,
   onCopyUserDataDir,
   onOpenUserDataDir,
+  onOpenPluginDir,
+  onCopyPluginId,
 }: PluginManagerPanelProps) {
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<'' | PluginCategory>('');
@@ -207,6 +240,43 @@ export function PluginManagerPanel({
                         ID：{plugin.pluginId} · 贡献点：
                         {countContributions(plugin)}
                       </p>
+                      {plugin.manifestValid === false ? (
+                        <div className="plugin-install-error" role="alert">
+                          <strong>manifest 无效</strong>
+                          <p>{plugin.manifestError}</p>
+                        </div>
+                      ) : null}
+                      <div className="plugin-contribution-summary">
+                        {Object.entries(contributionSummary(plugin)).map(
+                          ([name, count]) => (
+                            <span key={name}>
+                              {name}: {count}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                      <dl className="plugin-paths">
+                        <div>
+                          <dt>manifest 路径</dt>
+                          <dd>
+                            {plugin.builtIn
+                              ? '内置插件（无独立 manifest 文件）'
+                              : joinUserPath(
+                                  userDataDir,
+                                  `plugins/installed/${plugin.pluginId}/manifest.json`,
+                                )}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>registry 路径</dt>
+                          <dd>
+                            {joinUserPath(
+                              userDataDir,
+                              'plugins/plugin-registry.json',
+                            )}
+                          </dd>
+                        </div>
+                      </dl>
                       {plugin.capabilities.length > 0 ? (
                         <div className="plugin-capability-list">
                           {plugin.capabilities.map((capability) => (
@@ -223,8 +293,55 @@ export function PluginManagerPanel({
                           ))}
                         </div>
                       ) : null}
+                      {plugin.contributions?.menus?.length ? (
+                        <div className="plugin-menu-details">
+                          <strong>菜单贡献详情</strong>
+                          {plugin.contributions.menus.map((menu) => (
+                            <dl key={menu.id}>
+                              <div>
+                                <dt>label</dt>
+                                <dd>{menu.label}</dd>
+                              </div>
+                              <div>
+                                <dt>command</dt>
+                                <dd>{menu.command || '未填写'}</dd>
+                              </div>
+                              <div>
+                                <dt>location</dt>
+                                <dd>{menu.location || '未填写'}</dd>
+                              </div>
+                              <div>
+                                <dt>状态</dt>
+                                <dd>{menu.valid ? '有效' : '无效'}</dd>
+                              </div>
+                              {!menu.valid ? (
+                                <div>
+                                  <dt>无效原因</dt>
+                                  <dd>{menu.invalidReason}</dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="plugin-item-actions">
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        onClick={() => onCopyPluginId(plugin.pluginId)}
+                      >
+                        复制 pluginId
+                      </button>
+                      {isDesktopApp ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={onOpenPluginDir}
+                        >
+                          打开插件目录
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="secondary-action"

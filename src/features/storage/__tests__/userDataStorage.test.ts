@@ -12,6 +12,7 @@ import {
   loadUserNodeTypes,
   loadUserTemplates,
   migrateLegacyLocalStorageToUserData,
+  openPluginDir,
   readUserJson,
   savePluginRegistry,
   saveRecentFiles,
@@ -310,6 +311,17 @@ describe('userDataStorage desktop commands', () => {
         args: { pluginId: plugin.pluginId },
       },
     ]);
+  });
+
+  it('opens the plugins user directory through the dedicated desktop command', async () => {
+    const calls: string[] = [];
+    setUserDataStorageInvokerForTests(async (command) => {
+      calls.push(command);
+      return undefined as never;
+    });
+
+    await expect(openPluginDir()).resolves.toBe(true);
+    expect(calls).toEqual([USER_DATA_COMMANDS.openPluginDir]);
   });
 
   it('exposes the concrete desktop write error', async () => {

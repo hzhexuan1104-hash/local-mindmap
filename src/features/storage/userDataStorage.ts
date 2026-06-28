@@ -11,6 +11,7 @@ export const USER_DATA_COMMANDS = {
   installPluginToUserDir: 'install_plugin_to_user_dir',
   uninstallPluginFromUserDir: 'uninstall_plugin_from_user_dir',
   openUserDataDir: 'open_user_data_dir',
+  openPluginDir: 'open_plugin_dir',
 } as const;
 
 export const USER_DATA_PATHS = {
@@ -400,6 +401,15 @@ export async function openUserDataDir() {
   }
 
   await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openUserDataDir);
+  return true;
+}
+
+export async function openPluginDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginDir);
   return true;
 }
 

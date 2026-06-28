@@ -14,6 +14,7 @@ import {
   SUPPORTED_CAPABILITIES,
   SUPPORTED_PLUGIN_TYPES,
   getPluginNodeTypes,
+  getPluginMenuGroups,
   getPluginTemplates,
   installPluginManifest,
   normalizePluginManifest,
@@ -146,6 +147,97 @@ describe('declarative plugin manifest validation', () => {
       pluginId: 'localmindmap.export.example',
       pluginType: 'import-export',
     });
+  });
+
+  it('normalizes valid menu contributions and filters them by enabled state and when', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        ...validDeclarativeManifest.contributions,
+        menus: [
+          {
+            id: 'export-menu',
+            label: '导出为 TXT',
+            location: 'plugins',
+            command: 'builtin.exportText',
+            when: 'hasMindmap',
+          },
+          {
+            id: 'selection-menu',
+            label: '选中节点操作',
+            location: 'plugins',
+            command: 'builtin.exportText',
+            when: 'hasSelectedNode',
+          },
+        ],
+      },
+    });
+    const manifest = result.manifest as PluginManifest;
+
+    expect(manifest.contributions?.menus).toMatchObject([
+      { id: 'export-menu', valid: true },
+      { id: 'selection-menu', valid: true },
+    ]);
+    expect(
+      getPluginMenuGroups([manifest], {
+        hasMindmap: true,
+        hasSelectedNode: false,
+      })[0]?.items.map((menu) => menu.id),
+    ).toEqual(['export-menu']);
+    expect(
+      getPluginMenuGroups(setPluginEnabled([manifest], manifest.pluginId, false), {
+        hasMindmap: true,
+        hasSelectedNode: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('keeps an unknown menu command visible in manager data but marks it invalid', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        menus: [
+          {
+            id: 'unknown-command',
+            label: '未知命令',
+            location: 'plugins',
+            command: 'builtin.notRegistered',
+          },
+          {
+            id: 'wrong-location',
+            label: '错误位置',
+            location: 'file',
+            command: 'builtin.exportText',
+          },
+        ],
+      },
+    });
+
+    expect(result.manifest?.contributions?.menus).toMatchObject([
+      {
+        id: 'unknown-command',
+        valid: false,
+        invalidReason: '插件命令不存在：builtin.notRegistered',
+      },
+      {
+        id: 'wrong-location',
+        valid: false,
+        invalidReason: '不支持的菜单位置：file',
+      },
+    ]);
+    expect(
+      getPluginMenuGroups([result.manifest as PluginManifest], {
+        hasMindmap: true,
+        hasSelectedNode: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('keeps v1.6 manifests without menus compatible', () => {
+    const result = validatePluginManifest(validDeclarativeManifest);
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.contributions?.menus).toBeUndefined();
   });
 
   it.each(['pluginId', 'name'])('rejects a manifest missing %s', (fieldName) => {

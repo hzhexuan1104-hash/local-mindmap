@@ -7,11 +7,17 @@ import { parseNodeTypePack } from './nodeTypePacks';
 import { parseTemplatePack } from './templatePacks';
 import { selectLocalFile } from './fileUtils';
 import {
+  isPluginCommandId,
+  type PluginCommandId,
+} from '../plugins/pluginCommands';
+import {
   installPluginToUserDir,
   isDesktopRuntime,
   loadPluginRegistry as loadStoredPluginRegistry,
+  readUserJson,
   savePluginRegistry as saveStoredPluginRegistry,
   uninstallPluginFromUserDir,
+  USER_DATA_PATHS,
 } from '../storage/userDataStorage';
 
 export type PluginCategory =
@@ -63,6 +69,18 @@ export type PluginToolContribution = {
   description?: string;
 };
 
+export type PluginMenuWhen = 'always' | 'hasMindmap' | 'hasSelectedNode';
+
+export type PluginMenuContribution = {
+  id: string;
+  label: string;
+  location: string;
+  command: string;
+  when: PluginMenuWhen;
+  valid: boolean;
+  invalidReason?: string;
+};
+
 export type PluginContributions = {
   exporters?: PluginExporterContribution[];
   nodeTypePacks?: NodeTypePack[];
@@ -72,6 +90,7 @@ export type PluginContributions = {
   nodeTypes?: MindmapNodeType[];
   exportFormats?: PluginExportFormatContribution[];
   tools?: PluginToolContribution[];
+  menus?: PluginMenuContribution[];
 };
 
 export type PluginManifest = {
@@ -88,6 +107,8 @@ export type PluginManifest = {
   installedAt: string;
   builtIn?: boolean;
   validationWarnings?: string[];
+  manifestValid?: boolean;
+  manifestError?: string;
   config?: Record<string, unknown>;
   contributions?: PluginContributions;
 };
@@ -140,12 +161,17 @@ export const FORBIDDEN_PLUGIN_FIELDS = [
   'function',
   'remoteurl',
   'code',
-  'command',
   'shell',
   'executable',
 ] as const;
 
 const FORBIDDEN_PLUGIN_FIELD_SET = new Set<string>(FORBIDDEN_PLUGIN_FIELDS);
+const SUPPORTED_MENU_LOCATION = 'plugins';
+const SUPPORTED_MENU_WHEN: readonly PluginMenuWhen[] = [
+  'always',
+  'hasMindmap',
+  'hasSelectedNode',
+];
 
 const BUILT_IN_INSTALLED_AT = '2026-06-27T00:00:00.000Z';
 
@@ -231,6 +257,16 @@ export const BUILT_IN_PLUGINS: PluginManifest[] = [
           label: 'TXT 导出',
           fileName: 'mindmap.txt',
           handler: 'builtin.exportText',
+        },
+      ],
+      menus: [
+        {
+          id: 'exportTextMenu',
+          label: '导出为 TXT',
+          location: 'plugins',
+          command: 'builtin.exportText',
+          when: 'hasMindmap',
+          valid: true,
         },
       ],
     },
@@ -467,6 +503,56 @@ function normalizeTool(value: unknown): PluginToolContribution | null {
     : null;
 }
 
+function normalizeMenu(
+  value: unknown,
+  index: number,
+): PluginMenuContribution {
+  if (!isRecord(value)) {
+    return {
+      id: `invalid-menu-${index + 1}`,
+      label: `无效菜单项 ${index + 1}`,
+      location: '',
+      command: '',
+      when: 'always',
+      valid: false,
+      invalidReason: '菜单贡献必须是对象。',
+    };
+  }
+
+  const id = asString(value.id).trim();
+  const label = asString(value.label).trim();
+  const location = asString(value.location, SUPPORTED_MENU_LOCATION).trim();
+  const command = asString(value.command).trim();
+  const rawWhen = asString(value.when, 'always').trim();
+  const reasons: string[] = [];
+
+  if (!id) reasons.push('id 必填。');
+  if (!label) reasons.push('label 必填。');
+  if (!command) {
+    reasons.push('command 必填。');
+  } else if (!isPluginCommandId(command)) {
+    reasons.push(`插件命令不存在：${command}`);
+  }
+  if (location !== SUPPORTED_MENU_LOCATION) {
+    reasons.push(`不支持的菜单位置：${location || '空'}`);
+  }
+  if (!SUPPORTED_MENU_WHEN.includes(rawWhen as PluginMenuWhen)) {
+    reasons.push(`不支持的显示条件：${rawWhen}`);
+  }
+
+  return {
+    id: id || `invalid-menu-${index + 1}`,
+    label: label || `无效菜单项 ${index + 1}`,
+    location,
+    command,
+    when: SUPPORTED_MENU_WHEN.includes(rawWhen as PluginMenuWhen)
+      ? (rawWhen as PluginMenuWhen)
+      : 'always',
+    valid: reasons.length === 0,
+    invalidReason: reasons.length > 0 ? reasons.join(' ') : undefined,
+  };
+}
+
 function normalizeNodeTypePack(value: unknown): NodeTypePack | null {
   try {
     return parseNodeTypePack(JSON.stringify(value));
@@ -553,6 +639,32 @@ function normalizeContributions(
     contributions.tools = value.tools
       .map(normalizeTool)
       .filter((tool): tool is PluginToolContribution => Boolean(tool));
+  }
+  if (Array.isArray(value.menus)) {
+    contributions.menus = value.menus.map(normalizeMenu);
+    const menuIdCounts = contributions.menus.reduce((counts, menu) => {
+      counts.set(menu.id, (counts.get(menu.id) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>());
+    contributions.menus = contributions.menus.map((menu) =>
+      (menuIdCounts.get(menu.id) ?? 0) > 1
+        ? {
+            ...menu,
+            valid: false,
+            invalidReason: [menu.invalidReason, `菜单 id 重复：${menu.id}`]
+              .filter(Boolean)
+              .join(' '),
+          }
+        : menu,
+    );
+    const invalidMenus = contributions.menus.filter((menu) => !menu.valid);
+    if (invalidMenus.length > 0) {
+      warnings.push(
+        ...invalidMenus.map(
+          (menu) => `菜单贡献 ${menu.id} 无效：${menu.invalidReason}`,
+        ),
+      );
+    }
   }
 
   return Object.values(contributions).some((items) => items && items.length > 0)
@@ -721,6 +833,7 @@ function validatePluginManifestInternal(
         warnings.length > 0 ? Array.from(new Set(warnings)) : undefined,
       config: isRecord(value.config) ? value.config : undefined,
       contributions,
+      manifestValid: true,
     },
     errors,
     warnings,
@@ -739,7 +852,9 @@ function clonePlugin(plugin: PluginManifest): PluginManifest {
   return JSON.parse(JSON.stringify(plugin)) as PluginManifest;
 }
 
-export async function loadPluginRegistry(): Promise<PluginManifest[]> {
+export async function loadPluginRegistry(options?: {
+  allowRegistryFallback?: boolean;
+}): Promise<PluginManifest[]> {
   const storedPlugins = await loadStoredPluginRegistry();
   const normalizedPlugins = Array.isArray(storedPlugins)
     ? storedPlugins
@@ -760,14 +875,62 @@ export async function loadPluginRegistry(): Promise<PluginManifest[]> {
       plugin.enabled,
   }));
   const builtInIds = new Set(builtIns.map((plugin) => plugin.pluginId));
+  const installedPlugins = await Promise.all(
+    normalizedPlugins
+      .filter(
+        (plugin) =>
+          !builtInIds.has(plugin.pluginId) &&
+          plugin.pluginId !== 'builtin-txt-export',
+      )
+      .map(async (registryPlugin) => {
+        const path = `${USER_DATA_PATHS.installedPlugins}/${registryPlugin.pluginId}/manifest.json`;
+        try {
+          const rawManifest = await readUserJson<unknown>(path, null);
+          const result = validatePluginManifestInternal(rawManifest, true);
+          if (
+            result.manifest &&
+            result.manifest.pluginId === registryPlugin.pluginId
+          ) {
+            return {
+              ...result.manifest,
+              enabled: registryPlugin.enabled,
+              installedAt: registryPlugin.installedAt,
+              builtIn: false,
+              manifestValid: true,
+            };
+          }
+          if (options?.allowRegistryFallback) {
+            return registryPlugin;
+          }
+          return {
+            ...registryPlugin,
+            contributions: undefined,
+            manifestValid: false,
+            manifestError:
+              result.manifest &&
+              result.manifest.pluginId !== registryPlugin.pluginId
+                ? `manifest pluginId 与 registry 不一致：${result.manifest.pluginId}`
+                : result.errors.map((error) => error.message).join(' ') ||
+                  'manifest.json 缺失或损坏。',
+          };
+        } catch (error) {
+          if (options?.allowRegistryFallback) {
+            return registryPlugin;
+          }
+          return {
+            ...registryPlugin,
+            contributions: undefined,
+            manifestValid: false,
+            manifestError:
+              error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+  );
 
   return [
     ...builtIns,
-    ...normalizedPlugins.filter(
-      (plugin) =>
-        !builtInIds.has(plugin.pluginId) &&
-        plugin.pluginId !== 'builtin-txt-export',
-    ),
+    ...installedPlugins,
   ];
 }
 
@@ -896,7 +1059,54 @@ export async function readLocalPluginManifest() {
 }
 
 export function getEnabledPlugins(plugins: PluginManifest[]) {
-  return plugins.filter((plugin) => plugin.enabled);
+  return plugins.filter(
+    (plugin) => plugin.enabled && plugin.manifestValid !== false,
+  );
+}
+
+export function getPluginMenus(plugins: PluginManifest[]) {
+  return getEnabledPlugins(plugins).flatMap((plugin) =>
+    (plugin.contributions?.menus ?? [])
+      .filter((menu) => menu.valid)
+      .map((menu) => ({ plugin, menu })),
+  );
+}
+
+export function getPluginMenuGroups(
+  plugins: PluginManifest[],
+  context: { hasMindmap: boolean; hasSelectedNode: boolean },
+) {
+  const groups = new Map<
+    string,
+    {
+      pluginId: string;
+      pluginName: string;
+      items: PluginMenuContribution[];
+    }
+  >();
+
+  for (const { plugin, menu } of getPluginMenus(plugins)) {
+    const visible =
+      menu.when === 'always' ||
+      (menu.when === 'hasMindmap' && context.hasMindmap) ||
+      (menu.when === 'hasSelectedNode' && context.hasSelectedNode);
+    if (!visible) {
+      continue;
+    }
+    const group = groups.get(plugin.pluginId) ?? {
+      pluginId: plugin.pluginId,
+      pluginName: plugin.name,
+      items: [],
+    };
+    group.items.push(menu);
+    groups.set(plugin.pluginId, group);
+  }
+
+  return Array.from(groups.values());
+}
+
+export function isKnownPluginCommand(command: string): command is PluginCommandId {
+  return isPluginCommandId(command);
 }
 
 export function getPluginThemes(plugins: PluginManifest[]) {

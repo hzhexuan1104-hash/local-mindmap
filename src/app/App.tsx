@@ -99,6 +99,7 @@ import type { PerformanceBenchmarkResult } from '../features/mindmap/performance
 import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
+  getPluginMenuGroups,
   getPluginNodeTypes,
   getPluginTemplates,
   getPluginThemes,
@@ -112,6 +113,10 @@ import {
   PluginManifestError,
   type PluginManifest,
 } from '../features/mindmap/plugins';
+import {
+  executePluginCommand,
+  type PluginCommandHandlers,
+} from '../features/plugins/pluginCommands';
 import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
   openFileLocation,
@@ -175,6 +180,7 @@ import {
   isDesktopRuntime,
   migrateLegacyLocalStorageToUserData,
   openUserDataDir,
+  openPluginDir,
   uninstallPluginFromUserDir,
 } from '../features/storage/userDataStorage';
 import type {
@@ -740,14 +746,20 @@ export function App() {
           recentFilesResult,
         ] = await Promise.allSettled([
             loadAllUserTemplates(),
-            loadPluginRegistry(),
+            loadPluginRegistry({
+              allowRegistryFallback: migration.migrated,
+            }),
             loadAllUserNodeTypes(),
             getUserDataDir(),
             loadRecentFileEntries(),
           ]);
         let pluginStorageSyncFailed = false;
 
-        if (isDesktopApp && pluginsResult.status === 'fulfilled') {
+        if (
+          isDesktopApp &&
+          migration.migrated &&
+          pluginsResult.status === 'fulfilled'
+        ) {
           try {
             await Promise.all(
               pluginsResult.value
@@ -1440,6 +1452,43 @@ export function App() {
       showMessage('已打开用户数据目录');
     } catch (error) {
       showMessage(getErrorMessage(error, '无法打开用户数据目录'));
+    }
+  };
+
+  const handleCopyPluginId = async (pluginId: string) => {
+    try {
+      await navigator.clipboard.writeText(pluginId);
+      showMessage('pluginId 已复制');
+    } catch {
+      showMessage('复制 pluginId 失败');
+    }
+  };
+
+  const handleOpenPluginDir = async () => {
+    if (!isDesktopApp) {
+      showMessage('Web 端不支持打开插件目录');
+      return;
+    }
+    try {
+      await openPluginDir();
+      showMessage('已打开插件目录');
+    } catch (error) {
+      showMessage(
+        `打开插件目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleReloadPlugins = async () => {
+    try {
+      const reloadedPlugins = await loadPluginRegistry();
+      setPlugins(reloadedPlugins);
+      setLastPluginInstallError('');
+      showMessage('插件已重新加载。');
+    } catch (error) {
+      showMessage(
+        `插件重新加载失败：${getErrorMessage(error, '未知错误')}`,
+      );
     }
   };
 
@@ -2535,6 +2584,36 @@ export function App() {
     }
   };
 
+  const pluginCommandHandlers: PluginCommandHandlers = {
+    'builtin.openPluginManager': () => setIsPluginManagerVisible(true),
+    'builtin.reloadPlugins': handleReloadPlugins,
+    'builtin.openPluginDirectory': handleOpenPluginDir,
+    'builtin.exportText': handleExportTxt,
+  };
+
+  const runPluginCommand = async (commandId: string, pluginId?: string) => {
+    try {
+      await executePluginCommand({
+        commandId,
+        pluginId,
+        plugins,
+        handlers: pluginCommandHandlers,
+      });
+    } catch (error) {
+      const reason = getErrorMessage(error, '未知错误');
+      showMessage(
+        reason.startsWith('插件命令不存在：')
+          ? reason
+          : `插件命令执行失败：${reason}`,
+      );
+    }
+  };
+
+  const pluginMenuGroups = getPluginMenuGroups(plugins, {
+    hasMindmap: Boolean(mindmap),
+    hasSelectedNode: Boolean(selectedNodeId),
+  });
+
   const topMenus: TopMenuGroup[] = [
     {
       id: 'file',
@@ -2666,6 +2745,39 @@ export function App() {
           onSelect: () => void handleImportTemplatePack(),
         },
         { label: '导出模板包', onSelect: handleExportTemplatePack },
+      ],
+    },
+    {
+      id: 'plugins',
+      label: '插件',
+      items: [
+        {
+          label: '插件管理',
+          onSelect: () =>
+            void runPluginCommand('builtin.openPluginManager'),
+        },
+        {
+          label: '重新加载插件',
+          onSelect: () => void runPluginCommand('builtin.reloadPlugins'),
+        },
+        ...(isDesktopApp
+          ? [
+              {
+                label: '打开插件目录',
+                onSelect: () =>
+                  void runPluginCommand('builtin.openPluginDirectory'),
+              },
+            ]
+          : []),
+        ...pluginMenuGroups.map((group, index) => ({
+          label: group.pluginName,
+          dividerBefore: index === 0,
+          children: group.items.map((menu) => ({
+            label: menu.label,
+            onSelect: () =>
+              void runPluginCommand(menu.command, group.pluginId),
+          })),
+        })),
       ],
     },
     {
@@ -3402,6 +3514,8 @@ export function App() {
           onUninstall={(pluginId) => void handleUninstallPlugin(pluginId)}
           onCopyUserDataDir={() => void handleCopyUserDataDir()}
           onOpenUserDataDir={() => void handleOpenUserDataDir()}
+          onOpenPluginDir={() => void handleOpenPluginDir()}
+          onCopyPluginId={(pluginId) => void handleCopyPluginId(pluginId)}
         />
       ) : null}
 
