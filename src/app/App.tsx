@@ -45,24 +45,11 @@ import {
   validateTreeIntegrity,
 } from '../features/mindmap/clipboard';
 import { ExcelImportMappingDialog } from '../features/mindmap/ExcelImportMappingDialog';
-import { exportMindmapExcel } from '../features/mindmap/exportExcel';
-import { exportMindmapAsImage } from '../features/mindmap/exportImage';
-import { exportMindmapJson } from '../features/mindmap/exportJson';
-import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
-import { exportMindmapTxt } from '../features/mindmap/exportTxt';
-import { downloadTextFile, selectLocalFile } from '../features/mindmap/fileUtils';
-import {
-  getDesktopPluginDir,
-  installDesktopPluginManifest,
-  isTauriDesktopRuntime,
-  listDesktopPlugins,
-  normalizeNativeDesktopPluginManifest,
-  readLocalNativeManifestText,
-  setDesktopPluginEnabled,
-  uninstallDesktopPlugin,
-  type DesktopPluginManifestError,
-  type NativeDesktopPluginManifest,
-} from '../features/mindmap/desktopPlugins';
+import { createMindmapExcelBytes } from '../features/mindmap/exportExcel';
+import { createMindmapImageBytes } from '../features/mindmap/exportImage';
+import { serializeMindmapMarkdown } from '../features/mindmap/exportMarkdown';
+import { serializeMindmapTxt } from '../features/mindmap/exportTxt';
+import { selectLocalFile } from '../features/mindmap/fileUtils';
 import {
   createHistoryState,
   pushHistory,
@@ -91,20 +78,21 @@ import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
   findNodeTypeById,
-  loadLocalNodeTypes,
-  mergeWithLocalNodeTypes,
+  loadAllUserNodeTypes,
   NODE_TYPE_ICONS,
   NODE_TYPE_SHAPES,
+  saveImportedNodeTypePack,
   saveLocalNodeTypes,
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import { updateNodePositionById } from '../features/mindmap/nodePositions';
 import {
+  createNodeTypePack,
   exportNodeTypesToPack,
   importNodeTypesFromPack,
   parseNodeTypePack,
 } from '../features/mindmap/nodeTypePacks';
-import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
+import { parseLmindProject } from '../features/mindmap/openMindmap';
 import { OFFICIAL_TEMPLATES } from '../features/mindmap/officialTemplates';
 import { PerformancePanel } from '../features/mindmap/PerformancePanel';
 import type { PerformanceBenchmarkResult } from '../features/mindmap/performanceTest';
@@ -112,21 +100,38 @@ import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
   getPluginNodeTypes,
+  getPluginTemplates,
   getPluginThemes,
-  installPluginManifest,
+  installPlugin,
   isTxtExportPluginEnabled,
   loadPluginRegistry,
   readLocalPluginManifest,
   savePluginRegistry,
   setPluginEnabled,
   uninstallPlugin,
+  PluginManifestError,
   type PluginManifest,
 } from '../features/mindmap/plugins';
-import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
+import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
+  openFileLocation,
+  openLocalTextFile,
+  readLocalTextFile,
+  sanitizeFileName,
+  saveLocalFile,
+  type LocalFileResult,
+} from '../features/mindmap/localFileOperations';
+import {
+  loadRecentFileEntries,
+  updateRecentFile,
+  type RecentFileEntry,
+} from '../features/mindmap/recentFiles';
+import {
+  findNextMatchIndex,
   findMindmapMatches,
   replaceAllInMindmap,
   replaceMatchInMindmap,
+  type SearchMatch,
   type SearchScope,
 } from '../features/mindmap/searchReplace';
 import {
@@ -137,13 +142,12 @@ import {
   resolveNodeClickSelection,
 } from '../features/mindmap/selection';
 import {
-  addMindmapTemplate,
   cloneTemplateProject,
   createTemplateFromMindmap,
-  deleteMindmapTemplate,
   filterAndSortTemplates,
   getTemplateCategories,
-  loadMindmapTemplates,
+  loadAllUserTemplates,
+  saveImportedTemplatePack,
   saveMindmapTemplates,
   type MindmapTemplate,
   type TemplateSortMode,
@@ -164,6 +168,15 @@ import {
   getNodeTypeCreationOptions,
   type TypedNodeCreationResult,
 } from '../features/mindmap/typedNodeCreation';
+import {
+  ensureUserDataDirs,
+  getUserDataDir,
+  installPluginToUserDir,
+  isDesktopRuntime,
+  migrateLegacyLocalStorageToUserData,
+  openUserDataDir,
+  uninstallPluginFromUserDir,
+} from '../features/storage/userDataStorage';
 import type {
   MindmapNode,
   MindmapNodeType,
@@ -187,7 +200,11 @@ const setAllNodesCollapsed = (
 });
 
 const getErrorMessage = (error: unknown, fallback: string) =>
-  error instanceof Error && error.message ? error.message : fallback;
+  typeof error === 'string' && error.trim()
+    ? error
+    : error instanceof Error && error.message
+      ? error.message
+      : fallback;
 
 const updateNodeById = (
   node: MindmapNode,
@@ -315,6 +332,7 @@ type MindmapTreeProps = {
   editingNodeId: string | null;
   editingText: string;
   searchMatchNodeIds: Set<string>;
+  activeSearchMatch: SearchMatch | null;
   onToggleCollapse: (nodeId: string) => void;
   onSelectNode: (nodeId: string, append: boolean) => void;
   onStartEdit: (node: MindmapNode) => void;
@@ -336,6 +354,7 @@ function MindmapTree({
   editingNodeId,
   editingText,
   searchMatchNodeIds,
+  activeSearchMatch,
   onToggleCollapse,
   onSelectNode,
   onStartEdit,
@@ -351,6 +370,10 @@ function MindmapTree({
   const isDropTarget = node.id === dropTargetNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
+  const activeTextMatch =
+    activeSearchMatch?.nodeId === node.id && activeSearchMatch.field === 'text'
+      ? activeSearchMatch
+      : null;
   const hasChildren = node.children.length > 0;
   const nodeType = findNodeTypeById(nodeTypes, node.nodeTypeId);
   const nodeStyle = nodeType
@@ -443,7 +466,19 @@ function MindmapTree({
                   {nodeType.icon}
                 </span>
               ) : null}
-              <span>{node.text}</span>
+              <span>
+                {activeTextMatch ? (
+                  <>
+                    {node.text.slice(0, activeTextMatch.start)}
+                    <mark className="node-search-highlight">
+                      {node.text.slice(activeTextMatch.start, activeTextMatch.end)}
+                    </mark>
+                    {node.text.slice(activeTextMatch.end)}
+                  </>
+                ) : (
+                  node.text
+                )}
+              </span>
             </>
           )}
         </div>
@@ -467,6 +502,7 @@ function MindmapTree({
 export function App() {
   const [mindmap, setMindmap] = useState<MindmapNode>(createCenterNode);
   const [nodeTypes, setNodeTypes] = useState<MindmapNodeType[]>([]);
+  const [userNodeTypes, setUserNodeTypes] = useState<MindmapNodeType[]>([]);
   const [themeId, setThemeId] = useState('default-blue');
   const [history, setHistory] = useState<HistoryState>(createHistoryState);
   const [canvasView, setCanvasView] =
@@ -477,6 +513,10 @@ export function App() {
   const [editingText, setEditingText] = useState('');
   const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
   const [message, setMessage] = useState('');
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [currentFileName, setCurrentFileName] = useState<string | null>(null);
+  const [isDocumentDirty, setIsDocumentDirty] = useState(true);
+  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([]);
   const [excelImportPreview, setExcelImportPreview] =
     useState<ExcelImportPreview | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -497,15 +537,9 @@ export function App() {
     createEmptyNodeTypeDraft,
   );
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
-  const [desktopPluginDir, setDesktopPluginDir] = useState('');
-  const [desktopPlugins, setDesktopPlugins] = useState<
-    NativeDesktopPluginManifest[]
-  >([]);
-  const [invalidDesktopPlugins, setInvalidDesktopPlugins] = useState<
-    DesktopPluginManifestError[]
-  >([]);
-  const [isDesktopPluginLoading, setIsDesktopPluginLoading] = useState(false);
-  const [isDesktopPluginAvailable] = useState(isTauriDesktopRuntime);
+  const [lastPluginInstallError, setLastPluginInstallError] = useState('');
+  const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
+  const [isDesktopApp] = useState(isDesktopRuntime);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
@@ -604,6 +638,14 @@ export function App() {
     () => isTxtExportPluginEnabled(plugins),
     [plugins],
   );
+  const pluginTemplates = useMemo(
+    () => getPluginTemplates(plugins),
+    [plugins],
+  );
+  const availableOfficialTemplates = useMemo(
+    () => [...OFFICIAL_TEMPLATES, ...pluginTemplates],
+    [pluginTemplates],
+  );
   const currentProject = useMemo(
     () => ({ rootNode: mindmap, nodeTypes, themeId }),
     [mindmap, nodeTypes, themeId],
@@ -644,17 +686,22 @@ export function App() {
   );
   const activeMatch = searchMatches[activeMatchIndex] ?? null;
   const templateCategories = useMemo(
-    () => getTemplateCategories([...OFFICIAL_TEMPLATES, ...templates]),
-    [templates],
+    () => getTemplateCategories([...availableOfficialTemplates, ...templates]),
+    [availableOfficialTemplates, templates],
   );
   const visibleOfficialTemplates = useMemo(
     () =>
-      filterAndSortTemplates(OFFICIAL_TEMPLATES, {
+      filterAndSortTemplates(availableOfficialTemplates, {
         keyword: templateKeyword,
         category: templateCategoryFilter,
         sortMode: templateSortMode,
       }),
-    [templateCategoryFilter, templateKeyword, templateSortMode],
+    [
+      availableOfficialTemplates,
+      templateCategoryFilter,
+      templateKeyword,
+      templateSortMode,
+    ],
   );
   const visibleCustomTemplates = useMemo(
     () =>
@@ -675,11 +722,120 @@ export function App() {
   } as const;
 
   useEffect(() => {
-    setTemplates(loadMindmapTemplates());
-    setPlugins(loadPluginRegistry());
-    setNodeTypes(loadLocalNodeTypes());
+    let isActive = true;
+
+    void (async () => {
+      console.info('[user-data] runtime detected', {
+        desktop: isDesktopApp,
+      });
+      const migration = await migrateLegacyLocalStorageToUserData();
+
+      try {
+        await ensureUserDataDirs();
+        const [
+          templatesResult,
+          pluginsResult,
+          nodeTypesResult,
+          userDataDirResult,
+          recentFilesResult,
+        ] = await Promise.allSettled([
+            loadAllUserTemplates(),
+            loadPluginRegistry(),
+            loadAllUserNodeTypes(),
+            getUserDataDir(),
+            loadRecentFileEntries(),
+          ]);
+        let pluginStorageSyncFailed = false;
+
+        if (isDesktopApp && pluginsResult.status === 'fulfilled') {
+          try {
+            await Promise.all(
+              pluginsResult.value
+                .filter((plugin) => !plugin.builtIn)
+                .map((plugin) => installPluginToUserDir(plugin, true)),
+            );
+            await savePluginRegistry(pluginsResult.value);
+          } catch {
+            pluginStorageSyncFailed = true;
+          }
+        }
+
+        if (!isActive) {
+          return;
+        }
+
+        const loadFailures: string[] = [];
+        if (templatesResult.status === 'fulfilled') {
+          setTemplates(templatesResult.value);
+        } else {
+          loadFailures.push('templates');
+          console.error(
+            '[user-data][templates] startup load failed',
+            templatesResult.reason,
+          );
+        }
+        if (pluginsResult.status === 'fulfilled') {
+          setPlugins(pluginsResult.value);
+        } else {
+          loadFailures.push('plugins');
+          console.error(
+            '[user-data][plugins] startup load failed',
+            pluginsResult.reason,
+          );
+        }
+        if (nodeTypesResult.status === 'fulfilled') {
+          setNodeTypes(nodeTypesResult.value);
+          setUserNodeTypes(nodeTypesResult.value);
+          console.info('[user-data][node-types] applied to UI state', {
+            count: nodeTypesResult.value.length,
+            names: nodeTypesResult.value.map((nodeType) => nodeType.name),
+          });
+        } else {
+          loadFailures.push('nodeTypes');
+          console.error(
+            '[user-data][node-types] startup load failed',
+            nodeTypesResult.reason,
+          );
+        }
+        if (userDataDirResult.status === 'fulfilled') {
+          setUserDataDir(userDataDirResult.value);
+        } else {
+          loadFailures.push('userDataDir');
+          console.error(
+            '[user-data] user data directory lookup failed',
+            userDataDirResult.reason,
+          );
+        }
+        if (recentFilesResult.status === 'fulfilled') {
+          setRecentFiles(recentFilesResult.value);
+        } else {
+          loadFailures.push('recentFiles');
+          console.error(
+            '[user-data][recent-files] startup load failed',
+            recentFilesResult.reason,
+          );
+        }
+
+        if (migration.migrated) {
+          showMessage(`已迁移 ${migration.migratedKeys.length} 项旧版用户数据`);
+        } else if (migration.error) {
+          console.error('[user-data] localStorage migration failed', migration.error);
+          showMessage('用户数据迁移失败，未读取旧 localStorage');
+        } else if (pluginStorageSyncFailed) {
+          showMessage('插件用户目录同步失败，已保留当前可用状态');
+        } else if (loadFailures.length > 0) {
+          showMessage(`用户数据读取失败：${loadFailures.join(', ')}`);
+        }
+      } catch (error) {
+        if (isActive) {
+          console.error('[user-data] startup initialization failed', error);
+          showMessage(getErrorMessage(error, '用户数据目录初始化失败，应用仍可继续使用'));
+        }
+      }
+    })();
 
     return () => {
+      isActive = false;
       window.clearTimeout(messageTimerRef.current);
     };
   }, []);
@@ -700,6 +856,25 @@ export function App() {
       setActiveMatchIndex(searchMatches.length - 1);
     }
   }, [activeMatchIndex, searchMatches.length]);
+
+  useEffect(() => {
+    if (!activeMatch) {
+      return;
+    }
+
+    setSelectedNodeId(activeMatch.nodeId);
+    setSelectedNodeIds([activeMatch.nodeId]);
+
+    if (activeMatch.field === 'remark') {
+      setIsRemarkPanelCollapsed(false);
+      setRemarkMode('edit');
+    }
+  }, [
+    activeMatch?.end,
+    activeMatch?.field,
+    activeMatch?.nodeId,
+    activeMatch?.start,
+  ]);
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
@@ -776,43 +951,9 @@ export function App() {
     messageTimerRef.current = window.setTimeout(() => setMessage(''), 2400);
   };
 
-  const refreshDesktopPlugins = async (showSuccessMessage = false) => {
-    if (!isDesktopPluginAvailable) {
-      return;
-    }
-
-    setIsDesktopPluginLoading(true);
-
-    try {
-      const [pluginDir, result] = await Promise.all([
-        getDesktopPluginDir(),
-        listDesktopPlugins(),
-      ]);
-
-      setDesktopPluginDir(pluginDir || result.pluginDir);
-      setDesktopPlugins(result.plugins);
-      setInvalidDesktopPlugins(result.invalidPlugins);
-
-      if (showSuccessMessage) {
-        showMessage(
-          `已扫描 ${result.plugins.length} 个 Native 插件，${result.invalidPlugins.length} 个 manifest 无效`,
-        );
-      }
-    } catch (error) {
-      showMessage(getErrorMessage(error, '桌面插件目录扫描失败'));
-    } finally {
-      setIsDesktopPluginLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isDesktopPluginAvailable) {
-      void refreshDesktopPlugins();
-    }
-  }, [isDesktopPluginAvailable]);
-
   const recordHistory = () => {
     setHistory((currentHistory) => pushHistory(currentHistory, currentProject));
+    setIsDocumentDirty(true);
   };
 
   const selectNode = (nodeId: string, append: boolean) => {
@@ -900,7 +1041,12 @@ export function App() {
         : 'default-blue';
 
     setMindmap(project.rootNode);
-    setNodeTypes(mergeWithLocalNodeTypes(project.nodeTypes));
+    setNodeTypes(
+      importNodeTypesFromPack(
+        project.nodeTypes,
+        createNodeTypePack(userNodeTypes),
+      ).nodeTypes,
+    );
     setThemeId(nextThemeId);
     if (project.themeId && project.themeId !== nextThemeId) {
       showMessage('文件使用的插件主题未启用，已切回默认主题');
@@ -946,66 +1092,214 @@ export function App() {
   const handleCreateMindmap = () => {
     recordHistory();
     setMindmap(createCenterNode());
-    setNodeTypes(loadLocalNodeTypes());
+    setNodeTypes(userNodeTypes);
     setThemeId('default-blue');
     setSelectedNodeId(null);
     setSelectedNodeIds([]);
     setEditingNodeId(null);
     setEditingText('');
+    setCurrentFilePath(null);
+    setCurrentFileName(null);
+    setIsDocumentDirty(true);
     showMessage('已新建空白思维导图');
   };
 
-  const handleSaveMindmap = () => {
-    saveMindmapAsLmind(mindmap, 'mindmap.lmind', nodeTypes, themeId);
-    showMessage('已生成 mindmap.lmind 文件');
+  const showFileResult = (
+    result: LocalFileResult,
+    desktopVerb: string,
+  ) => {
+    showMessage(
+      result.kind === 'desktop'
+        ? `${desktopVerb}：${result.path}`
+        : `已下载 ${result.fileName}，请在浏览器下载目录查看。`,
+    );
   };
 
-  const handleOpenMindmap = async () => {
-    try {
-      const openedProject = await openMindmapFromLocalFile();
+  const rememberRecentFile = async (
+    path: string,
+    action: 'open' | 'save',
+  ) => {
+    const next = await updateRecentFile(recentFiles, path, action);
+    setRecentFiles(next);
+  };
 
-      if (!openedProject) {
+  const saveMindmap = async (saveAs: boolean) => {
+    try {
+      const result = await saveLocalFile({
+        content: serializeLmindDocument(mindmap, nodeTypes, themeId),
+        defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
+        mimeType: 'application/json;charset=utf-8',
+        filterName: 'Local Mindmap 工程文件',
+        extensions: ['lmind'],
+        currentPath: currentFilePath,
+        forceDialog: saveAs,
+      });
+
+      if (!result) {
+        showMessage('保存已取消。');
         return;
       }
-
-      recordHistory();
-      applyProject(openedProject);
-      showMessage('已打开 .lmind 文件');
-    } catch {
-      showMessage('文件格式不正确，无法打开');
+      if (result.kind === 'desktop') {
+        setCurrentFilePath(result.path);
+        setCurrentFileName(result.fileName);
+        await rememberRecentFile(result.path, 'save');
+      } else {
+        setCurrentFileName(result.fileName);
+      }
+      setIsDocumentDirty(false);
+      showFileResult(result, saveAs ? '已另存为' : '已保存');
+    } catch (error) {
+      showMessage(`保存失败：${getErrorMessage(error, '未知错误')}`);
     }
   };
 
-  const handleExportMarkdown = () => {
-    exportMindmapMarkdown(mindmap);
-    showMessage('已导出 mindmap.md');
+  const handleSaveMindmap = () => void saveMindmap(false);
+  const handleSaveMindmapAs = () => void saveMindmap(true);
+
+  const handleOpenMindmap = async () => {
+    try {
+      const opened = await openLocalTextFile({
+        accept: '.lmind,application/json',
+        filterName: 'Local Mindmap 工程文件',
+        extensions: ['lmind'],
+      });
+
+      if (!opened) {
+        return;
+      }
+      const openedProject = parseLmindProject(opened.content);
+
+      recordHistory();
+      applyProject(openedProject);
+      setCurrentFilePath(opened.path);
+      setCurrentFileName(opened.fileName);
+      setIsDocumentDirty(false);
+      await rememberRecentFile(opened.path ?? opened.fileName, 'open');
+      showMessage(opened.path ? `已打开：${opened.path}` : `已打开 ${opened.fileName}`);
+    } catch (error) {
+      showMessage(`打开失败：${getErrorMessage(error, '文件格式不正确')}`);
+    }
   };
 
-  const handleExportExcel = () => {
-    exportMindmapExcel(mindmap);
-    showMessage('已导出 mindmap.xlsx');
+  const handleOpenRecentFile = async (entry: RecentFileEntry) => {
+    if (!isDesktopApp) {
+      showMessage(`最近下载：${entry.name}。浏览器无法重新打开本地下载路径。`);
+      return;
+    }
+    try {
+      const openedProject = parseLmindProject(
+        await readLocalTextFile(entry.path),
+      );
+      recordHistory();
+      applyProject(openedProject);
+      setCurrentFilePath(entry.path);
+      setCurrentFileName(entry.name);
+      setIsDocumentDirty(false);
+      await rememberRecentFile(entry.path, 'open');
+      showMessage(`已打开：${entry.path}`);
+    } catch (error) {
+      showMessage(
+        `打开失败：${getErrorMessage(error, '文件不存在或格式不正确')}`,
+      );
+    }
   };
 
-  const handleExportJson = () => {
-    exportMindmapJson(mindmap, nodeTypes, themeId);
-    showMessage('已导出 mindmap.json');
+  const handleOpenCurrentFileLocation = async () => {
+    if (!currentFilePath) {
+      showMessage('当前文件尚未保存。');
+      return;
+    }
+    try {
+      await openFileLocation(currentFilePath);
+    } catch (error) {
+      showMessage(
+        `打开所在目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
   };
 
-  const handleExportNodeTypePack = () => {
+  const handleCopyCurrentFilePath = async () => {
+    if (!currentFilePath) {
+      showMessage('当前文件尚未保存。');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(currentFilePath);
+      showMessage('路径已复制。');
+    } catch (error) {
+      showMessage(`复制路径失败：${getErrorMessage(error, '剪贴板不可用')}`);
+    }
+  };
+
+  const exportFile = async (options: {
+    content: string | Uint8Array | ArrayBuffer;
+    extension: string;
+    mimeType: string;
+    filterName: string;
+    defaultFileName?: string;
+  }) => {
+    try {
+      const result = await saveLocalFile({
+        content: options.content,
+        defaultFileName:
+          options.defaultFileName ??
+          `${sanitizeFileName(mindmap.text)}.${options.extension}`,
+        mimeType: options.mimeType,
+        filterName: options.filterName,
+        extensions: [options.extension],
+        forceDialog: true,
+      });
+      if (!result) {
+        showMessage('导出已取消。');
+        return;
+      }
+      showFileResult(result, '已导出');
+    } catch (error) {
+      showMessage(`导出失败：${getErrorMessage(error, '未知错误')}`);
+    }
+  };
+
+  const handleExportMarkdown = () =>
+    void exportFile({
+      content: serializeMindmapMarkdown(mindmap),
+      extension: 'md',
+      mimeType: 'text/markdown;charset=utf-8',
+      filterName: 'Markdown',
+    });
+
+  const handleExportExcel = () =>
+    void exportFile({
+      content: createMindmapExcelBytes(mindmap),
+      extension: 'xlsx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      filterName: 'Excel',
+    });
+
+  const handleExportJson = () =>
+    void exportFile({
+      content: serializeLmindDocument(mindmap, nodeTypes, themeId),
+      extension: 'json',
+      mimeType: 'application/json;charset=utf-8',
+      filterName: 'JSON',
+    });
+
+  const handleExportNodeTypePack = async () => {
     if (nodeTypes.length === 0) {
       showMessage('暂无可导出的自定义节点类型');
       return;
     }
 
-    downloadTextFile(
-      exportNodeTypesToPack(nodeTypes, {
+    await exportFile({
+      content: exportNodeTypesToPack(nodeTypes, {
         name: 'Local Mindmap 节点类型包',
         description: '用于分享本地自定义节点类型，不包含导图内容。',
       }),
-      'local-mindmap-node-types.json',
-      'application/json;charset=utf-8',
-    );
-    showMessage('已导出节点类型包');
+      extension: 'json',
+      mimeType: 'application/json;charset=utf-8',
+      filterName: '节点类型包',
+      defaultFileName: `Local-Mindmap-节点类型包-${new Date().toISOString().slice(0, 10)}.json`,
+    });
   };
 
   const handleImportNodeTypePack = async () => {
@@ -1025,26 +1319,35 @@ export function App() {
 
       const result = importNodeTypesFromPack(nodeTypes, pack);
 
+      let savedPackPath = '';
       if (result.importedCount > 0) {
         recordHistory();
         setNodeTypes(result.nodeTypes);
-        saveLocalNodeTypes(result.nodeTypes);
+        setUserNodeTypes(result.nodeTypes);
+        const [, packPath] = await Promise.all([
+          saveLocalNodeTypes(result.nodeTypes),
+          saveImportedNodeTypePack(pack),
+        ]);
+        savedPackPath = packPath;
       }
 
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+        `已导入节点类型包：${pack.meta.name}。${savedPackPath ? `已保存到用户目录：${savedPackPath}。` : ''}成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
     } catch (error) {
-      showMessage(getErrorMessage(error, '节点类型包格式不正确，无法导入'));
+      showMessage(`导入失败：${getErrorMessage(error, '节点类型包格式不正确')}`);
     }
   };
 
-  const handleExportTxt = () => {
-    exportMindmapTxt(mindmap);
-    showMessage('已导出 mindmap.txt');
-  };
+  const handleExportTxt = () =>
+    void exportFile({
+      content: serializeMindmapTxt(mindmap),
+      extension: 'txt',
+      mimeType: 'text/plain;charset=utf-8',
+      filterName: 'Text',
+    });
 
   const handleInstallPlugin = async () => {
     try {
@@ -1058,101 +1361,85 @@ export function App() {
         (plugin) => plugin.pluginId === manifest.pluginId,
       );
 
-      if (exists && !window.confirm('插件已存在，是否覆盖安装？')) {
+      if (exists && !window.confirm('插件已安装，是否覆盖安装？')) {
+        const duplicateMessage = `插件已安装：${manifest.pluginId}`;
+        setLastPluginInstallError(duplicateMessage);
+        showMessage(duplicateMessage);
         return;
       }
 
-      const nextPlugins = installPluginManifest(plugins, manifest);
+      const {
+        plugins: nextPlugins,
+        manifest: installedManifest,
+      } = await installPlugin(plugins, manifest, exists);
       setPlugins(nextPlugins);
-      savePluginRegistry(nextPlugins);
-      showMessage('插件安装成功');
-    } catch {
-      showMessage('插件格式不正确');
+      setLastPluginInstallError('');
+      const installPaths =
+        `已安装插件：${installedManifest.name}。` +
+        `已保存到用户目录：plugins/installed/${installedManifest.pluginId}/manifest.json。` +
+        '已更新插件注册表：plugins/plugin-registry.json。';
+      showMessage(
+        installedManifest.validationWarnings?.length
+          ? `${installPaths}${installedManifest.validationWarnings.join(' ')}`
+          : installPaths,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof PluginManifestError
+          ? error.message
+          : getErrorMessage(error, '插件安装失败：未知错误');
+      setLastPluginInstallError(errorMessage);
+      showMessage(errorMessage);
     }
   };
 
-  const handleTogglePlugin = (pluginId: string, enabled: boolean) => {
+  const handleTogglePlugin = async (pluginId: string, enabled: boolean) => {
     const nextPlugins = setPluginEnabled(plugins, pluginId, enabled);
-    setPlugins(nextPlugins);
-    savePluginRegistry(nextPlugins);
-    showMessage(enabled ? '插件已启用' : '插件已禁用');
+    try {
+      await savePluginRegistry(nextPlugins);
+      setPlugins(nextPlugins);
+      showMessage(enabled ? '插件已启用' : '插件已禁用');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '插件状态保存失败'));
+    }
   };
 
-  const handleUninstallPlugin = (pluginId: string) => {
+  const handleUninstallPlugin = async (pluginId: string) => {
+    const targetPlugin = plugins.find((plugin) => plugin.pluginId === pluginId);
+    if (targetPlugin?.builtIn) {
+      showMessage('内置插件不能卸载，可选择禁用');
+      return;
+    }
     if (!window.confirm('确定要卸载这个插件吗？')) {
       return;
     }
 
     const nextPlugins = uninstallPlugin(plugins, pluginId);
-    setPlugins(nextPlugins);
-    savePluginRegistry(nextPlugins);
-    showMessage('插件已卸载');
-  };
-
-  const handleInstallDesktopPlugin = async () => {
-    if (!isDesktopPluginAvailable) {
-      showMessage('桌面插件仅在 Tauri 桌面端可用');
-      return;
-    }
-
     try {
-      const rawManifest = await readLocalNativeManifestText();
-
-      if (!rawManifest) {
-        return;
-      }
-
-      const manifest = normalizeNativeDesktopPluginManifest(
-        JSON.parse(rawManifest),
-      );
-
-      if (!manifest) {
-        throw new Error('Invalid native plugin manifest.');
-      }
-
-      const exists = desktopPlugins.some(
-        (plugin) => plugin.pluginId === manifest.pluginId,
-      );
-
-      if (
-        exists &&
-        !window.confirm('桌面 Native 插件已存在，是否覆盖安装 manifest？')
-      ) {
-        return;
-      }
-
-      await installDesktopPluginManifest(rawManifest, exists);
-      await refreshDesktopPlugins();
-      showMessage('桌面 Native 插件 manifest 已安装，默认禁用');
+      await uninstallPluginFromUserDir(pluginId);
+      await savePluginRegistry(nextPlugins);
+      setPlugins(nextPlugins);
+      showMessage('插件已卸载');
     } catch (error) {
-      showMessage(getErrorMessage(error, '桌面 Native 插件 manifest 格式不正确'));
+      showMessage(getErrorMessage(error, '插件卸载失败'));
     }
   };
 
-  const handleToggleDesktopPlugin = async (
-    pluginId: string,
-    enabled: boolean,
-  ) => {
+  const handleCopyUserDataDir = async () => {
     try {
-      await setDesktopPluginEnabled(pluginId, enabled);
-      await refreshDesktopPlugins();
-      showMessage(enabled ? '桌面 Native 插件已启用' : '桌面 Native 插件已禁用');
-    } catch (error) {
-      showMessage(getErrorMessage(error, '桌面 Native 插件状态更新失败'));
+      await navigator.clipboard.writeText(userDataDir);
+      showMessage('用户数据目录路径已复制');
+    } catch {
+      showMessage('复制失败，请手动选择路径');
     }
   };
 
-  const handleUninstallDesktopPlugin = async (pluginId: string) => {
-    if (!window.confirm('确定要卸载这个桌面 Native 插件 manifest 吗？')) {
-      return;
-    }
-
+  const handleOpenUserDataDir = async () => {
     try {
-      await uninstallDesktopPlugin(pluginId);
-      await refreshDesktopPlugins();
-      showMessage('桌面 Native 插件已卸载');
+      await openUserDataDir();
+      showMessage('已打开用户数据目录');
     } catch (error) {
-      showMessage(getErrorMessage(error, '桌面 Native 插件卸载失败'));
+      showMessage(getErrorMessage(error, '无法打开用户数据目录'));
     }
   };
 
@@ -1550,21 +1837,36 @@ export function App() {
   };
 
   const handleReplaceCurrent = () => {
-    if (!searchQuery.trim() || !activeMatch) {
+    const query = searchQuery.trim();
+
+    if (!query || !activeMatch) {
       showMessage('没有可替换的匹配项');
       return;
     }
 
-    recordHistory();
-    setMindmap((currentMindmap) =>
-      replaceMatchInMindmap(
-        currentMindmap,
-        activeMatch,
-        searchQuery.trim(),
-        replacementText,
-      ),
+    const nextMindmap = replaceMatchInMindmap(
+      mindmap,
+      activeMatch,
+      query,
+      replacementText,
     );
-    showMessage('已替换当前匹配项');
+    const nextMatches = findMindmapMatches(nextMindmap, query, searchScope);
+    const nextMatchIndex = findNextMatchIndex(nextMindmap, nextMatches, {
+      nodeId: activeMatch.nodeId,
+      field: activeMatch.field,
+      offset: activeMatch.start + replacementText.length,
+    });
+
+    recordHistory();
+    setMindmap(nextMindmap);
+    setActiveMatchIndex(Math.max(0, nextMatchIndex));
+
+    const nextMatch = nextMatches[nextMatchIndex];
+    if (nextMatch) {
+      setSelectedNodeId(nextMatch.nodeId);
+      setSelectedNodeIds([nextMatch.nodeId]);
+    }
+    showMessage('已替换 1 处');
   };
 
   const handleReplaceAll = () => {
@@ -1590,7 +1892,7 @@ export function App() {
     showMessage(`已替换 ${searchMatches.length} 处内容`);
   };
 
-  const handleSaveTemplate = () => {
+  const handleSaveTemplate = async () => {
     const template = createTemplateFromMindmap(
       templateName || mindmap.text,
       templateCategory,
@@ -1599,27 +1901,34 @@ export function App() {
       nodeTypes,
       themeId,
     );
-    setTemplates(addMindmapTemplate(template));
-    setTemplateName('');
-    setTemplateDescription('');
-    showMessage('已保存为模板');
+    const nextTemplates = [template, ...templates];
+    try {
+      await saveMindmapTemplates(nextTemplates);
+      setTemplates(nextTemplates);
+      setTemplateName('');
+      setTemplateDescription('');
+      showMessage('已保存为模板');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '模板保存失败'));
+    }
   };
 
-  const handleExportTemplatePack = () => {
+  const handleExportTemplatePack = async () => {
     if (templates.length === 0) {
       showMessage('暂无可导出的自定义模板');
       return;
     }
 
-    downloadTextFile(
-      exportTemplatesToPack(templates, {
+    await exportFile({
+      content: exportTemplatesToPack(templates, {
         name: 'Local Mindmap 模板包',
         description: '用于分享本地自定义模板，不等同于 .lmind 文件。',
       }),
-      'local-mindmap-templates.json',
-      'application/json;charset=utf-8',
-    );
-    showMessage('已导出模板包');
+      extension: 'json',
+      mimeType: 'application/json;charset=utf-8',
+      filterName: '模板包',
+      defaultFileName: `Local-Mindmap-模板包-${new Date().toISOString().slice(0, 10)}.json`,
+    });
   };
 
   const handleImportTemplatePack = async () => {
@@ -1639,18 +1948,23 @@ export function App() {
 
       const result = importTemplatesFromPack(templates, pack);
 
+      let savedPackPath = '';
       if (result.importedCount > 0) {
         setTemplates(result.templates);
-        saveMindmapTemplates(result.templates);
+        const [, packPath] = await Promise.all([
+          saveMindmapTemplates(result.templates),
+          saveImportedTemplatePack(pack),
+        ]);
+        savedPackPath = packPath;
       }
 
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+        `已导入模板包：${pack.meta.name}。${savedPackPath ? `已保存到用户目录：${savedPackPath}。` : ''}成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
     } catch (error) {
-      showMessage(getErrorMessage(error, '模板包格式不正确，无法导入'));
+      showMessage(`导入失败：${getErrorMessage(error, '模板包格式不正确')}`);
     }
   };
 
@@ -1661,9 +1975,17 @@ export function App() {
     showMessage('已从模板新建思维导图');
   };
 
-  const handleDeleteTemplate = (templateId: string) => {
-    setTemplates(deleteMindmapTemplate(templateId));
-    showMessage('已删除模板');
+  const handleDeleteTemplate = async (templateId: string) => {
+    const nextTemplates = templates.filter(
+      (template) => template.id !== templateId,
+    );
+    try {
+      await saveMindmapTemplates(nextTemplates);
+      setTemplates(nextTemplates);
+      showMessage('已删除模板');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '模板删除失败'));
+    }
   };
 
   const handleGeneratePerformanceMindmap = (
@@ -1677,7 +1999,7 @@ export function App() {
     showMessage(`已生成 ${result.nodeCount} 节点性能测试导图`);
   };
 
-  const handleCreateNodeType = () => {
+  const handleCreateNodeType = async () => {
     const nodeType = createMindmapNodeType(nodeTypeDraft);
 
     if (!nodeType) {
@@ -1686,13 +2008,16 @@ export function App() {
     }
 
     recordHistory();
-    setNodeTypes((currentNodeTypes) => {
-      const nextNodeTypes = [...currentNodeTypes, nodeType];
-      saveLocalNodeTypes(nextNodeTypes);
-      return nextNodeTypes;
-    });
-    setNodeTypeDraft(createEmptyNodeTypeDraft());
-    showMessage('已创建节点类型');
+    const nextNodeTypes = [...nodeTypes, nodeType];
+    try {
+      await saveLocalNodeTypes(nextNodeTypes);
+      setNodeTypes(nextNodeTypes);
+      setUserNodeTypes(nextNodeTypes);
+      setNodeTypeDraft(createEmptyNodeTypeDraft());
+      showMessage('已创建节点类型');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '节点类型保存失败'));
+    }
   };
 
   const handleSelectedNodeTypeChange = (nodeTypeId: string) => {
@@ -1755,10 +2080,14 @@ export function App() {
     }
 
     try {
-      await exportMindmapAsImage(exportTreeRef.current, format);
-      showMessage(format === 'png' ? '已导出 mindmap.png' : '已导出 mindmap.jpg');
-    } catch {
-      showMessage('图片导出失败，请稍后重试');
+      await exportFile({
+        content: await createMindmapImageBytes(exportTreeRef.current, format),
+        extension: format,
+        mimeType: format === 'png' ? 'image/png' : 'image/jpeg',
+        filterName: format.toUpperCase(),
+      });
+    } catch (error) {
+      showMessage(`导出失败：图片生成失败：${getErrorMessage(error, '未知错误')}`);
     }
   };
 
@@ -2212,11 +2541,32 @@ export function App() {
       label: '文件',
       items: [
         { label: '新建思维导图', onSelect: handleCreateMindmap },
-        { label: '保存 .lmind', onSelect: handleSaveMindmap },
         {
           label: '打开 .lmind',
           onSelect: () => void handleOpenMindmap(),
         },
+        { label: '保存', onSelect: handleSaveMindmap },
+        { label: '另存为 .lmind', onSelect: handleSaveMindmapAs },
+        ...(isDesktopApp
+          ? [
+              {
+                label: '打开所在目录',
+                onSelect: () => void handleOpenCurrentFileLocation(),
+                disabled: !currentFilePath,
+                dividerBefore: true,
+              },
+              {
+                label: '复制文件路径',
+                onSelect: () => void handleCopyCurrentFilePath(),
+                disabled: !currentFilePath,
+              },
+            ]
+          : []),
+        ...recentFiles.slice(0, 5).map((entry, index) => ({
+          label: `最近文件：${entry.name}`,
+          onSelect: () => void handleOpenRecentFile(entry),
+          dividerBefore: index === 0,
+        })),
       ],
     },
     {
@@ -2346,7 +2696,14 @@ export function App() {
     >
       {!isFocusMode ? (
         <TopMenuBar
-          currentTitle={mindmap.text || '未命名导图'}
+          currentTitle={`${currentFileName ?? mindmap.text ?? '未命名导图'} · ${
+            currentFileName
+              ? isDocumentDirty
+                ? '有未保存修改'
+                : '已保存'
+              : '未保存'
+          }`}
+          currentPath={currentFilePath}
           menus={topMenus}
           message={message}
           onUndo={handleUndo}
@@ -2757,9 +3114,12 @@ export function App() {
                   <span className="panel-note">
                     {searchMatches.length > 0
                       ? `${activeMatchIndex + 1} / ${searchMatches.length}`
-                      : '0 个结果'}
+                      : '未找到匹配项'}
                   </span>
                 </div>
+                {activeMatch?.field === 'remark' ? (
+                  <p className="search-match-location">当前匹配位于备注</p>
+                ) : null}
                 <div className="compact-form drawer-form">
                   <input
                     type="search"
@@ -2958,6 +3318,7 @@ export function App() {
                   editingNodeId={editingNodeId}
                   editingText={editingText}
                   searchMatchNodeIds={searchMatchNodeIds}
+                  activeSearchMatch={activeMatch}
                   onToggleCollapse={handleToggleCollapse}
                   onSelectNode={selectNode}
                   onStartEdit={handleStartEdit}
@@ -3003,6 +3364,9 @@ export function App() {
               themeId={themeId}
               themes={availableThemes}
               remarkMode={remarkMode}
+              activeRemarkMatch={
+                activeMatch?.field === 'remark' ? activeMatch : null
+              }
               onChildNodeTypeChange={setChildNodeTypeId}
               onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
               onThemeChange={handleThemeChange}
@@ -3027,23 +3391,17 @@ export function App() {
       {isPluginManagerVisible ? (
         <PluginManagerPanel
           plugins={plugins}
-          desktopPluginDir={desktopPluginDir}
-          desktopPlugins={desktopPlugins}
-          invalidDesktopPlugins={invalidDesktopPlugins}
-          isDesktopPluginAvailable={isDesktopPluginAvailable}
-          isDesktopPluginLoading={isDesktopPluginLoading}
+          lastInstallError={lastPluginInstallError}
+          userDataDir={userDataDir}
+          isDesktopApp={isDesktopApp}
           onClose={() => setIsPluginManagerVisible(false)}
           onInstall={handleInstallPlugin}
-          onToggle={handleTogglePlugin}
-          onUninstall={handleUninstallPlugin}
-          onRefreshDesktopPlugins={() => void refreshDesktopPlugins(true)}
-          onInstallDesktopPlugin={() => void handleInstallDesktopPlugin()}
-          onToggleDesktopPlugin={(pluginId, enabled) =>
-            void handleToggleDesktopPlugin(pluginId, enabled)
+          onToggle={(pluginId, enabled) =>
+            void handleTogglePlugin(pluginId, enabled)
           }
-          onUninstallDesktopPlugin={(pluginId) =>
-            void handleUninstallDesktopPlugin(pluginId)
-          }
+          onUninstall={(pluginId) => void handleUninstallPlugin(pluginId)}
+          onCopyUserDataDir={() => void handleCopyUserDataDir()}
+          onOpenUserDataDir={() => void handleOpenUserDataDir()}
         />
       ) : null}
 

@@ -1729,6 +1729,22 @@ h3 {
   word-break: break-word;
 }
 
+.plugin-install-error {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #f0b8b8;
+  border-radius: 8px;
+  color: #8f2424;
+  background: #fff6f6;
+  overflow-wrap: anywhere;
+}
+
+.plugin-install-error p {
+  margin: 0;
+  line-height: 1.5;
+}
+
 .native-plugin-section {
   background: #fffdf8;
   border-color: #f4d58d;
@@ -3520,6 +3536,30 @@ textarea::placeholder {
 .mindmap-node.is-search-match {
   outline: 3px solid rgb(78 174 126 / 23%);
   outline-offset: 4px;
+}
+
+.node-search-highlight,
+.remark-search-context mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  color: inherit;
+  background: #fde68a;
+}
+
+.search-match-location,
+.remark-search-context {
+  margin: 0;
+  color: #92400e;
+  font-size: 12px;
+}
+
+.remark-search-context {
+  padding: 8px 10px;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  background: #fffbeb;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .mindmap-node.is-dragging {

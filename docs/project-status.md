@@ -2,7 +2,31 @@
 
 更新时间：2026-06-27
 
-当前阶段：v1.5 第二批开发完成（高质感极简 UI 视觉精修）
+当前阶段：v1.6 第一批开发完成（用户目录分离与声明式插件体系基础版）
+
+## v1.6 第一批：用户目录与插件体系
+
+- 已新增统一存储层 `src/features/storage/userDataStorage.ts`：桌面端调用 Tauri commands，Web 端继续使用原 localStorage key。
+- 已以 Tauri `app_data_dir` 作为桌面用户数据根，创建 `mindmaps`、`autosave`、`node-types/packs`、`templates/packs`、`plugins/installed`、`config`、`backups`。
+- Tauri identifier 已在 v1.6 发布前固定为 `com.localmindmap.desktop`；Windows 用户目录随之调整为 `%APPDATA%\com.localmindmap.desktop`，不再触发 identifier 以 `.app` 结尾的警告。
+- 已增加旧 identifier 目录兼容迁移：从 `com.localmindmap.app` 复制节点类型、模板、插件、配置和备份，不删除源文件、不覆盖新目录已有文件、不跟随符号链接。
+- 已新增受限 JSON 读写、目录列举、声明式插件安装 / 卸载和打开目录 commands；绝对路径、`.`、`..`、路径穿越和符号链接逃逸均被拒绝。
+- 自定义节点类型保存到 `node-types/custom-node-types.json`；自定义模板保存到 `templates/custom-templates.json`；导入包同时保存在对应 `packs/`。
+- 插件 registry 保存到 `plugins/plugin-registry.json`，用户插件 manifest 保存到 `plugins/installed/<pluginId>/manifest.json`。
+- 已保留并升级 Web JSON 插件：支持 `.json` / `.lmplugin`、搜索、类型筛选、详情、权限、启停、卸载、重复 ID 冲突和正确安装时间。
+- 插件 schema 已集中到插件模块：新导入统一使用 `theme-pack`、`icon-pack`、`import-export`、`node-type-pack`、`template-pack`、`tool`；旧 `exporter` 仅兼容读取。
+- 插件导入错误不再被统一提示吞掉：JSON、字段校验、类型、capability、重复 ID 和用户目录写入错误都会显示具体原因，并在插件管理面板保留最近一次错误。
+- 已提供可直接导入的最小示例 `docs/examples/persistence-test-plugin.json`；无 `contributions` 的合法插件可用于验证 registry、manifest、启停和卸载持久化。
+- 已修复 Windows 用户目录 canonical path 大小写比较误判；真实 `npm run tauri:dev` 中导入示例成功，registry 与 installed manifest 均写入，且 `installedAt` 为当前时间。
+- 插件采用声明式 manifest，支持 exporters、nodeTypePacks、templatePacks；TXT 导出由 `builtin.exportText` 内置 handler 执行。
+- 已递归拒绝 `script`、`eval`、`function`、`remoteUrl`、`code`、`command`、`shell`、`executable`，不执行任意 JS、DLL、Shell 或远程代码。
+- 已新增首次启动迁移：迁移前写入 `backups/`，成功后写 migration flag，不删除旧 localStorage；迁移或目录初始化失败会回退 localStorage。
+- 插件管理面板可显示、复制用户数据目录；桌面端可调用系统打开目录，Web 端显示“浏览器本地存储”。
+- `.lmind` 结构、保存 / 打开逻辑和 v1.5 UI 主布局未修改；未新增 npm 依赖，版本仍为 `1.5.0`。
+- 自动化验证：`npm run build` 通过；`npm run test` 通过（20 个测试文件、182 个测试）；Rust `cargo test` 通过（9 个测试）；`npm run tauri:build` 通过并生成 MSI / NSIS。
+- Windows release 二进制实机验证：首次启动创建 `%APPDATA%\com.localmindmap.desktop`，从旧目录复制 5 个文件；再次启动后节点类型、模板和插件 registry 文件均存在且内容保持不变。
+- Windows release 桌面端已启动验证：真实路径显示、复制路径、打开目录、目录树创建、迁移备份与 v1.5 主布局均正常。
+- 本批未处理查找替换 bug、备注查找高亮、写作模块、插件市场、远程下载、PDF / Word 导出。
 
 ## v1.5 第二批：高质感视觉精修
 

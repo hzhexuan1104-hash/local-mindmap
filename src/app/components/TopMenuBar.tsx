@@ -15,6 +15,7 @@ export type TopMenuGroup = {
 
 type TopMenuBarProps = {
   currentTitle: string;
+  currentPath?: string | null;
   menus: TopMenuGroup[];
   message?: string;
   onUndo: () => void;
@@ -23,6 +24,7 @@ type TopMenuBarProps = {
 
 export function TopMenuBar({
   currentTitle,
+  currentPath,
   menus,
   message,
   onUndo,
@@ -78,7 +80,7 @@ export function TopMenuBar({
         </div>
       </div>
 
-      <div className="top-document-title" title={currentTitle}>
+      <div className="top-document-title" title={currentPath ?? currentTitle}>
         <span className="document-status-dot" aria-hidden="true" />
         <strong>{currentTitle}</strong>
       </div>

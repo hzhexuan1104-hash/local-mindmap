@@ -24,3 +24,20 @@ export async function exportMindmapAsImage(
 
   downloadDataUrl(dataUrl, format === 'png' ? 'mindmap.png' : 'mindmap.jpg');
 }
+
+export async function createMindmapImageBytes(
+  element: HTMLElement,
+  format: 'png' | 'jpg',
+) {
+  const options = {
+    cacheBust: true,
+    pixelRatio: Math.max(2, window.devicePixelRatio || 1),
+    backgroundColor: '#ffffff',
+  };
+  const dataUrl =
+    format === 'png'
+      ? await toPng(element, options)
+      : await toJpeg(element, { ...options, quality: 0.95 });
+  const response = await fetch(dataUrl);
+  return new Uint8Array(await response.arrayBuffer());
+}

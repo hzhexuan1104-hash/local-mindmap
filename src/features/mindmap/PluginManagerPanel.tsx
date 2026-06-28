@@ -1,51 +1,51 @@
 import { useMemo, useState } from 'react';
-import type {
-  DesktopPluginManifestError,
-  NativeDesktopPluginManifest,
-} from './desktopPlugins';
 import type { PluginCategory, PluginManifest } from './plugins';
 
 type PluginManagerPanelProps = {
   plugins: PluginManifest[];
-  desktopPluginDir: string;
-  desktopPlugins: NativeDesktopPluginManifest[];
-  invalidDesktopPlugins: DesktopPluginManifestError[];
-  isDesktopPluginAvailable: boolean;
-  isDesktopPluginLoading: boolean;
+  lastInstallError: string;
+  userDataDir: string;
+  isDesktopApp: boolean;
   onClose: () => void;
   onInstall: () => void;
   onToggle: (pluginId: string, enabled: boolean) => void;
   onUninstall: (pluginId: string) => void;
-  onRefreshDesktopPlugins: () => void;
-  onInstallDesktopPlugin: () => void;
-  onToggleDesktopPlugin: (pluginId: string, enabled: boolean) => void;
-  onUninstallDesktopPlugin: (pluginId: string) => void;
+  onCopyUserDataDir: () => void;
+  onOpenUserDataDir: () => void;
 };
 
 const CATEGORY_OPTIONS: Array<{ value: '' | PluginCategory; label: string }> = [
-  { value: '', label: '全部分类' },
+  { value: '', label: '全部类型' },
   { value: 'import-export', label: '导入导出' },
-  { value: 'theme', label: '主题' },
+  { value: 'theme', label: '主题包' },
   { value: 'icon-pack', label: '图标包' },
-  { value: 'node-type', label: '节点类型' },
+  { value: 'node-type', label: '节点类型包' },
+  { value: 'template', label: '模板包' },
   { value: 'tool', label: '工具' },
 ];
 
+function countContributions(plugin: PluginManifest) {
+  if (!plugin.contributions) {
+    return 0;
+  }
+
+  return Object.values(plugin.contributions).reduce(
+    (sum, items) => sum + (Array.isArray(items) ? items.length : 0),
+    0,
+  );
+}
+
 export function PluginManagerPanel({
   plugins,
-  desktopPluginDir,
-  desktopPlugins,
-  invalidDesktopPlugins,
-  isDesktopPluginAvailable,
-  isDesktopPluginLoading,
+  lastInstallError,
+  userDataDir,
+  isDesktopApp,
   onClose,
   onInstall,
   onToggle,
   onUninstall,
-  onRefreshDesktopPlugins,
-  onInstallDesktopPlugin,
-  onToggleDesktopPlugin,
-  onUninstallDesktopPlugin,
+  onCopyUserDataDir,
+  onOpenUserDataDir,
 }: PluginManagerPanelProps) {
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<'' | PluginCategory>('');
@@ -59,14 +59,12 @@ export function PluginManagerPanel({
         plugin.name,
         plugin.version,
         plugin.author,
-        plugin.category,
+        plugin.pluginType,
         plugin.description,
       ]
         .join(' ')
         .toLowerCase();
-      const matchesKeyword = query ? searchableText.includes(query) : true;
-
-      return matchesCategory && matchesKeyword;
+      return matchesCategory && (!query || searchableText.includes(query));
     });
   }, [category, keyword, plugins]);
 
@@ -94,13 +92,56 @@ export function PluginManagerPanel({
           <section className="plugin-manager-section">
             <div className="plugin-section-heading">
               <div>
-                <h3>Web JSON 插件</h3>
-                <p>保留当前 localStorage 插件机制。</p>
+                <h3>用户数据目录</h3>
+                <p>
+                  {isDesktopApp
+                    ? '插件、模板和节点类型存放在桌面端用户目录。'
+                    : 'Web 端使用浏览器 localStorage fallback。'}
+                </p>
+              </div>
+              <div className="plugin-manager-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onCopyUserDataDir}
+                >
+                  复制路径
+                </button>
+                {isDesktopApp ? (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={onOpenUserDataDir}
+                  >
+                    打开目录
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <p className="plugin-dir-note" title={userDataDir}>
+              {userDataDir}
+            </p>
+          </section>
+
+          <section className="plugin-manager-section">
+            <div className="plugin-section-heading">
+              <div>
+                <h3>声明式 JSON 插件</h3>
+                <p>
+                  仅接受 .json / .lmplugin；不会执行 JS、命令、Shell 或远程代码。
+                </p>
               </div>
               <button type="button" className="secondary-action" onClick={onInstall}>
-                安装本地 JSON 插件
+                导入本地插件
               </button>
             </div>
+
+            {lastInstallError ? (
+              <div className="plugin-install-error" role="alert">
+                <strong>最近一次安装错误</strong>
+                <p>{lastInstallError}</p>
+              </div>
+            ) : null}
 
             <div className="plugin-manager-filters">
               <input
@@ -132,6 +173,7 @@ export function PluginManagerPanel({
                     <div className="plugin-item-main">
                       <div className="plugin-item-title">
                         <strong>{plugin.name}</strong>
+                        {plugin.builtIn ? <span>内置</span> : null}
                         <span
                           className={plugin.enabled ? 'status-on' : 'status-off'}
                         >
@@ -149,18 +191,35 @@ export function PluginManagerPanel({
                           <dd>{plugin.author}</dd>
                         </div>
                         <div>
-                          <dt>分类</dt>
-                          <dd>{plugin.category}</dd>
+                          <dt>类型</dt>
+                          <dd>{plugin.pluginType}</dd>
                         </div>
                         <div>
                           <dt>安装时间</dt>
-                          <dd>{new Date(plugin.installedAt).toLocaleString()}</dd>
+                          <dd>
+                            {plugin.builtIn
+                              ? '随应用安装'
+                              : new Date(plugin.installedAt).toLocaleString()}
+                          </dd>
                         </div>
                       </dl>
+                      <p className="plugin-dir-note">
+                        ID：{plugin.pluginId} · 贡献点：
+                        {countContributions(plugin)}
+                      </p>
                       {plugin.capabilities.length > 0 ? (
                         <div className="plugin-capability-list">
                           {plugin.capabilities.map((capability) => (
                             <span key={capability}>{capability}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {plugin.contributions?.exporters?.length ? (
+                        <div className="plugin-capability-list">
+                          {plugin.contributions.exporters.map((exporter) => (
+                            <span key={exporter.id}>
+                              {exporter.label} · {exporter.handler}
+                            </span>
                           ))}
                         </div>
                       ) : null}
@@ -176,6 +235,8 @@ export function PluginManagerPanel({
                       <button
                         type="button"
                         className="secondary-action danger-action"
+                        disabled={plugin.builtIn}
+                        title={plugin.builtIn ? '内置插件可禁用但不能卸载' : undefined}
                         onClick={() => onUninstall(plugin.pluginId)}
                       >
                         卸载
@@ -185,138 +246,6 @@ export function PluginManagerPanel({
                 ))
               )}
             </div>
-          </section>
-
-          <section className="plugin-manager-section native-plugin-section">
-            <div className="plugin-section-heading">
-              <div>
-                <h3>桌面 Native 插件</h3>
-                <p>
-                  Native 插件属于本机扩展能力。未来版本可能加载本地二进制文件。请只安装可信来源插件。
-                </p>
-              </div>
-              {isDesktopPluginAvailable ? (
-                <div className="plugin-manager-actions">
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={onRefreshDesktopPlugins}
-                    disabled={isDesktopPluginLoading}
-                  >
-                    扫描
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={onInstallDesktopPlugin}
-                    disabled={isDesktopPluginLoading}
-                  >
-                    安装 manifest
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {isDesktopPluginAvailable ? (
-              <>
-                <p className="plugin-dir-note">
-                  插件目录：{desktopPluginDir || '正在获取...'}
-                </p>
-
-                <div className="plugin-list">
-                  {desktopPlugins.length === 0 ? (
-                    <p className="empty-note">尚未扫描到合法 Native 插件</p>
-                  ) : (
-                    desktopPlugins.map((plugin) => (
-                      <article className="plugin-item" key={plugin.pluginId}>
-                        <div className="plugin-item-main">
-                          <div className="plugin-item-title">
-                            <strong>{plugin.name}</strong>
-                            <span
-                              className={
-                                plugin.enabled ? 'status-on' : 'status-off'
-                              }
-                            >
-                              {plugin.enabled ? '已启用' : '已禁用'}
-                            </span>
-                          </div>
-                          <p>{plugin.description || '暂无描述'}</p>
-                          <dl className="plugin-meta">
-                            <div>
-                              <dt>版本</dt>
-                              <dd>{plugin.version}</dd>
-                            </div>
-                            <div>
-                              <dt>平台</dt>
-                              <dd>{plugin.platform || '未声明'}</dd>
-                            </div>
-                            <div>
-                              <dt>架构</dt>
-                              <dd>{plugin.arch || '未声明'}</dd>
-                            </div>
-                            <div>
-                              <dt>入口 DLL</dt>
-                              <dd>{plugin.entry}</dd>
-                            </div>
-                          </dl>
-                          {plugin.capabilities.length > 0 ? (
-                            <div className="plugin-capability-list">
-                              {plugin.capabilities.map((capability) => (
-                                <span key={capability}>{capability}</span>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="plugin-item-actions">
-                          <button
-                            type="button"
-                            className="secondary-action"
-                            onClick={() =>
-                              onToggleDesktopPlugin(
-                                plugin.pluginId,
-                                !plugin.enabled,
-                              )
-                            }
-                          >
-                            {plugin.enabled ? '禁用' : '启用'}
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary-action danger-action"
-                            onClick={() => onUninstallDesktopPlugin(plugin.pluginId)}
-                          >
-                            卸载
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                {invalidDesktopPlugins.length > 0 ? (
-                  <div className="invalid-plugin-list">
-                    <h4>manifest 无效</h4>
-                    {invalidDesktopPlugins.map((plugin) => (
-                      <article
-                        className="plugin-item invalid-plugin-item"
-                        key={`${plugin.manifestPath}-${plugin.message}`}
-                      >
-                        <div className="plugin-item-main">
-                          <div className="plugin-item-title">
-                            <strong>{plugin.pluginId || '未知插件'}</strong>
-                            <span className="status-invalid">manifest 无效</span>
-                          </div>
-                          <p>{plugin.message}</p>
-                          <p>{plugin.manifestPath}</p>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <p className="empty-note">桌面插件仅在 Tauri 桌面端可用。</p>
-            )}
           </section>
         </div>
       </section>

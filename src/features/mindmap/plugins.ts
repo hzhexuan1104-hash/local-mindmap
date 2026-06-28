@@ -1,24 +1,53 @@
 import type { MindmapNodeType } from './types';
 import type { MindmapTheme } from './themes';
+import type { MindmapTemplate } from './templates';
+import type { NodeTypePack } from './nodeTypePacks';
+import type { TemplatePack } from './templatePacks';
+import { parseNodeTypePack } from './nodeTypePacks';
+import { parseTemplatePack } from './templatePacks';
 import { selectLocalFile } from './fileUtils';
+import {
+  installPluginToUserDir,
+  isDesktopRuntime,
+  loadPluginRegistry as loadStoredPluginRegistry,
+  savePluginRegistry as saveStoredPluginRegistry,
+  uninstallPluginFromUserDir,
+} from '../storage/userDataStorage';
 
 export type PluginCategory =
   | 'import-export'
   | 'theme'
   | 'icon-pack'
   | 'node-type'
+  | 'template'
+  | 'tool';
+
+export type PluginType =
+  | 'import-export'
+  | 'node-type-pack'
+  | 'template-pack'
+  | 'theme-pack'
+  | 'icon-pack'
   | 'tool';
 
 export type PluginCapability =
-  | 'exportText'
-  | 'themePack'
-  | 'iconPack'
-  | 'nodeTypePack'
-  | 'toolPanel';
+  | 'export'
+  | 'nodeTypes'
+  | 'templates'
+  | 'themes'
+  | 'icons'
+  | 'tools';
 
 export type PluginIconContribution = {
   value: string;
   label: string;
+};
+
+export type PluginExporterContribution = {
+  id: string;
+  label: string;
+  handler: string;
+  fileName?: string;
 };
 
 export type PluginExportFormatContribution = {
@@ -35,6 +64,9 @@ export type PluginToolContribution = {
 };
 
 export type PluginContributions = {
+  exporters?: PluginExporterContribution[];
+  nodeTypePacks?: NodeTypePack[];
+  templatePacks?: TemplatePack[];
   themes?: MindmapTheme[];
   icons?: PluginIconContribution[];
   nodeTypes?: MindmapNodeType[];
@@ -43,48 +75,94 @@ export type PluginContributions = {
 };
 
 export type PluginManifest = {
+  manifestVersion: number;
   pluginId: string;
   name: string;
   version: string;
   author: string;
   description: string;
+  pluginType: PluginType;
   category: PluginCategory;
   capabilities: PluginCapability[];
   enabled: boolean;
   installedAt: string;
+  builtIn?: boolean;
+  validationWarnings?: string[];
   config?: Record<string, unknown>;
   contributions?: PluginContributions;
 };
 
-const PLUGIN_STORAGE_KEY = 'local-mindmap.plugins.v1';
+export type PluginValidationResult = {
+  manifest: PluginManifest | null;
+  errors: PluginValidationError[];
+  warnings: string[];
+};
 
-const PLUGIN_CATEGORIES: PluginCategory[] = [
-  'import-export',
-  'theme',
+export type PluginValidationErrorCode =
+  | 'invalid-json-object'
+  | 'forbidden-field'
+  | 'invalid-manifest-version'
+  | 'missing-required-field'
+  | 'invalid-plugin-id'
+  | 'unsupported-plugin-type'
+  | 'invalid-capabilities'
+  | 'unsupported-capability'
+  | 'invalid-contributions';
+
+export type PluginValidationError = {
+  code: PluginValidationErrorCode;
+  message: string;
+  field?: string;
+  value?: unknown;
+};
+
+export const SUPPORTED_PLUGIN_TYPES: readonly PluginType[] = [
+  'theme-pack',
   'icon-pack',
-  'node-type',
+  'import-export',
+  'node-type-pack',
+  'template-pack',
   'tool',
-];
+] as const;
 
-const PLUGIN_CAPABILITIES: PluginCapability[] = [
-  'exportText',
-  'themePack',
-  'iconPack',
-  'nodeTypePack',
-  'toolPanel',
-];
+export const SUPPORTED_CAPABILITIES: readonly PluginCapability[] = [
+  'themes',
+  'icons',
+  'export',
+  'nodeTypes',
+  'templates',
+  'tools',
+] as const;
+
+export const FORBIDDEN_PLUGIN_FIELDS = [
+  'script',
+  'eval',
+  'function',
+  'remoteurl',
+  'code',
+  'command',
+  'shell',
+  'executable',
+] as const;
+
+const FORBIDDEN_PLUGIN_FIELD_SET = new Set<string>(FORBIDDEN_PLUGIN_FIELDS);
+
+const BUILT_IN_INSTALLED_AT = '2026-06-27T00:00:00.000Z';
 
 export const BUILT_IN_PLUGINS: PluginManifest[] = [
   {
+    manifestVersion: 1,
     pluginId: 'builtin-theme-pack',
     name: '示例主题包',
     version: '1.0.0',
     author: 'Local Mindmap',
-    description: '提供紫色主题和海洋主题，用于演示数据驱动主题扩展。',
+    description: '提供紫色主题和海洋主题。',
+    pluginType: 'theme-pack',
     category: 'theme',
-    capabilities: ['themePack'],
+    capabilities: ['themes'],
     enabled: true,
-    installedAt: new Date(0).toISOString(),
+    installedAt: BUILT_IN_INSTALLED_AT,
+    builtIn: true,
     contributions: {
       themes: [
         {
@@ -111,42 +189,48 @@ export const BUILT_IN_PLUGINS: PluginManifest[] = [
     },
   },
   {
+    manifestVersion: 1,
     pluginId: 'builtin-icon-pack',
     name: '示例图标包',
     version: '1.0.0',
     author: 'Local Mindmap',
-    description: '提供一组额外内置字符图标，用于自定义节点类型。',
+    description: '提供一组本地字符图标，用于自定义节点类型。',
+    pluginType: 'icon-pack',
     category: 'icon-pack',
-    capabilities: ['iconPack'],
+    capabilities: ['icons'],
     enabled: true,
-    installedAt: new Date(0).toISOString(),
+    installedAt: BUILT_IN_INSTALLED_AT,
+    builtIn: true,
     contributions: {
       icons: [
         { value: '🚀', label: '🚀 启动' },
         { value: '🔥', label: '🔥 热点' },
         { value: '🧠', label: '🧠 思考' },
-        { value: '🏁', label: '🏁 目标' },
+        { value: '🎯', label: '🎯 目标' },
         { value: '📎', label: '📎 附件' },
       ],
     },
   },
   {
-    pluginId: 'builtin-txt-export',
+    manifestVersion: 1,
+    pluginId: 'localmindmap.export.txt',
     name: 'TXT 导出插件',
     version: '1.0.0',
     author: 'Local Mindmap',
-    description: '声明 TXT 导出能力，实际导出由应用内置安全 handler 完成。',
+    description: '提供 TXT 导出能力，由应用内置安全 handler 完成。',
+    pluginType: 'import-export',
     category: 'import-export',
-    capabilities: ['exportText'],
+    capabilities: ['export'],
     enabled: true,
-    installedAt: new Date(0).toISOString(),
+    installedAt: BUILT_IN_INSTALLED_AT,
+    builtIn: true,
     contributions: {
-      exportFormats: [
+      exporters: [
         {
-          formatId: 'txt',
-          label: '导出 TXT',
+          id: 'exportText',
+          label: 'TXT 导出',
           fileName: 'mindmap.txt',
-          handlerId: 'builtin-txt',
+          handler: 'builtin.exportText',
         },
       ],
     },
@@ -166,7 +250,6 @@ export async function invokeTauriDesktopCommand<T>(
   args?: Record<string, unknown>,
 ) {
   const { invoke } = await import('@tauri-apps/api/core');
-
   return invoke(command, args) as Promise<T>;
 }
 
@@ -176,13 +259,99 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown, fallback = '') =>
   typeof value === 'string' ? value : fallback;
 
-const isPluginCategory = (value: unknown): value is PluginCategory =>
+const isPluginType = (value: unknown): value is PluginType =>
   typeof value === 'string' &&
-  PLUGIN_CATEGORIES.includes(value as PluginCategory);
+  SUPPORTED_PLUGIN_TYPES.includes(value as PluginType);
 
 const isPluginCapability = (value: unknown): value is PluginCapability =>
   typeof value === 'string' &&
-  PLUGIN_CAPABILITIES.includes(value as PluginCapability);
+  SUPPORTED_CAPABILITIES.includes(value as PluginCapability);
+
+const isSafePluginId = (value: string) => /^[A-Za-z0-9._-]+$/.test(value);
+
+function findForbiddenField(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const field = findForbiddenField(item);
+      if (field) {
+        return field;
+      }
+    }
+    return null;
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (FORBIDDEN_PLUGIN_FIELD_SET.has(key.toLowerCase())) {
+      return key;
+    }
+    const field = findForbiddenField(child);
+    if (field) {
+      return field;
+    }
+  }
+
+  return null;
+}
+
+function categoryForPluginType(pluginType: PluginType): PluginCategory {
+  const categories: Record<PluginType, PluginCategory> = {
+    'import-export': 'import-export',
+    'node-type-pack': 'node-type',
+    'template-pack': 'template',
+    'theme-pack': 'theme',
+    'icon-pack': 'icon-pack',
+    tool: 'tool',
+  };
+  return categories[pluginType];
+}
+
+function pluginTypeForLegacyCategory(category: unknown): PluginType | null {
+  const types: Partial<Record<PluginCategory, PluginType>> = {
+    'import-export': 'import-export',
+    theme: 'theme-pack',
+    'icon-pack': 'icon-pack',
+    'node-type': 'node-type-pack',
+    template: 'template-pack',
+    tool: 'tool',
+  };
+  return typeof category === 'string'
+    ? types[category as PluginCategory] ?? null
+    : null;
+}
+
+function normalizeLegacyPluginType(value: unknown): PluginType | null {
+  if (isPluginType(value)) {
+    return value;
+  }
+  return value === 'exporter' ? 'import-export' : null;
+}
+
+function normalizeLegacyCapability(value: unknown): PluginCapability | null {
+  if (isPluginCapability(value)) {
+    return value;
+  }
+  const aliases: Record<string, PluginCapability> = {
+    exportText: 'export',
+    themePack: 'themes',
+    iconPack: 'icons',
+    nodeTypePack: 'nodeTypes',
+    templatePack: 'templates',
+    toolPanel: 'tools',
+  };
+  return typeof value === 'string' ? aliases[value] ?? null : null;
+}
+
+function normalizeInstalledAt(value: unknown) {
+  const installedAt = asString(value).trim();
+  const timestamp = Date.parse(installedAt);
+  return Number.isFinite(timestamp) && new Date(timestamp).getUTCFullYear() >= 2000
+    ? new Date(timestamp).toISOString()
+    : new Date().toISOString();
+}
 
 function normalizeTheme(value: unknown): MindmapTheme | null {
   if (!isRecord(value)) {
@@ -208,14 +377,12 @@ function normalizeIcon(value: unknown): PluginIconContribution | null {
     const icon = value.trim();
     return icon ? { value: icon, label: icon } : null;
   }
-
   if (!isRecord(value)) {
     return null;
   }
 
   const iconValue = asString(value.value).trim();
   const label = asString(value.label, iconValue).trim();
-
   return iconValue ? { value: iconValue, label: label || iconValue } : null;
 }
 
@@ -227,16 +394,7 @@ function normalizeNodeType(value: unknown): MindmapNodeType | null {
   const id = asString(value.id).trim();
   const name = asString(value.name).trim();
   const shape = asString(value.shape, 'rounded') as MindmapNodeType['shape'];
-  const safeShape: MindmapNodeType['shape'] = [
-    'rounded',
-    'rectangle',
-    'pill',
-    'diamond',
-  ].includes(shape)
-    ? shape
-    : 'rounded';
   const fontSize = Number(value.fontSize);
-
   if (!id || !name) {
     return null;
   }
@@ -245,7 +403,9 @@ function normalizeNodeType(value: unknown): MindmapNodeType | null {
     id,
     name,
     icon: asString(value.icon),
-    shape: safeShape,
+    shape: ['rounded', 'rectangle', 'pill', 'diamond'].includes(shape)
+      ? shape
+      : 'rounded',
     backgroundColor: asString(value.backgroundColor, '#eef5ff'),
     borderColor: asString(value.borderColor, '#1f6feb'),
     textColor: asString(value.textColor, '#14315f'),
@@ -256,26 +416,39 @@ function normalizeNodeType(value: unknown): MindmapNodeType | null {
   };
 }
 
-function normalizeExportFormat(
+function normalizeExporter(
   value: unknown,
-): PluginExportFormatContribution | null {
+  errors: PluginValidationError[],
+): PluginExporterContribution | null {
   if (!isRecord(value)) {
     return null;
   }
 
-  const formatId = asString(value.formatId).trim();
+  const id = asString(value.id ?? value.formatId).trim();
   const label = asString(value.label).trim();
-  const fileName = asString(value.fileName).trim();
-
-  if (!formatId || !label || !fileName) {
+  const legacyHandler = asString(value.handlerId).trim();
+  const handler =
+    legacyHandler === 'builtin-txt'
+      ? 'builtin.exportText'
+      : asString(value.handler ?? value.handlerId).trim();
+  if (!id || !label || !handler) {
+    return null;
+  }
+  if (!handler.startsWith('builtin.')) {
+    errors.push({
+      code: 'invalid-contributions',
+      field: 'contributions.exporters.handler',
+      value: handler,
+      message: `贡献点 ${id} 的 handler 必须以 builtin. 开头。`,
+    });
     return null;
   }
 
   return {
-    formatId,
+    id,
     label,
-    fileName,
-    handlerId: asString(value.handlerId).trim() || undefined,
+    handler,
+    fileName: asString(value.fileName).trim() || undefined,
   };
 }
 
@@ -283,123 +456,323 @@ function normalizeTool(value: unknown): PluginToolContribution | null {
   if (!isRecord(value)) {
     return null;
   }
-
   const toolId = asString(value.toolId).trim();
   const label = asString(value.label).trim();
-
-  if (!toolId || !label) {
-    return null;
-  }
-
-  return {
-    toolId,
-    label,
-    description: asString(value.description).trim() || undefined,
-  };
+  return toolId && label
+    ? {
+        toolId,
+        label,
+        description: asString(value.description).trim() || undefined,
+      }
+    : null;
 }
 
-function normalizeContributions(value: unknown): PluginContributions | undefined {
+function normalizeNodeTypePack(value: unknown): NodeTypePack | null {
+  try {
+    return parseNodeTypePack(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTemplatePack(value: unknown): TemplatePack | null {
+  try {
+    return parseTemplatePack(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeContributions(
+  value: unknown,
+  errors: PluginValidationError[],
+  warnings: string[],
+): PluginContributions | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
   if (!isRecord(value)) {
+    errors.push({
+      code: 'invalid-contributions',
+      field: 'contributions',
+      value,
+      message: 'contributions 必须是对象。',
+    });
     return undefined;
   }
 
   const contributions: PluginContributions = {};
+  const exporterValues = Array.isArray(value.exporters)
+    ? value.exporters
+    : Array.isArray(value.exportFormats)
+      ? value.exportFormats
+      : [];
+  if (exporterValues.length > 0) {
+    contributions.exporters = exporterValues
+      .map((item) => normalizeExporter(item, errors))
+      .filter((item): item is PluginExporterContribution => Boolean(item));
+    if (contributions.exporters.length !== exporterValues.length) {
+      warnings.push('部分非法导出贡献已跳过。');
+    }
+  }
+
+  if (Array.isArray(value.nodeTypePacks)) {
+    contributions.nodeTypePacks = value.nodeTypePacks
+      .map(normalizeNodeTypePack)
+      .filter((pack): pack is NodeTypePack => Boolean(pack));
+    if (contributions.nodeTypePacks.length !== value.nodeTypePacks.length) {
+      warnings.push('部分非法节点类型包贡献已跳过。');
+    }
+  }
+
+  if (Array.isArray(value.templatePacks)) {
+    contributions.templatePacks = value.templatePacks
+      .map(normalizeTemplatePack)
+      .filter((pack): pack is TemplatePack => Boolean(pack));
+    if (contributions.templatePacks.length !== value.templatePacks.length) {
+      warnings.push('部分非法模板包贡献已跳过。');
+    }
+  }
 
   if (Array.isArray(value.themes)) {
     contributions.themes = value.themes
       .map(normalizeTheme)
       .filter((theme): theme is MindmapTheme => Boolean(theme));
   }
-
   if (Array.isArray(value.icons)) {
     contributions.icons = value.icons
       .map(normalizeIcon)
       .filter((icon): icon is PluginIconContribution => Boolean(icon));
   }
-
   if (Array.isArray(value.nodeTypes)) {
     contributions.nodeTypes = value.nodeTypes
       .map(normalizeNodeType)
       .filter((nodeType): nodeType is MindmapNodeType => Boolean(nodeType));
   }
-
-  if (Array.isArray(value.exportFormats)) {
-    contributions.exportFormats = value.exportFormats
-      .map(normalizeExportFormat)
-      .filter((format): format is PluginExportFormatContribution =>
-        Boolean(format),
-      );
-  }
-
   if (Array.isArray(value.tools)) {
     contributions.tools = value.tools
       .map(normalizeTool)
       .filter((tool): tool is PluginToolContribution => Boolean(tool));
   }
 
-  return Object.keys(contributions).length > 0 ? contributions : undefined;
+  return Object.values(contributions).some((items) => items && items.length > 0)
+    ? contributions
+    : undefined;
 }
 
-export function normalizePluginManifest(value: unknown): PluginManifest | null {
+function validatePluginManifestInternal(
+  value: unknown,
+  allowLegacy: boolean,
+): PluginValidationResult {
+  const errors: PluginValidationError[] = [];
+  const warnings: string[] = [];
   if (!isRecord(value)) {
-    return null;
+    return {
+      manifest: null,
+      errors: [
+        {
+          code: 'invalid-json-object',
+          message: '插件 manifest 必须是 JSON 对象。',
+          value,
+        },
+      ],
+      warnings,
+    };
+  }
+
+  const forbiddenField = findForbiddenField(value);
+  if (forbiddenField) {
+    errors.push({
+      code: 'forbidden-field',
+      field: forbiddenField,
+      message: `插件包含非法字段：${forbiddenField}`,
+    });
+  }
+
+  const rawManifestVersion = value.manifestVersion;
+  const manifestVersion =
+    allowLegacy && rawManifestVersion === undefined ? 1 : Number(rawManifestVersion);
+  if (!Number.isInteger(manifestVersion) || manifestVersion < 1) {
+    errors.push({
+      code: 'invalid-manifest-version',
+      field: 'manifestVersion',
+      value: rawManifestVersion,
+      message: 'manifestVersion 必须是正整数。',
+    });
   }
 
   const pluginId = asString(value.pluginId).trim();
   const name = asString(value.name).trim();
   const version = asString(value.version).trim();
-
-  if (!pluginId || !name || !version || !isPluginCategory(value.category)) {
-    return null;
+  if (!pluginId) {
+    errors.push({
+      code: 'missing-required-field',
+      field: 'pluginId',
+      message: '缺少必填字段：pluginId',
+    });
+  } else if (!isSafePluginId(pluginId)) {
+    errors.push({
+      code: 'invalid-plugin-id',
+      field: 'pluginId',
+      value: pluginId,
+      message: 'pluginId 只能包含字母、数字、点、下划线和短横线。',
+    });
+  }
+  if (!name) {
+    errors.push({
+      code: 'missing-required-field',
+      field: 'name',
+      message: '缺少必填字段：name',
+    });
+  }
+  if (!version) {
+    errors.push({
+      code: 'missing-required-field',
+      field: 'version',
+      message: '缺少必填字段：version',
+    });
   }
 
+  const pluginType = isPluginType(value.pluginType)
+    ? value.pluginType
+    : allowLegacy
+      ? normalizeLegacyPluginType(value.pluginType) ??
+        pluginTypeForLegacyCategory(value.category)
+      : null;
+  if (!pluginType) {
+    const supportedTypes = SUPPORTED_PLUGIN_TYPES.join(', ');
+    errors.push({
+      code:
+        value.pluginType === undefined
+          ? 'missing-required-field'
+          : 'unsupported-plugin-type',
+      field: 'pluginType',
+      value: value.pluginType,
+      message:
+        value.pluginType === undefined
+          ? `缺少必填字段：pluginType。支持的类型：${supportedTypes}`
+          : `pluginType 不受支持：${String(value.pluginType)}。支持的类型：${supportedTypes}`,
+    });
+  }
+
+  if (!Array.isArray(value.capabilities)) {
+    errors.push({
+      code: 'invalid-capabilities',
+      field: 'capabilities',
+      value: value.capabilities,
+      message: 'capabilities 必须是数组。',
+    });
+  }
   const capabilities = Array.isArray(value.capabilities)
-    ? value.capabilities.filter(isPluginCapability)
+    ? value.capabilities
+        .map((capability) =>
+          allowLegacy
+            ? normalizeLegacyCapability(capability)
+            : isPluginCapability(capability)
+              ? capability
+              : null,
+        )
+        .filter(
+          (capability): capability is PluginCapability => capability !== null,
+        )
     : [];
+  if (Array.isArray(value.capabilities)) {
+    const unsupportedCapabilities = value.capabilities.filter((capability) =>
+      allowLegacy
+        ? normalizeLegacyCapability(capability) === null
+        : !isPluginCapability(capability),
+    );
+    if (unsupportedCapabilities.length > 0) {
+      errors.push({
+        code: 'unsupported-capability',
+        field: 'capabilities',
+        value: unsupportedCapabilities,
+        message: `capabilities 包含不受支持的值：${unsupportedCapabilities
+          .map(String)
+          .join(', ')}。支持的 capabilities：${SUPPORTED_CAPABILITIES.join(', ')}`,
+      });
+    }
+  }
+
+  const contributions = normalizeContributions(
+    value.contributions,
+    errors,
+    warnings,
+  );
+  if (errors.length > 0 || !pluginType) {
+    return { manifest: null, errors, warnings };
+  }
 
   return {
-    pluginId,
-    name,
-    version,
-    author: asString(value.author, '未知作者').trim() || '未知作者',
-    description: asString(value.description).trim(),
-    category: value.category,
-    capabilities,
-    enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
-    installedAt: asString(value.installedAt).trim() || new Date().toISOString(),
-    config: isRecord(value.config) ? value.config : undefined,
-    contributions: normalizeContributions(value.contributions),
+    manifest: {
+      manifestVersion,
+      pluginId,
+      name,
+      version,
+      author: asString(value.author, '未知作者').trim() || '未知作者',
+      description: asString(value.description).trim(),
+      pluginType,
+      category: categoryForPluginType(pluginType),
+      capabilities,
+      enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
+      installedAt: normalizeInstalledAt(value.installedAt),
+      builtIn: Boolean(value.builtIn),
+      validationWarnings:
+        warnings.length > 0 ? Array.from(new Set(warnings)) : undefined,
+      config: isRecord(value.config) ? value.config : undefined,
+      contributions,
+    },
+    errors,
+    warnings,
   };
 }
 
-export function loadPluginRegistry(): PluginManifest[] {
-  const rawValue = window.localStorage.getItem(PLUGIN_STORAGE_KEY);
-
-  if (!rawValue) {
-    const initialPlugins = BUILT_IN_PLUGINS.map((plugin) => ({ ...plugin }));
-    savePluginRegistry(initialPlugins);
-    return initialPlugins;
-  }
-
-  try {
-    const parsedValue = JSON.parse(rawValue);
-
-    if (!Array.isArray(parsedValue)) {
-      throw new Error('Plugin registry must be an array.');
-    }
-
-    return parsedValue
-      .map(normalizePluginManifest)
-      .filter((plugin): plugin is PluginManifest => Boolean(plugin));
-  } catch {
-    const initialPlugins = BUILT_IN_PLUGINS.map((plugin) => ({ ...plugin }));
-    savePluginRegistry(initialPlugins);
-    return initialPlugins;
-  }
+export function validatePluginManifest(value: unknown): PluginValidationResult {
+  return validatePluginManifestInternal(value, false);
 }
 
-export function savePluginRegistry(plugins: PluginManifest[]) {
-  window.localStorage.setItem(PLUGIN_STORAGE_KEY, JSON.stringify(plugins));
+export function normalizePluginManifest(value: unknown): PluginManifest | null {
+  return validatePluginManifestInternal(value, true).manifest;
+}
+
+function clonePlugin(plugin: PluginManifest): PluginManifest {
+  return JSON.parse(JSON.stringify(plugin)) as PluginManifest;
+}
+
+export async function loadPluginRegistry(): Promise<PluginManifest[]> {
+  const storedPlugins = await loadStoredPluginRegistry();
+  const normalizedPlugins = Array.isArray(storedPlugins)
+    ? storedPlugins
+        .map(normalizePluginManifest)
+        .filter((plugin): plugin is PluginManifest => Boolean(plugin))
+    : [];
+  const storedById = new Map(
+    normalizedPlugins.map((plugin) => [plugin.pluginId, plugin]),
+  );
+  const legacyTxtPlugin = storedById.get('builtin-txt-export');
+  const builtIns = BUILT_IN_PLUGINS.map((plugin) => ({
+    ...clonePlugin(plugin),
+    enabled:
+      storedById.get(plugin.pluginId)?.enabled ??
+      (plugin.pluginId === 'localmindmap.export.txt'
+        ? legacyTxtPlugin?.enabled
+        : undefined) ??
+      plugin.enabled,
+  }));
+  const builtInIds = new Set(builtIns.map((plugin) => plugin.pluginId));
+
+  return [
+    ...builtIns,
+    ...normalizedPlugins.filter(
+      (plugin) =>
+        !builtInIds.has(plugin.pluginId) &&
+        plugin.pluginId !== 'builtin-txt-export',
+    ),
+  ];
+}
+
+export async function savePluginRegistry(plugins: PluginManifest[]) {
+  await saveStoredPluginRegistry(plugins);
 }
 
 export function setPluginEnabled(
@@ -413,7 +786,9 @@ export function setPluginEnabled(
 }
 
 export function uninstallPlugin(plugins: PluginManifest[], pluginId: string) {
-  return plugins.filter((plugin) => plugin.pluginId !== pluginId);
+  return plugins.filter(
+    (plugin) => plugin.pluginId !== pluginId || plugin.builtIn,
+  );
 }
 
 export function installPluginManifest(
@@ -422,8 +797,9 @@ export function installPluginManifest(
 ) {
   const nextManifest: PluginManifest = {
     ...manifest,
+    builtIn: false,
     enabled: true,
-    installedAt: manifest.installedAt || new Date().toISOString(),
+    installedAt: new Date().toISOString(),
   };
 
   return [
@@ -432,22 +808,91 @@ export function installPluginManifest(
   ];
 }
 
-export async function readLocalPluginManifest() {
-  const file = await selectLocalFile('.json,application/json');
+function errorDetail(error: unknown) {
+  return typeof error === 'string'
+    ? error
+    : error instanceof Error && error.message
+      ? error.message
+      : String(error);
+}
 
+export async function installPlugin(
+  plugins: PluginManifest[],
+  manifest: PluginManifest,
+  overwrite = false,
+) {
+  const exists = plugins.some(
+    (plugin) => plugin.pluginId === manifest.pluginId && !plugin.builtIn,
+  );
+  if (exists && !overwrite) {
+    throw new Error(`插件已存在：${manifest.pluginId}`);
+  }
+
+  const nextPlugins = installPluginManifest(plugins, manifest);
+  const installedManifest = nextPlugins.find(
+    (plugin) => plugin.pluginId === manifest.pluginId,
+  ) as PluginManifest;
+
+  await installPluginToUserDir(installedManifest, overwrite);
+  if (isDesktopRuntime()) {
+    return { plugins: nextPlugins, manifest: installedManifest };
+  }
+
+  try {
+    await saveStoredPluginRegistry(nextPlugins);
+  } catch (error) {
+    try {
+      await uninstallPluginFromUserDir(manifest.pluginId);
+    } catch {
+      // Keep the original registry-write error; cleanup is best effort.
+    }
+    throw new Error(`插件注册表写入用户目录失败：${errorDetail(error)}`);
+  }
+
+  return { plugins: nextPlugins, manifest: installedManifest };
+}
+
+export class PluginManifestError extends Error {
+  validationErrors: PluginValidationError[];
+  warnings: string[];
+
+  constructor(errors: PluginValidationError[], warnings: string[] = []) {
+    super(errors.map((error) => error.message).join(' '));
+    this.name = 'PluginManifestError';
+    this.validationErrors = errors;
+    this.warnings = warnings;
+  }
+}
+
+export function parsePluginManifestText(text: string) {
+  let parsedValue: unknown;
+  try {
+    parsedValue = JSON.parse(text);
+  } catch {
+    throw new PluginManifestError([
+      {
+        code: 'invalid-json-object',
+        message: '插件 JSON 解析失败。',
+      },
+    ]);
+  }
+
+  const result = validatePluginManifest(parsedValue);
+  if (!result.manifest) {
+    throw new PluginManifestError(result.errors, result.warnings);
+  }
+  return result.manifest;
+}
+
+export async function readLocalPluginManifest() {
+  const file = await selectLocalFile(
+    '.json,.lmplugin,application/json,application/octet-stream',
+  );
   if (!file) {
     return null;
   }
 
-  const rawText = await file.text();
-  const parsedValue = JSON.parse(rawText);
-  const manifest = normalizePluginManifest(parsedValue);
-
-  if (!manifest) {
-    throw new Error('Invalid plugin manifest.');
-  }
-
-  return manifest;
+  return parsePluginManifestText(await file.text());
 }
 
 export function getEnabledPlugins(plugins: PluginManifest[]) {
@@ -467,17 +912,33 @@ export function getPluginIcons(plugins: PluginManifest[]) {
 }
 
 export function getPluginNodeTypes(plugins: PluginManifest[]) {
+  return getEnabledPlugins(plugins).flatMap((plugin) => [
+    ...(plugin.contributions?.nodeTypes ?? []),
+    ...(plugin.contributions?.nodeTypePacks ?? []).flatMap(
+      (pack) => pack.nodeTypes,
+    ),
+  ]);
+}
+
+export function getPluginTemplates(plugins: PluginManifest[]): MindmapTemplate[] {
+  return getEnabledPlugins(plugins).flatMap((plugin) =>
+    (plugin.contributions?.templatePacks ?? []).flatMap((pack) =>
+      pack.templates.map((template) => ({
+        ...template,
+        isOfficial: true,
+      })),
+    ),
+  );
+}
+
+export function getPluginExporters(plugins: PluginManifest[]) {
   return getEnabledPlugins(plugins).flatMap(
-    (plugin) => plugin.contributions?.nodeTypes ?? [],
+    (plugin) => plugin.contributions?.exporters ?? [],
   );
 }
 
 export function isTxtExportPluginEnabled(plugins: PluginManifest[]) {
-  return getEnabledPlugins(plugins).some(
-    (plugin) =>
-      plugin.capabilities.includes('exportText') &&
-      plugin.contributions?.exportFormats?.some(
-        (format) => format.handlerId === 'builtin-txt',
-      ),
+  return getPluginExporters(plugins).some(
+    (exporter) => exporter.handler === 'builtin.exportText',
   );
 }

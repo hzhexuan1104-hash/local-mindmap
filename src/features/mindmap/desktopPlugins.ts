@@ -2,8 +2,14 @@ import { selectLocalFile } from './fileUtils';
 import {
   DESKTOP_PLUGIN_COMMANDS,
   invokeTauriDesktopCommand,
-  type PluginCapability,
 } from './plugins';
+
+type NativePluginCapability =
+  | 'exportText'
+  | 'themePack'
+  | 'iconPack'
+  | 'nodeTypePack'
+  | 'toolPanel';
 
 export type NativeDesktopPluginManifest = {
   manifestVersion: number;
@@ -16,7 +22,7 @@ export type NativeDesktopPluginManifest = {
   platform?: string;
   arch?: string;
   entry: string;
-  capabilities: PluginCapability[];
+  capabilities: NativePluginCapability[];
   enabled: boolean;
   abi?: {
     version: number;
@@ -37,7 +43,7 @@ export type DesktopPluginListResult = {
   isAvailable?: boolean;
 };
 
-const NATIVE_PLUGIN_CAPABILITIES: PluginCapability[] = [
+const NATIVE_PLUGIN_CAPABILITIES: NativePluginCapability[] = [
   'exportText',
   'themePack',
   'iconPack',
@@ -59,9 +65,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown, fallback = '') =>
   typeof value === 'string' ? value : fallback;
 
-const isPluginCapability = (value: unknown): value is PluginCapability =>
+const isPluginCapability = (value: unknown): value is NativePluginCapability =>
   typeof value === 'string' &&
-  NATIVE_PLUGIN_CAPABILITIES.includes(value as PluginCapability);
+  NATIVE_PLUGIN_CAPABILITIES.includes(value as NativePluginCapability);
 
 const isSafePluginId = (pluginId: string) =>
   /^[A-Za-z0-9._-]+$/.test(pluginId);

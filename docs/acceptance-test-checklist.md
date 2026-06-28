@@ -504,3 +504,42 @@
 | Web 构建 | 验证生产构建 | 执行 `npm run build` | 构建通过 | [x] |
 | 自动化测试 | 验证业务回归 | 执行 `npm run test` | 17 个测试文件、142 个测试通过 | [x] |
 | 依赖与桌面端 | 验证边界 | 检查 package 与 `src-tauri` diff | package 文件和桌面端代码均无修改 | [x] |
+
+## 39. v1.6 第一批用户目录与插件体系验收
+
+| 测试项 | 测试目标 | 操作步骤 | 预期结果 | 是否通过 |
+|---|---|---|---|---|
+| 分支 | 验证开发隔离 | 执行 `git branch --show-current` | 当前为 `v1.6-plugin-user-data` | [x] |
+| Tauri identifier | 验证发布身份稳定 | 检查 `src-tauri/tauri.conf.json` | identifier 为 `com.localmindmap.desktop`，不再出现 `.app` 结尾警告 | [x] |
+| 用户目录初始化 | 验证目录底座 | 桌面端启动并查看用户数据目录 | `mindmaps`、`autosave`、`node-types/packs`、`templates/packs`、`plugins/installed`、`config`、`backups` 存在 | [x] |
+| 路径展示 | 验证真实路径 | 打开插件管理面板 | Windows 显示 `%APPDATA%\com.localmindmap.desktop`；Web 显示“浏览器本地存储” | [ ] |
+| 旧 identifier 迁移 | 验证路径变更兼容 | 新目录为空且旧 `com.localmindmap.app` 有数据时启动 | 节点类型、模板、插件和配置复制到新目录；旧目录保留，新目录已有文件不覆盖 | [x] |
+| 复制路径 | 验证复制入口 | 点击“复制路径”并粘贴 | 内容与面板路径一致 | [x] |
+| 打开目录 | 验证系统打开入口 | 桌面端点击“打开目录” | 系统文件管理器打开用户数据根 | [x] |
+| 自定义节点类型 | 验证桌面持久化 | 新增节点类型并重启 | `node-types/custom-node-types.json` 有数据，重启后仍显示 | [x] |
+| 节点类型包 | 验证包存储与合并 | 导入合法节点类型包 | 包写入 `node-types/packs/`，类型进入下拉框和右键菜单 | [ ] |
+| 自定义模板 | 验证桌面持久化 | 保存自定义模板并重启 | `templates/custom-templates.json` 有数据，重启后仍显示 | [x] |
+| 模板包 | 验证包存储与合并 | 导入合法模板包 | 包写入 `templates/packs/`，模板进入模板候选 | [ ] |
+| Web fallback | 验证原数据兼容 | 在 Web 环境保存节点类型、模板和插件 | 继续写入原 localStorage key，刷新后保留 | [x] |
+| 旧数据迁移 | 验证迁移安全 | 带旧 localStorage 数据首次启动桌面端 | 先写 `backups/`，再迁移并写 flag；旧 localStorage 不删除 | [x] |
+| 迁移失败容错 | 验证启动稳定 | 模拟用户目录不可写 | 应用不崩溃，读取回退 localStorage，并提示失败 | [x] |
+| 合法插件 | 验证安装 | 导入 `docs/examples/persistence-test-plugin.json` | manifest 安装到 `plugins/installed/<pluginId>/manifest.json` | [x] |
+| 安装错误详情 | 验证基础可验收性 | 导入非法 JSON、非法 manifest 或模拟目录写入失败 | toast 与插件面板显示具体原因，面板保留最近一次错误 | [x] |
+| 插件 registry | 验证状态持久化 | 安装、禁用插件后重启 | `plugins/plugin-registry.json` 存在，禁用状态保持 | [x] |
+| 重复 ID | 验证冲突提示 | 再次安装同 `pluginId` 插件 | 提示覆盖确认，取消不修改数据 | [ ] |
+| 卸载插件 | 验证清理 | 卸载用户插件并重启 | registry 记录与 installed 子目录均移除 | [ ] |
+| 安装时间 | 验证时间正确 | 安装插件并查看详情 | 显示当前安装时间，不显示 1970/1/1 | [x] |
+| 权限与详情 | 验证管理信息 | 查看插件卡片 | 显示作者、类型、pluginId、capabilities 和贡献点 | [x] |
+| 危险字段 | 验证安全边界 | 分别导入含 `script/eval/function/remoteUrl/code/command/shell/executable` 的 manifest | 全部拒绝并提示，页面不崩溃 | [x] |
+| handler 白名单 | 验证执行边界 | 导入 handler 非 `builtin.` 的 exporter | manifest 被拒绝 | [x] |
+| exporter | 验证贡献点 | 启用内置 TXT 插件 | 管理面板显示 `builtin.exportText`，顶部 TXT 导出可用 | [x] |
+| 节点类型贡献 | 验证启停 | 启用 / 禁用含 nodeTypePacks 的插件 | 启用时出现，禁用时隐藏；已使用节点不崩溃 | [ ] |
+| 模板贡献 | 验证启停 | 启用 / 禁用含 templatePacks 的插件 | 启用时出现，禁用时隐藏 | [ ] |
+| 路径穿越 | 验证文件边界 | 调用读写命令传入 `../`、绝对路径 | 命令拒绝，不写入用户目录外 | [x] |
+| `.lmind` 回归 | 验证格式不变 | 保存并重新打开 `.lmind` | 节点、备注、主题、类型和 position 正常恢复 | [x] |
+| v1.5 UI 回归 | 验证布局不破坏 | 检查顶部、左右面板、画布和插件弹窗 | 主布局无明显破坏或横向溢出 | [x] |
+| Web 构建 | 验证生产构建 | 执行 `npm run build` | 构建通过 | [x] |
+| 自动化测试 | 验证业务回归 | 执行 `npm run test` | 20 个测试文件、182 个测试通过 | [x] |
+| Rust 测试 | 验证目录命令 | 在 `src-tauri` 执行 `cargo test` | 9 个测试通过 | [x] |
+| 桌面打包 | 验证 Tauri 构建 | 执行 `npm run tauri:build` | 构建通过，或记录环境原因 | [x] |
+| 版本与依赖 | 验证发布边界 | 检查 package 文件 | 版本仍为 `1.5.0`，无新增 npm 依赖 | [x] |
