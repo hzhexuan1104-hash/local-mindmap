@@ -162,10 +162,9 @@ export async function saveImportedNodeTypePack(pack: NodeTypePack) {
       .replace(/[^A-Za-z0-9\u4e00-\u9fff._-]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'node-types';
   const suffix = new Date().toISOString().replace(/[:.]/g, '-');
-  await writeUserJson(
-    `${USER_DATA_PATHS.nodeTypePacks}/${safeName}-${suffix}.json`,
-    pack,
-  );
+  const relativePath = `${USER_DATA_PATHS.nodeTypePacks}/${safeName}-${suffix}.json`;
+  await writeUserJson(relativePath, pack);
+  return relativePath;
 }
 
 export async function loadAllUserNodeTypes() {

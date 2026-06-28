@@ -4,6 +4,7 @@
 )]
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use rfd::FileDialog;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -313,6 +314,21 @@ fn write_user_json_at(root: &Path, relative_path: &str, value: &Value) -> Result
 
     fs::write(&target, raw_text)
         .map_err(|error| format!("Failed to write user JSON `{relative_path}`: {error}"))
+}
+
+fn write_local_file_at(path: &Path, bytes: &[u8]) -> Result<String, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Selected file path has no parent directory.".to_string())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "Selected file directory does not exist: {}",
+            parent.display()
+        ));
+    }
+    fs::write(path, bytes)
+        .map_err(|error| format!("Failed to write `{}`: {error}", path.display()))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 fn contains_forbidden_declarative_field(value: &Value) -> Option<String> {
@@ -769,6 +785,103 @@ fn open_user_data_dir(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedLocalFile {
+    path: String,
+    file_name: String,
+    bytes: Vec<u8>,
+}
+
+#[tauri::command]
+fn save_local_file_with_dialog(
+    default_file_name: String,
+    filter_name: String,
+    extensions: Vec<String>,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    let mut dialog = FileDialog::new()
+        .set_title("Save file")
+        .set_file_name(default_file_name);
+    if !extensions.is_empty() {
+        dialog = dialog.add_filter(filter_name, &extensions);
+    }
+    let Some(path) = dialog.save_file() else {
+        return Ok(None);
+    };
+    write_local_file_at(&path, &bytes).map(Some)
+}
+
+#[tauri::command]
+fn write_local_file(path: String, bytes: Vec<u8>) -> Result<String, String> {
+    write_local_file_at(Path::new(&path), &bytes)
+}
+
+#[tauri::command]
+fn read_local_file(path: String) -> Result<Vec<u8>, String> {
+    fs::read(&path).map_err(|error| format!("Failed to read `{path}`: {error}"))
+}
+
+#[tauri::command]
+fn open_local_file_with_dialog(
+    filter_name: String,
+    extensions: Vec<String>,
+) -> Result<Option<OpenedLocalFile>, String> {
+    let mut dialog = FileDialog::new().set_title("Open file");
+    if !extensions.is_empty() {
+        dialog = dialog.add_filter(filter_name, &extensions);
+    }
+    let Some(path) = dialog.pick_file() else {
+        return Ok(None);
+    };
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("Failed to read `{}`: {error}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    Ok(Some(OpenedLocalFile {
+        path: path.to_string_lossy().to_string(),
+        file_name,
+        bytes,
+    }))
+}
+
+#[tauri::command]
+fn open_file_location(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("File does not exist: {}", target.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg("/select,").arg(&target);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(&target);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let parent = target
+            .parent()
+            .ok_or_else(|| "File path has no parent directory.".to_string())?;
+        let mut command = Command::new("xdg-open");
+        command.arg(parent);
+        command
+    };
+
+    command
+        .spawn()
+        .map_err(|error| format!("Failed to open file location: {error}"))?;
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NativePluginAbi {
@@ -1167,6 +1280,11 @@ fn main() {
             install_plugin_to_user_dir,
             uninstall_plugin_from_user_dir,
             open_user_data_dir,
+            save_local_file_with_dialog,
+            write_local_file,
+            read_local_file,
+            open_local_file_with_dialog,
+            open_file_location,
             get_desktop_config_dir,
             ensure_desktop_config_dir,
             get_desktop_plugin_dir,
@@ -1332,6 +1450,23 @@ mod tests {
             .expect("JSON should be read");
 
         assert_eq!(result, value);
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn writes_user_selected_local_file_and_returns_full_path() {
+        let root = test_root("selected-local-file");
+        fs::create_dir_all(&root).expect("test directory should be created");
+        let target = root.join("竞赛方案.lmind");
+
+        let written_path = write_local_file_at(&target, br#"{"version":"1.0"}"#)
+            .expect("selected file should be written");
+
+        assert_eq!(written_path, target.to_string_lossy());
+        assert_eq!(
+            fs::read_to_string(&target).expect("selected file should be readable"),
+            r#"{"version":"1.0"}"#
+        );
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
 

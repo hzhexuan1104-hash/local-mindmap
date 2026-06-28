@@ -174,10 +174,9 @@ export async function saveImportedTemplatePack(pack: TemplatePack) {
       .replace(/[^A-Za-z0-9\u4e00-\u9fff._-]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'templates';
   const suffix = new Date().toISOString().replace(/[:.]/g, '-');
-  await writeUserJson(
-    `${USER_DATA_PATHS.templatePacks}/${safeName}-${suffix}.json`,
-    pack,
-  );
+  const relativePath = `${USER_DATA_PATHS.templatePacks}/${safeName}-${suffix}.json`;
+  await writeUserJson(relativePath, pack);
+  return relativePath;
 }
 
 export async function loadAllUserTemplates() {

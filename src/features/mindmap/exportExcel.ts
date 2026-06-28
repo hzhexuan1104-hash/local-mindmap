@@ -30,7 +30,7 @@ function flattenMindmapRows(
   );
 }
 
-export function exportMindmapExcel(rootNode: MindmapNode) {
+export function createMindmapExcelBytes(rootNode: MindmapNode) {
   const rows: ExcelRow[] = [];
   flattenMindmapRows(rootNode, 1, [], rows);
 
@@ -40,5 +40,12 @@ export function exportMindmapExcel(rootNode: MindmapNode) {
   const workbook = XLSX.utils.book_new();
 
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Mindmap');
-  XLSX.writeFile(workbook, 'mindmap.xlsx');
+  return XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+}
+
+export function exportMindmapExcel(rootNode: MindmapNode) {
+  XLSX.writeFile(
+    XLSX.read(createMindmapExcelBytes(rootNode), { type: 'array' }),
+    'mindmap.xlsx',
+  );
 }

@@ -45,12 +45,11 @@ import {
   validateTreeIntegrity,
 } from '../features/mindmap/clipboard';
 import { ExcelImportMappingDialog } from '../features/mindmap/ExcelImportMappingDialog';
-import { exportMindmapExcel } from '../features/mindmap/exportExcel';
-import { exportMindmapAsImage } from '../features/mindmap/exportImage';
-import { exportMindmapJson } from '../features/mindmap/exportJson';
-import { exportMindmapMarkdown } from '../features/mindmap/exportMarkdown';
-import { exportMindmapTxt } from '../features/mindmap/exportTxt';
-import { downloadTextFile, selectLocalFile } from '../features/mindmap/fileUtils';
+import { createMindmapExcelBytes } from '../features/mindmap/exportExcel';
+import { createMindmapImageBytes } from '../features/mindmap/exportImage';
+import { serializeMindmapMarkdown } from '../features/mindmap/exportMarkdown';
+import { serializeMindmapTxt } from '../features/mindmap/exportTxt';
+import { selectLocalFile } from '../features/mindmap/fileUtils';
 import {
   createHistoryState,
   pushHistory,
@@ -93,7 +92,7 @@ import {
   importNodeTypesFromPack,
   parseNodeTypePack,
 } from '../features/mindmap/nodeTypePacks';
-import { openMindmapFromLocalFile } from '../features/mindmap/openMindmap';
+import { parseLmindProject } from '../features/mindmap/openMindmap';
 import { OFFICIAL_TEMPLATES } from '../features/mindmap/officialTemplates';
 import { PerformancePanel } from '../features/mindmap/PerformancePanel';
 import type { PerformanceBenchmarkResult } from '../features/mindmap/performanceTest';
@@ -113,7 +112,20 @@ import {
   PluginManifestError,
   type PluginManifest,
 } from '../features/mindmap/plugins';
-import { saveMindmapAsLmind } from '../features/mindmap/saveMindmap';
+import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
+import {
+  openFileLocation,
+  openLocalTextFile,
+  readLocalTextFile,
+  sanitizeFileName,
+  saveLocalFile,
+  type LocalFileResult,
+} from '../features/mindmap/localFileOperations';
+import {
+  loadRecentFileEntries,
+  updateRecentFile,
+  type RecentFileEntry,
+} from '../features/mindmap/recentFiles';
 import {
   findMindmapMatches,
   replaceAllInMindmap,
@@ -481,6 +493,10 @@ export function App() {
   const [editingText, setEditingText] = useState('');
   const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
   const [message, setMessage] = useState('');
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [currentFileName, setCurrentFileName] = useState<string | null>(null);
+  const [isDocumentDirty, setIsDocumentDirty] = useState(true);
+  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([]);
   const [excelImportPreview, setExcelImportPreview] =
     useState<ExcelImportPreview | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -701,11 +717,13 @@ export function App() {
           pluginsResult,
           nodeTypesResult,
           userDataDirResult,
+          recentFilesResult,
         ] = await Promise.allSettled([
             loadAllUserTemplates(),
             loadPluginRegistry(),
             loadAllUserNodeTypes(),
             getUserDataDir(),
+            loadRecentFileEntries(),
           ]);
         let pluginStorageSyncFailed = false;
 
@@ -766,6 +784,15 @@ export function App() {
           console.error(
             '[user-data] user data directory lookup failed',
             userDataDirResult.reason,
+          );
+        }
+        if (recentFilesResult.status === 'fulfilled') {
+          setRecentFiles(recentFilesResult.value);
+        } else {
+          loadFailures.push('recentFiles');
+          console.error(
+            '[user-data][recent-files] startup load failed',
+            recentFilesResult.reason,
           );
         }
 
@@ -887,6 +914,7 @@ export function App() {
 
   const recordHistory = () => {
     setHistory((currentHistory) => pushHistory(currentHistory, currentProject));
+    setIsDocumentDirty(true);
   };
 
   const selectNode = (nodeId: string, append: boolean) => {
@@ -1031,60 +1059,208 @@ export function App() {
     setSelectedNodeIds([]);
     setEditingNodeId(null);
     setEditingText('');
+    setCurrentFilePath(null);
+    setCurrentFileName(null);
+    setIsDocumentDirty(true);
     showMessage('已新建空白思维导图');
   };
 
-  const handleSaveMindmap = () => {
-    saveMindmapAsLmind(mindmap, 'mindmap.lmind', nodeTypes, themeId);
-    showMessage('已生成 mindmap.lmind 文件');
+  const showFileResult = (
+    result: LocalFileResult,
+    desktopVerb: string,
+  ) => {
+    showMessage(
+      result.kind === 'desktop'
+        ? `${desktopVerb}：${result.path}`
+        : `已下载 ${result.fileName}，请在浏览器下载目录查看。`,
+    );
   };
 
-  const handleOpenMindmap = async () => {
-    try {
-      const openedProject = await openMindmapFromLocalFile();
+  const rememberRecentFile = async (
+    path: string,
+    action: 'open' | 'save',
+  ) => {
+    const next = await updateRecentFile(recentFiles, path, action);
+    setRecentFiles(next);
+  };
 
-      if (!openedProject) {
+  const saveMindmap = async (saveAs: boolean) => {
+    try {
+      const result = await saveLocalFile({
+        content: serializeLmindDocument(mindmap, nodeTypes, themeId),
+        defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
+        mimeType: 'application/json;charset=utf-8',
+        filterName: 'Local Mindmap 工程文件',
+        extensions: ['lmind'],
+        currentPath: currentFilePath,
+        forceDialog: saveAs,
+      });
+
+      if (!result) {
+        showMessage('保存已取消。');
         return;
       }
-
-      recordHistory();
-      applyProject(openedProject);
-      showMessage('已打开 .lmind 文件');
-    } catch {
-      showMessage('文件格式不正确，无法打开');
+      if (result.kind === 'desktop') {
+        setCurrentFilePath(result.path);
+        setCurrentFileName(result.fileName);
+        await rememberRecentFile(result.path, 'save');
+      } else {
+        setCurrentFileName(result.fileName);
+      }
+      setIsDocumentDirty(false);
+      showFileResult(result, saveAs ? '已另存为' : '已保存');
+    } catch (error) {
+      showMessage(`保存失败：${getErrorMessage(error, '未知错误')}`);
     }
   };
 
-  const handleExportMarkdown = () => {
-    exportMindmapMarkdown(mindmap);
-    showMessage('已导出 mindmap.md');
+  const handleSaveMindmap = () => void saveMindmap(false);
+  const handleSaveMindmapAs = () => void saveMindmap(true);
+
+  const handleOpenMindmap = async () => {
+    try {
+      const opened = await openLocalTextFile({
+        accept: '.lmind,application/json',
+        filterName: 'Local Mindmap 工程文件',
+        extensions: ['lmind'],
+      });
+
+      if (!opened) {
+        return;
+      }
+      const openedProject = parseLmindProject(opened.content);
+
+      recordHistory();
+      applyProject(openedProject);
+      setCurrentFilePath(opened.path);
+      setCurrentFileName(opened.fileName);
+      setIsDocumentDirty(false);
+      await rememberRecentFile(opened.path ?? opened.fileName, 'open');
+      showMessage(opened.path ? `已打开：${opened.path}` : `已打开 ${opened.fileName}`);
+    } catch (error) {
+      showMessage(`打开失败：${getErrorMessage(error, '文件格式不正确')}`);
+    }
   };
 
-  const handleExportExcel = () => {
-    exportMindmapExcel(mindmap);
-    showMessage('已导出 mindmap.xlsx');
+  const handleOpenRecentFile = async (entry: RecentFileEntry) => {
+    if (!isDesktopApp) {
+      showMessage(`最近下载：${entry.name}。浏览器无法重新打开本地下载路径。`);
+      return;
+    }
+    try {
+      const openedProject = parseLmindProject(
+        await readLocalTextFile(entry.path),
+      );
+      recordHistory();
+      applyProject(openedProject);
+      setCurrentFilePath(entry.path);
+      setCurrentFileName(entry.name);
+      setIsDocumentDirty(false);
+      await rememberRecentFile(entry.path, 'open');
+      showMessage(`已打开：${entry.path}`);
+    } catch (error) {
+      showMessage(
+        `打开失败：${getErrorMessage(error, '文件不存在或格式不正确')}`,
+      );
+    }
   };
 
-  const handleExportJson = () => {
-    exportMindmapJson(mindmap, nodeTypes, themeId);
-    showMessage('已导出 mindmap.json');
+  const handleOpenCurrentFileLocation = async () => {
+    if (!currentFilePath) {
+      showMessage('当前文件尚未保存。');
+      return;
+    }
+    try {
+      await openFileLocation(currentFilePath);
+    } catch (error) {
+      showMessage(
+        `打开所在目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
   };
 
-  const handleExportNodeTypePack = () => {
+  const handleCopyCurrentFilePath = async () => {
+    if (!currentFilePath) {
+      showMessage('当前文件尚未保存。');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(currentFilePath);
+      showMessage('路径已复制。');
+    } catch (error) {
+      showMessage(`复制路径失败：${getErrorMessage(error, '剪贴板不可用')}`);
+    }
+  };
+
+  const exportFile = async (options: {
+    content: string | Uint8Array | ArrayBuffer;
+    extension: string;
+    mimeType: string;
+    filterName: string;
+    defaultFileName?: string;
+  }) => {
+    try {
+      const result = await saveLocalFile({
+        content: options.content,
+        defaultFileName:
+          options.defaultFileName ??
+          `${sanitizeFileName(mindmap.text)}.${options.extension}`,
+        mimeType: options.mimeType,
+        filterName: options.filterName,
+        extensions: [options.extension],
+        forceDialog: true,
+      });
+      if (!result) {
+        showMessage('导出已取消。');
+        return;
+      }
+      showFileResult(result, '已导出');
+    } catch (error) {
+      showMessage(`导出失败：${getErrorMessage(error, '未知错误')}`);
+    }
+  };
+
+  const handleExportMarkdown = () =>
+    void exportFile({
+      content: serializeMindmapMarkdown(mindmap),
+      extension: 'md',
+      mimeType: 'text/markdown;charset=utf-8',
+      filterName: 'Markdown',
+    });
+
+  const handleExportExcel = () =>
+    void exportFile({
+      content: createMindmapExcelBytes(mindmap),
+      extension: 'xlsx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      filterName: 'Excel',
+    });
+
+  const handleExportJson = () =>
+    void exportFile({
+      content: serializeLmindDocument(mindmap, nodeTypes, themeId),
+      extension: 'json',
+      mimeType: 'application/json;charset=utf-8',
+      filterName: 'JSON',
+    });
+
+  const handleExportNodeTypePack = async () => {
     if (nodeTypes.length === 0) {
       showMessage('暂无可导出的自定义节点类型');
       return;
     }
 
-    downloadTextFile(
-      exportNodeTypesToPack(nodeTypes, {
+    await exportFile({
+      content: exportNodeTypesToPack(nodeTypes, {
         name: 'Local Mindmap 节点类型包',
         description: '用于分享本地自定义节点类型，不包含导图内容。',
       }),
-      'local-mindmap-node-types.json',
-      'application/json;charset=utf-8',
-    );
-    showMessage('已导出节点类型包');
+      extension: 'json',
+      mimeType: 'application/json;charset=utf-8',
+      filterName: '节点类型包',
+      defaultFileName: `Local-Mindmap-节点类型包-${new Date().toISOString().slice(0, 10)}.json`,
+    });
   };
 
   const handleImportNodeTypePack = async () => {
@@ -1104,30 +1280,35 @@ export function App() {
 
       const result = importNodeTypesFromPack(nodeTypes, pack);
 
+      let savedPackPath = '';
       if (result.importedCount > 0) {
         recordHistory();
         setNodeTypes(result.nodeTypes);
         setUserNodeTypes(result.nodeTypes);
-        await Promise.all([
+        const [, packPath] = await Promise.all([
           saveLocalNodeTypes(result.nodeTypes),
           saveImportedNodeTypePack(pack),
         ]);
+        savedPackPath = packPath;
       }
 
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+        `已导入节点类型包：${pack.meta.name}。${savedPackPath ? `已保存到用户目录：${savedPackPath}。` : ''}成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
     } catch (error) {
-      showMessage(getErrorMessage(error, '节点类型包格式不正确，无法导入'));
+      showMessage(`导入失败：${getErrorMessage(error, '节点类型包格式不正确')}`);
     }
   };
 
-  const handleExportTxt = () => {
-    exportMindmapTxt(mindmap);
-    showMessage('已导出 mindmap.txt');
-  };
+  const handleExportTxt = () =>
+    void exportFile({
+      content: serializeMindmapTxt(mindmap),
+      extension: 'txt',
+      mimeType: 'text/plain;charset=utf-8',
+      filterName: 'Text',
+    });
 
   const handleInstallPlugin = async () => {
     try {
@@ -1154,10 +1335,14 @@ export function App() {
       } = await installPlugin(plugins, manifest, exists);
       setPlugins(nextPlugins);
       setLastPluginInstallError('');
+      const installPaths =
+        `已安装插件：${installedManifest.name}。` +
+        `已保存到用户目录：plugins/installed/${installedManifest.pluginId}/manifest.json。` +
+        '已更新插件注册表：plugins/plugin-registry.json。';
       showMessage(
         installedManifest.validationWarnings?.length
-          ? `插件安装成功；${installedManifest.validationWarnings.join(' ')}`
-          : '插件安装成功',
+          ? `${installPaths}${installedManifest.validationWarnings.join(' ')}`
+          : installPaths,
       );
     } catch (error) {
       const errorMessage =
@@ -1674,21 +1859,22 @@ export function App() {
     }
   };
 
-  const handleExportTemplatePack = () => {
+  const handleExportTemplatePack = async () => {
     if (templates.length === 0) {
       showMessage('暂无可导出的自定义模板');
       return;
     }
 
-    downloadTextFile(
-      exportTemplatesToPack(templates, {
+    await exportFile({
+      content: exportTemplatesToPack(templates, {
         name: 'Local Mindmap 模板包',
         description: '用于分享本地自定义模板，不等同于 .lmind 文件。',
       }),
-      'local-mindmap-templates.json',
-      'application/json;charset=utf-8',
-    );
-    showMessage('已导出模板包');
+      extension: 'json',
+      mimeType: 'application/json;charset=utf-8',
+      filterName: '模板包',
+      defaultFileName: `Local-Mindmap-模板包-${new Date().toISOString().slice(0, 10)}.json`,
+    });
   };
 
   const handleImportTemplatePack = async () => {
@@ -1708,21 +1894,23 @@ export function App() {
 
       const result = importTemplatesFromPack(templates, pack);
 
+      let savedPackPath = '';
       if (result.importedCount > 0) {
         setTemplates(result.templates);
-        await Promise.all([
+        const [, packPath] = await Promise.all([
           saveMindmapTemplates(result.templates),
           saveImportedTemplatePack(pack),
         ]);
+        savedPackPath = packPath;
       }
 
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+        `已导入模板包：${pack.meta.name}。${savedPackPath ? `已保存到用户目录：${savedPackPath}。` : ''}成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
     } catch (error) {
-      showMessage(getErrorMessage(error, '模板包格式不正确，无法导入'));
+      showMessage(`导入失败：${getErrorMessage(error, '模板包格式不正确')}`);
     }
   };
 
@@ -1838,10 +2026,14 @@ export function App() {
     }
 
     try {
-      await exportMindmapAsImage(exportTreeRef.current, format);
-      showMessage(format === 'png' ? '已导出 mindmap.png' : '已导出 mindmap.jpg');
-    } catch {
-      showMessage('图片导出失败，请稍后重试');
+      await exportFile({
+        content: await createMindmapImageBytes(exportTreeRef.current, format),
+        extension: format,
+        mimeType: format === 'png' ? 'image/png' : 'image/jpeg',
+        filterName: format.toUpperCase(),
+      });
+    } catch (error) {
+      showMessage(`导出失败：图片生成失败：${getErrorMessage(error, '未知错误')}`);
     }
   };
 
@@ -2295,11 +2487,32 @@ export function App() {
       label: '文件',
       items: [
         { label: '新建思维导图', onSelect: handleCreateMindmap },
-        { label: '保存 .lmind', onSelect: handleSaveMindmap },
         {
           label: '打开 .lmind',
           onSelect: () => void handleOpenMindmap(),
         },
+        { label: '保存', onSelect: handleSaveMindmap },
+        { label: '另存为 .lmind', onSelect: handleSaveMindmapAs },
+        ...(isDesktopApp
+          ? [
+              {
+                label: '打开所在目录',
+                onSelect: () => void handleOpenCurrentFileLocation(),
+                disabled: !currentFilePath,
+                dividerBefore: true,
+              },
+              {
+                label: '复制文件路径',
+                onSelect: () => void handleCopyCurrentFilePath(),
+                disabled: !currentFilePath,
+              },
+            ]
+          : []),
+        ...recentFiles.slice(0, 5).map((entry, index) => ({
+          label: `最近文件：${entry.name}`,
+          onSelect: () => void handleOpenRecentFile(entry),
+          dividerBefore: index === 0,
+        })),
       ],
     },
     {
@@ -2429,7 +2642,14 @@ export function App() {
     >
       {!isFocusMode ? (
         <TopMenuBar
-          currentTitle={mindmap.text || '未命名导图'}
+          currentTitle={`${currentFileName ?? mindmap.text ?? '未命名导图'} · ${
+            currentFileName
+              ? isDocumentDirty
+                ? '有未保存修改'
+                : '已保存'
+              : '未保存'
+          }`}
+          currentPath={currentFilePath}
           menus={topMenus}
           message={message}
           onUndo={handleUndo}
