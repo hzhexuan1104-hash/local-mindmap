@@ -9,6 +9,7 @@ import {
   uninstallDesktopPlugin,
 } from '../desktopPlugins';
 import { ensureDesktopConfigDir, getDesktopConfigDir } from '../desktopConfig';
+import samplePluginManifest from '../../../../docs/examples/sample-json-plugin/manifest.json';
 import {
   FORBIDDEN_PLUGIN_FIELDS,
   createPluginOverwritePrompt,
@@ -36,6 +37,31 @@ const validManifest = {
   category: 'theme',
   capabilities: ['themePack'],
 };
+
+describe('bundled developer sample plugin', () => {
+  it('is a valid and importable v1.7 declarative manifest', () => {
+    const validation = validatePluginManifest(samplePluginManifest);
+    expect(validation.valid).toBe(true);
+    expect(validation.manifest).toMatchObject({
+      pluginId: 'localmindmap.dev.sample-json-plugin',
+      manifestVersion: 1,
+      manifestValid: true,
+    });
+    expect(
+      parsePluginManifestText(JSON.stringify(samplePluginManifest)),
+    ).toMatchObject({
+      pluginId: 'localmindmap.dev.sample-json-plugin',
+      contributions: {
+        menus: [
+          expect.objectContaining({
+            command: 'builtin.exportText',
+            valid: true,
+          }),
+        ],
+      },
+    });
+  });
+});
 
 describe('normalizePluginManifest', () => {
   it('accepts a valid plugin manifest', () => {

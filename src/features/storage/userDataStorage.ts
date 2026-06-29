@@ -12,6 +12,8 @@ export const USER_DATA_COMMANDS = {
   uninstallPluginFromUserDir: 'uninstall_plugin_from_user_dir',
   openUserDataDir: 'open_user_data_dir',
   openPluginDir: 'open_plugin_dir',
+  openPluginDevDir: 'open_plugin_dev_dir',
+  createSamplePlugin: 'create_sample_plugin',
   openPluginManifestDir: 'open_plugin_manifest_dir',
   scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
   reloadPluginsFromDisk: 'reload_plugins_from_disk',
@@ -24,6 +26,7 @@ export const USER_DATA_PATHS = {
   templatePacks: 'templates/packs',
   pluginRegistry: 'plugins/plugin-registry.json',
   installedPlugins: 'plugins/installed',
+  pluginDev: 'plugins/dev',
   appSettings: 'config/app-settings.json',
   recentFiles: 'config/recent-files.json',
   userPreferences: 'config/user-preferences.json',
@@ -41,6 +44,13 @@ export type InstalledPluginScanEntry = {
 export type PluginDiskSnapshot = {
   registry: unknown;
   installedManifests: InstalledPluginScanEntry[];
+};
+
+export type SamplePluginCreationResult = {
+  created: boolean;
+  directoryPath: string;
+  manifestPath: string;
+  readmePath: string;
 };
 
 const LEGACY_MIGRATION_FLAG_PATH = 'config/migration-v1.6.json';
@@ -436,6 +446,25 @@ export async function openPluginDir() {
 
   await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginDir);
   return true;
+}
+
+export async function openPluginDevDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginDevDir);
+  return true;
+}
+
+export async function createSamplePlugin() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  return invokeUserDataCommand<SamplePluginCreationResult>(
+    USER_DATA_COMMANDS.createSamplePlugin,
+  );
 }
 
 export async function openPluginManifestDir(pluginId: string) {

@@ -118,6 +118,15 @@ import {
   executePluginCommand,
   type PluginCommandHandlers,
 } from '../features/plugins/pluginCommands';
+import {
+  appendPluginLog,
+  clearPluginLogs,
+  createPluginDiagnosticLogs,
+  createPluginLog,
+  type PluginLogEntry,
+  type PluginLogEvent,
+  type PluginLogLevel,
+} from '../features/plugins/pluginLogs';
 import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
   openFileLocation,
@@ -175,6 +184,7 @@ import {
   type TypedNodeCreationResult,
 } from '../features/mindmap/typedNodeCreation';
 import {
+  createSamplePlugin,
   ensureUserDataDirs,
   getUserDataDir,
   installPluginToUserDir,
@@ -182,6 +192,7 @@ import {
   migrateLegacyLocalStorageToUserData,
   openUserDataDir,
   openPluginDir,
+  openPluginDevDir,
   openPluginManifestDir,
   resolveUserDataPath,
   uninstallPluginFromUserDir,
@@ -547,6 +558,7 @@ export function App() {
   );
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [lastPluginInstallError, setLastPluginInstallError] = useState('');
+  const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
   const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
   const [isDesktopApp] = useState(isDesktopRuntime);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
@@ -1415,6 +1427,17 @@ export function App() {
         `已保存到用户目录：plugins/installed/${installedManifest.pluginId}/manifest.json。` +
         '已更新插件注册表：plugins/plugin-registry.json。';
       const warningCount = installedManifest.validationWarnings?.length ?? 0;
+      recordPluginLog(
+        'info',
+        'import-success',
+        `${exists ? '覆盖安装' : '导入'}成功：${installedManifest.name}`,
+        installedManifest.pluginId,
+      );
+      for (const diagnostic of createPluginDiagnosticLogs([
+        installedManifest,
+      ])) {
+        setPluginLogs((current) => appendPluginLog(current, diagnostic));
+      }
       showMessage(
         warningCount > 0
           ? `${installPaths}插件已安装，但存在 ${warningCount} 个警告，请在插件详情中查看。`
@@ -1426,6 +1449,7 @@ export function App() {
           ? error.message
           : getErrorMessage(error, '插件安装失败：未知错误');
       setLastPluginInstallError(errorMessage);
+      recordPluginLog('error', 'import-failure', errorMessage);
       showMessage(errorMessage);
     }
   };
@@ -1435,6 +1459,12 @@ export function App() {
     try {
       await savePluginRegistry(nextPlugins);
       setPlugins(nextPlugins);
+      recordPluginLog(
+        'info',
+        enabled ? 'enabled' : 'disabled',
+        enabled ? '插件已启用' : '插件已禁用',
+        pluginId,
+      );
       showMessage(enabled ? '插件已启用' : '插件已禁用');
     } catch (error) {
       showMessage(getErrorMessage(error, '插件状态保存失败'));
@@ -1456,6 +1486,7 @@ export function App() {
       await uninstallPluginFromUserDir(pluginId);
       await savePluginRegistry(nextPlugins);
       setPlugins(nextPlugins);
+      recordPluginLog('info', 'uninstalled', '插件已卸载', pluginId);
       showMessage('插件已卸载');
     } catch (error) {
       showMessage(getErrorMessage(error, '插件卸载失败'));
@@ -1478,6 +1509,20 @@ export function App() {
     } catch (error) {
       showMessage(getErrorMessage(error, '无法打开用户数据目录'));
     }
+  };
+
+  const recordPluginLog = (
+    level: PluginLogLevel,
+    event: PluginLogEvent,
+    message: string,
+    pluginId?: string,
+  ) => {
+    setPluginLogs((current) =>
+      appendPluginLog(
+        current,
+        createPluginLog({ level, event, message, pluginId }),
+      ),
+    );
   };
 
   const handleCopyPluginId = async (pluginId: string) => {
@@ -1505,7 +1550,7 @@ export function App() {
 
   const handleOpenPluginDir = async () => {
     if (!isDesktopApp) {
-      showMessage('Web 端不支持打开插件目录');
+      showMessage('不支持在 Web 端打开本地目录');
       return;
     }
     try {
@@ -1514,6 +1559,44 @@ export function App() {
     } catch (error) {
       showMessage(
         `打开插件目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleOpenPluginDevDir = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端打开本地目录');
+      return;
+    }
+    try {
+      await openPluginDevDir();
+      showMessage('已打开插件开发目录');
+    } catch (error) {
+      showMessage(
+        `打开插件开发目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleCreateSamplePlugin = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端创建本地插件目录');
+      return;
+    }
+    try {
+      const result = await createSamplePlugin();
+      if (!result) {
+        showMessage('不支持在 Web 端创建本地插件目录');
+        return;
+      }
+      showMessage(
+        result.created
+          ? `示例插件已创建：${result.directoryPath}`
+          : '示例插件已存在，未覆盖用户文件；请打开插件开发目录查看。',
+      );
+    } catch (error) {
+      showMessage(
+        `创建示例插件失败：${getErrorMessage(error, '未知错误')}`,
       );
     }
   };
@@ -1528,14 +1611,19 @@ export function App() {
       }
       setPlugins(reloadedPlugins);
       setLastPluginInstallError('');
+      recordPluginLog('info', 'reload-success', '插件已重新加载。');
+      for (const diagnostic of createPluginDiagnosticLogs(reloadedPlugins)) {
+        setPluginLogs((current) => appendPluginLog(current, diagnostic));
+      }
       showMessage('插件已重新加载。');
     } catch (error) {
       if (requestId !== pluginReloadRequestRef.current) {
         return;
       }
-      showMessage(
-        `插件重新加载失败：${getErrorMessage(error, '未知错误')}`,
-      );
+      const errorMessage =
+        `插件重新加载失败：${getErrorMessage(error, '未知错误')}`;
+      recordPluginLog('error', 'reload-failure', errorMessage);
+      showMessage(errorMessage);
     }
   };
 
@@ -2709,6 +2797,17 @@ export function App() {
       });
     } catch (error) {
       const reason = getErrorMessage(error, '未知错误');
+      if (
+        reason.includes('插件命令不存在') ||
+        reason.includes('manifest 无效')
+      ) {
+        recordPluginLog(
+          'warning',
+          'command-invalid',
+          reason,
+          pluginId,
+        );
+      }
       showMessage(
         reason.startsWith('插件命令不存在：')
           ? reason
@@ -3623,6 +3722,8 @@ export function App() {
           onCopyUserDataDir={() => void handleCopyUserDataDir()}
           onOpenUserDataDir={() => void handleOpenUserDataDir()}
           onOpenPluginDir={() => void handleOpenPluginDir()}
+          onOpenPluginDevDir={() => void handleOpenPluginDevDir()}
+          onCreateSamplePlugin={() => void handleCreateSamplePlugin()}
           onCopyPluginId={(pluginId) => void handleCopyPluginId(pluginId)}
           onCopyPath={(relativePath, label) =>
             void handleCopyPluginPath(relativePath, label)
@@ -3637,6 +3738,8 @@ export function App() {
           onCleanRecord={(pluginId) =>
             void handleCleanPluginRecord(pluginId)
           }
+          logs={pluginLogs}
+          onClearLogs={() => setPluginLogs(clearPluginLogs())}
         />
       ) : null}
 

@@ -4,6 +4,12 @@ import { PluginManagerPanel } from '../PluginManagerPanel';
 import type { PluginManifest } from '../plugins';
 
 const noop = () => undefined;
+const developerProps = {
+  onOpenPluginDevDir: noop,
+  onCreateSamplePlugin: noop,
+  logs: [],
+  onClearLogs: noop,
+};
 
 const pluginWithMenus: PluginManifest = {
   manifestVersion: 1,
@@ -47,6 +53,7 @@ describe('PluginManagerPanel installation errors', () => {
   it('keeps and displays the concrete last installation error', () => {
     const html = renderToStaticMarkup(
       <PluginManagerPanel
+        {...developerProps}
         plugins={[]}
         lastInstallError="插件写入用户目录失败：access denied"
         userDataDir="C:/Users/test/AppData/Roaming/com.localmindmap.desktop"
@@ -75,6 +82,7 @@ describe('PluginManagerPanel installation errors', () => {
   it('shows contribution counts, menu details, paths, and disabled plugins', () => {
     const html = renderToStaticMarkup(
       <PluginManagerPanel
+        {...developerProps}
         plugins={[pluginWithMenus]}
         lastInstallError=""
         userDataDir="C:/Users/test/AppData/Roaming/com.localmindmap.desktop"
@@ -115,6 +123,7 @@ describe('PluginManagerPanel installation errors', () => {
   it('shows the explicit built-in manifest path explanation', () => {
     const html = renderToStaticMarkup(
       <PluginManagerPanel
+        {...developerProps}
         plugins={[
           {
             ...pluginWithMenus,
@@ -150,6 +159,7 @@ describe('PluginManagerPanel installation errors', () => {
   it('shows an explicit empty contribution state', () => {
     const html = renderToStaticMarkup(
       <PluginManagerPanel
+        {...developerProps}
         plugins={[
           {
             ...pluginWithMenus,
@@ -183,6 +193,7 @@ describe('PluginManagerPanel installation errors', () => {
   it('shows a missing installed manifest as invalid with every contribution count at zero', () => {
     const html = renderToStaticMarkup(
       <PluginManagerPanel
+        {...developerProps}
         plugins={[
           {
             ...pluginWithMenus,
@@ -234,5 +245,41 @@ describe('PluginManagerPanel installation errors', () => {
     }
     expect(html).toContain('清理异常记录');
     expect(html).toContain('卸载');
+  });
+
+  it('renders a collapsed developer mode with safe local tooling entries', () => {
+    const html = renderToStaticMarkup(
+      <PluginManagerPanel
+        {...developerProps}
+        plugins={[]}
+        lastInstallError=""
+        userDataDir="浏览器本地存储"
+        isDesktopApp={false}
+        onClose={noop}
+        onInstall={noop}
+        onToggle={noop}
+        onUninstall={noop}
+        onCopyUserDataDir={noop}
+        onOpenUserDataDir={noop}
+        onOpenPluginDir={noop}
+        onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
+      />,
+    );
+
+    expect(html).toContain('<details');
+    expect(html).not.toContain('<details open=""');
+    expect(html).toContain('开发者模式');
+    expect(html).toContain('打开插件开发目录');
+    expect(html).toContain('创建示例插件');
+    expect(html).toContain('查看插件 API 文档');
+    expect(html).toContain('查看插件日志');
+    expect(html).toContain('复制用户数据目录路径');
+    expect(html).toContain('不会执行插件内的 JS、命令、Shell、DLL 或远程代码');
+    expect(html).toContain('不支持在 Web 端打开本地目录');
   });
 });

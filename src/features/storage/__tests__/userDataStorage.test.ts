@@ -3,6 +3,7 @@ import {
   LEGACY_STORAGE_KEYS,
   USER_DATA_COMMANDS,
   USER_DATA_PATHS,
+  createSamplePlugin,
   ensureUserDataDirs,
   getUserDataDir,
   installPluginToUserDir,
@@ -13,6 +14,7 @@ import {
   loadUserTemplates,
   migrateLegacyLocalStorageToUserData,
   openPluginDir,
+  openPluginDevDir,
   openPluginManifestDir,
   scanInstalledPluginManifests,
   readUserJson,
@@ -343,6 +345,35 @@ describe('userDataStorage desktop commands', () => {
 
     await expect(openPluginDir()).resolves.toBe(true);
     expect(calls).toEqual([USER_DATA_COMMANDS.openPluginDir]);
+  });
+
+  it('opens the development directory and creates the bundled sample plugin', async () => {
+    const calls: string[] = [];
+    setUserDataStorageInvokerForTests(async (command) => {
+      calls.push(command);
+      if (command === USER_DATA_COMMANDS.createSamplePlugin) {
+        return {
+          created: true,
+          directoryPath: 'C:/data/plugins/dev/sample-json-plugin',
+          manifestPath:
+            'C:/data/plugins/dev/sample-json-plugin/manifest.json',
+          readmePath: 'C:/data/plugins/dev/sample-json-plugin/README.md',
+        } as never;
+      }
+      return undefined as never;
+    });
+
+    await expect(openPluginDevDir()).resolves.toBe(true);
+    await expect(createSamplePlugin()).resolves.toMatchObject({
+      created: true,
+      manifestPath: expect.stringContaining(
+        'plugins/dev/sample-json-plugin/manifest.json',
+      ),
+    });
+    expect(calls).toEqual([
+      USER_DATA_COMMANDS.openPluginDevDir,
+      USER_DATA_COMMANDS.createSamplePlugin,
+    ]);
   });
 
   it('scans installed manifests and opens a specific manifest directory', async () => {

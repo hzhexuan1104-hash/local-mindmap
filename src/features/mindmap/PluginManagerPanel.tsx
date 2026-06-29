@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { PluginCategory, PluginManifest } from './plugins';
 import { resolveUserDataPath } from '../storage/userDataStorage';
+import type { PluginLogEntry } from '../plugins/pluginLogs';
 
 type PluginManagerPanelProps = {
   plugins: PluginManifest[];
@@ -14,12 +15,16 @@ type PluginManagerPanelProps = {
   onCopyUserDataDir: () => void;
   onOpenUserDataDir: () => void;
   onOpenPluginDir: () => void;
+  onOpenPluginDevDir: () => void;
+  onCreateSamplePlugin: () => void;
   onCopyPluginId: (pluginId: string) => void;
   onCopyPath: (relativePath: string, label: string) => void;
   onOpenManifestDir: (pluginId: string) => void;
   onReload: () => void;
   onRepairRegistry: (pluginId: string) => void;
   onCleanRecord: (pluginId: string) => void;
+  logs: PluginLogEntry[];
+  onClearLogs: () => void;
 };
 
 const CATEGORY_OPTIONS: Array<{ value: '' | PluginCategory; label: string }> = [
@@ -202,15 +207,21 @@ export function PluginManagerPanel({
   onCopyUserDataDir,
   onOpenUserDataDir,
   onOpenPluginDir,
+  onOpenPluginDevDir,
+  onCreateSamplePlugin,
   onCopyPluginId,
   onCopyPath,
   onOpenManifestDir,
   onReload,
   onRepairRegistry,
   onCleanRecord,
+  logs,
+  onClearLogs,
 }: PluginManagerPanelProps) {
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<'' | PluginCategory>('');
+  const [showApiDocs, setShowApiDocs] = useState(false);
+  const [showPluginLogs, setShowPluginLogs] = useState(false);
 
   const visiblePlugins = useMemo(() => {
     const query = keyword.trim().toLowerCase();
@@ -284,6 +295,124 @@ export function PluginManagerPanel({
               {userDataDir}
             </p>
           </section>
+
+          <details className="plugin-manager-section plugin-developer-section">
+            <summary>
+              <span>
+                <strong>开发者模式</strong>
+                <small>声明式插件工具与 API 草案</small>
+              </span>
+            </summary>
+            <div className="plugin-developer-content">
+              <p>
+                当前版本支持声明式 JSON 插件。插件可以贡献菜单、导出项、主题、
+                图标、节点类型和模板等声明式能力。
+              </p>
+              <p className="plugin-safety-note">
+                当前版本不会执行插件内的 JS、命令、Shell、DLL 或远程代码。
+                后续版本将提供受控插件 API。
+              </p>
+              {!isDesktopApp ? (
+                <p className="plugin-web-warning">
+                  不支持在 Web 端打开本地目录。
+                </p>
+              ) : null}
+              <div className="plugin-manager-actions plugin-developer-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onOpenPluginDir}
+                >
+                  打开插件目录
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onOpenPluginDevDir}
+                >
+                  打开插件开发目录
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onCreateSamplePlugin}
+                >
+                  创建示例插件
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onReload}
+                >
+                  重新加载插件
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => setShowApiDocs((visible) => !visible)}
+                >
+                  查看插件 API 文档
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => setShowPluginLogs((visible) => !visible)}
+                >
+                  查看插件日志
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onCopyUserDataDir}
+                >
+                  复制用户数据目录路径
+                </button>
+              </div>
+
+              {showApiDocs ? (
+                <div className="plugin-api-summary">
+                  <strong>插件 API 文档</strong>
+                  <p>
+                    完整文档：<code>docs/plugin-development.md</code>
+                  </p>
+                  <p>
+                    Action Protocol 当前仅定义和校验 addNode、addChildNode、
+                    updateNode、deleteNode、setNodeRemark、showMessage、
+                    exportData 与 applyTemplate；本版本不执行 action。
+                  </p>
+                </div>
+              ) : null}
+
+              {showPluginLogs ? (
+                <div className="plugin-log-panel">
+                  <div className="plugin-log-heading">
+                    <strong>最近插件日志</strong>
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={onClearLogs}
+                    >
+                      清空日志
+                    </button>
+                  </div>
+                  {logs.length === 0 ? (
+                    <p className="empty-note">暂无插件日志</p>
+                  ) : (
+                    <ol className="plugin-log-list">
+                      {logs.map((log) => (
+                        <li className={`is-${log.level}`} key={log.id}>
+                          <time>{new Date(log.timestamp).toLocaleString()}</time>
+                          <span>{log.level}</span>
+                          {log.pluginId ? <code>{log.pluginId}</code> : null}
+                          <p>{log.message}</p>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </details>
 
           <section className="plugin-manager-section">
             <div className="plugin-section-heading">
