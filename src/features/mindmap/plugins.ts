@@ -7,11 +7,16 @@ import { parseNodeTypePack } from './nodeTypePacks';
 import { parseTemplatePack } from './templatePacks';
 import { selectLocalFile } from './fileUtils';
 import {
+  isPluginCommandId,
+  type PluginCommandId,
+} from '../plugins/pluginCommands';
+import {
   installPluginToUserDir,
   isDesktopRuntime,
-  loadPluginRegistry as loadStoredPluginRegistry,
+  reloadPluginsFromDisk,
   savePluginRegistry as saveStoredPluginRegistry,
   uninstallPluginFromUserDir,
+  USER_DATA_PATHS,
 } from '../storage/userDataStorage';
 
 export type PluginCategory =
@@ -48,6 +53,8 @@ export type PluginExporterContribution = {
   label: string;
   handler: string;
   fileName?: string;
+  valid: boolean;
+  invalidReason?: string;
 };
 
 export type PluginExportFormatContribution = {
@@ -61,6 +68,22 @@ export type PluginToolContribution = {
   toolId: string;
   label: string;
   description?: string;
+  command?: string;
+  handler?: string;
+  valid: boolean;
+  invalidReason?: string;
+};
+
+export type PluginMenuWhen = 'always' | 'hasMindmap' | 'hasSelectedNode';
+
+export type PluginMenuContribution = {
+  id: string;
+  label: string;
+  location: string;
+  command: string;
+  when: PluginMenuWhen;
+  valid: boolean;
+  invalidReason?: string;
 };
 
 export type PluginContributions = {
@@ -72,6 +95,7 @@ export type PluginContributions = {
   nodeTypes?: MindmapNodeType[];
   exportFormats?: PluginExportFormatContribution[];
   tools?: PluginToolContribution[];
+  menus?: PluginMenuContribution[];
 };
 
 export type PluginManifest = {
@@ -88,12 +112,28 @@ export type PluginManifest = {
   installedAt: string;
   builtIn?: boolean;
   validationWarnings?: string[];
+  manifestValid?: boolean;
+  manifestError?: string;
+  validationErrors?: PluginValidationError[];
+  source?: PluginSource;
+  manifestPath?: string;
+  installedDirPath?: string;
   config?: Record<string, unknown>;
   contributions?: PluginContributions;
 };
 
+export type PluginSource =
+  | 'built-in'
+  | 'external'
+  | 'orphan-manifest'
+  | 'registry-missing'
+  | 'manifest-missing'
+  | 'manifest-damaged';
+
 export type PluginValidationResult = {
+  valid: boolean;
   manifest: PluginManifest | null;
+  normalizedManifest: PluginManifest | null;
   errors: PluginValidationError[];
   warnings: string[];
 };
@@ -140,12 +180,19 @@ export const FORBIDDEN_PLUGIN_FIELDS = [
   'function',
   'remoteurl',
   'code',
-  'command',
   'shell',
   'executable',
 ] as const;
 
 const FORBIDDEN_PLUGIN_FIELD_SET = new Set<string>(FORBIDDEN_PLUGIN_FIELDS);
+const SUPPORTED_MENU_LOCATION = 'plugins';
+const SUPPORTED_MENU_WHEN: readonly PluginMenuWhen[] = [
+  'always',
+  'hasMindmap',
+  'hasSelectedNode',
+];
+const SUPPORTED_MANIFEST_VERSION = 1;
+const SUPPORTED_EXPORTER_HANDLERS = new Set(['builtin.exportText']);
 
 const BUILT_IN_INSTALLED_AT = '2026-06-27T00:00:00.000Z';
 
@@ -231,6 +278,17 @@ export const BUILT_IN_PLUGINS: PluginManifest[] = [
           label: 'TXT 导出',
           fileName: 'mindmap.txt',
           handler: 'builtin.exportText',
+          valid: true,
+        },
+      ],
+      menus: [
+        {
+          id: 'exportTextMenu',
+          label: '导出为 TXT',
+          location: 'plugins',
+          command: 'builtin.exportText',
+          when: 'hasMindmap',
+          valid: true,
         },
       ],
     },
@@ -419,9 +477,19 @@ function normalizeNodeType(value: unknown): MindmapNodeType | null {
 function normalizeExporter(
   value: unknown,
   errors: PluginValidationError[],
-): PluginExporterContribution | null {
+  warnings: string[],
+  index: number,
+): PluginExporterContribution {
   if (!isRecord(value)) {
-    return null;
+    const invalidReason = '导出贡献必须是对象。';
+    warnings.push(`导出贡献 ${index + 1} 无效：${invalidReason}`);
+    return {
+      id: `invalid-exporter-${index + 1}`,
+      label: `无效导出项 ${index + 1}`,
+      handler: '',
+      valid: false,
+      invalidReason,
+    };
   }
 
   const id = asString(value.id ?? value.formatId).trim();
@@ -431,9 +499,10 @@ function normalizeExporter(
     legacyHandler === 'builtin-txt'
       ? 'builtin.exportText'
       : asString(value.handler ?? value.handlerId).trim();
-  if (!id || !label || !handler) {
-    return null;
-  }
+  const reasons: string[] = [];
+  if (!id) reasons.push('id 必填。');
+  if (!label) reasons.push('label 必填。');
+  if (!handler) reasons.push('handler 必填。');
   if (!handler.startsWith('builtin.')) {
     errors.push({
       code: 'invalid-contributions',
@@ -441,30 +510,116 @@ function normalizeExporter(
       value: handler,
       message: `贡献点 ${id} 的 handler 必须以 builtin. 开头。`,
     });
-    return null;
+    reasons.push('handler 不是允许的内置安全 handler。');
+  } else if (!SUPPORTED_EXPORTER_HANDLERS.has(handler)) {
+    reasons.push(`插件导出 handler 不存在：${handler}`);
+  }
+
+  const contribution = {
+    id: id || `invalid-exporter-${index + 1}`,
+    label: label || `无效导出项 ${index + 1}`,
+    handler,
+    fileName: asString(value.fileName).trim() || undefined,
+    valid: reasons.length === 0,
+    invalidReason: reasons.length > 0 ? reasons.join(' ') : undefined,
+  };
+  if (!contribution.valid) {
+    warnings.push(
+      `导出贡献 ${contribution.id} 无效：${contribution.invalidReason}`,
+    );
+  }
+  return contribution;
+}
+
+function normalizeTool(
+  value: unknown,
+  index: number,
+  warnings: string[],
+): PluginToolContribution {
+  if (!isRecord(value)) {
+    const invalidReason = '工具贡献必须是对象。';
+    warnings.push(`工具贡献 ${index + 1} 无效：${invalidReason}`);
+    return {
+      toolId: `invalid-tool-${index + 1}`,
+      label: `无效工具项 ${index + 1}`,
+      valid: false,
+      invalidReason,
+    };
+  }
+  const toolId = asString(value.toolId ?? value.id).trim();
+  const label = asString(value.label).trim();
+  const command = asString(value.command).trim() || undefined;
+  const handler = asString(value.handler).trim() || undefined;
+  const reasons: string[] = [];
+  if (!toolId) reasons.push('id 必填。');
+  if (!label) reasons.push('label 必填。');
+  const action = command ?? handler;
+  if (action && !isPluginCommandId(action)) {
+    reasons.push(`插件命令不存在：${action}`);
+  }
+  const tool = {
+    toolId: toolId || `invalid-tool-${index + 1}`,
+    label: label || `无效工具项 ${index + 1}`,
+    description: asString(value.description).trim() || undefined,
+    command,
+    handler,
+    valid: reasons.length === 0,
+    invalidReason: reasons.length > 0 ? reasons.join(' ') : undefined,
+  };
+  if (!tool.valid) {
+    warnings.push(`工具贡献 ${tool.toolId} 无效：${tool.invalidReason}`);
+  }
+  return tool;
+}
+
+function normalizeMenu(
+  value: unknown,
+  index: number,
+): PluginMenuContribution {
+  if (!isRecord(value)) {
+    return {
+      id: `invalid-menu-${index + 1}`,
+      label: `无效菜单项 ${index + 1}`,
+      location: '',
+      command: '',
+      when: 'always',
+      valid: false,
+      invalidReason: '菜单贡献必须是对象。',
+    };
+  }
+
+  const id = asString(value.id).trim();
+  const label = asString(value.label).trim();
+  const location = asString(value.location, SUPPORTED_MENU_LOCATION).trim();
+  const command = asString(value.command).trim();
+  const rawWhen = asString(value.when, 'always').trim();
+  const reasons: string[] = [];
+
+  if (!id) reasons.push('id 必填。');
+  if (!label) reasons.push('label 必填。');
+  if (!command) {
+    reasons.push('command 必填。');
+  } else if (!isPluginCommandId(command)) {
+    reasons.push(`插件命令不存在：${command}`);
+  }
+  if (location !== SUPPORTED_MENU_LOCATION) {
+    reasons.push(`不支持的菜单位置：${location || '空'}`);
+  }
+  if (!SUPPORTED_MENU_WHEN.includes(rawWhen as PluginMenuWhen)) {
+    reasons.push(`不支持的显示条件：${rawWhen}`);
   }
 
   return {
-    id,
-    label,
-    handler,
-    fileName: asString(value.fileName).trim() || undefined,
+    id: id || `invalid-menu-${index + 1}`,
+    label: label || `无效菜单项 ${index + 1}`,
+    location,
+    command,
+    when: SUPPORTED_MENU_WHEN.includes(rawWhen as PluginMenuWhen)
+      ? (rawWhen as PluginMenuWhen)
+      : 'always',
+    valid: reasons.length === 0,
+    invalidReason: reasons.length > 0 ? reasons.join(' ') : undefined,
   };
-}
-
-function normalizeTool(value: unknown): PluginToolContribution | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const toolId = asString(value.toolId).trim();
-  const label = asString(value.label).trim();
-  return toolId && label
-    ? {
-        toolId,
-        label,
-        description: asString(value.description).trim() || undefined,
-      }
-    : null;
 }
 
 function normalizeNodeTypePack(value: unknown): NodeTypePack | null {
@@ -502,18 +657,35 @@ function normalizeContributions(
   }
 
   const contributions: PluginContributions = {};
+  for (const key of [
+    'exporters',
+    'exportFormats',
+    'nodeTypePacks',
+    'templatePacks',
+    'themes',
+    'icons',
+    'nodeTypes',
+    'tools',
+    'menus',
+  ]) {
+    if (value[key] !== undefined && !Array.isArray(value[key])) {
+      errors.push({
+        code: 'invalid-contributions',
+        field: `contributions.${key}`,
+        value: value[key],
+        message: `contributions.${key} 必须是数组。`,
+      });
+    }
+  }
   const exporterValues = Array.isArray(value.exporters)
     ? value.exporters
     : Array.isArray(value.exportFormats)
       ? value.exportFormats
       : [];
   if (exporterValues.length > 0) {
-    contributions.exporters = exporterValues
-      .map((item) => normalizeExporter(item, errors))
-      .filter((item): item is PluginExporterContribution => Boolean(item));
-    if (contributions.exporters.length !== exporterValues.length) {
-      warnings.push('部分非法导出贡献已跳过。');
-    }
+    contributions.exporters = exporterValues.map((item, index) =>
+      normalizeExporter(item, errors, warnings, index),
+    );
   }
 
   if (Array.isArray(value.nodeTypePacks)) {
@@ -550,14 +722,86 @@ function normalizeContributions(
       .filter((nodeType): nodeType is MindmapNodeType => Boolean(nodeType));
   }
   if (Array.isArray(value.tools)) {
-    contributions.tools = value.tools
-      .map(normalizeTool)
-      .filter((tool): tool is PluginToolContribution => Boolean(tool));
+    contributions.tools = value.tools.map((tool, index) =>
+      normalizeTool(tool, index, warnings),
+    );
+  }
+  if (Array.isArray(value.menus)) {
+    contributions.menus = value.menus.map(normalizeMenu);
+    const menuIdCounts = contributions.menus.reduce((counts, menu) => {
+      counts.set(menu.id, (counts.get(menu.id) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>());
+    contributions.menus = contributions.menus.map((menu) =>
+      (menuIdCounts.get(menu.id) ?? 0) > 1
+        ? {
+            ...menu,
+            valid: false,
+            invalidReason: [menu.invalidReason, `菜单 id 重复：${menu.id}`]
+              .filter(Boolean)
+              .join(' '),
+          }
+        : menu,
+    );
+    const invalidMenus = contributions.menus.filter((menu) => !menu.valid);
+    if (invalidMenus.length > 0) {
+      warnings.push(
+        ...invalidMenus.map(
+          (menu) => `菜单贡献 ${menu.id} 无效：${menu.invalidReason}`,
+        ),
+      );
+    }
   }
 
   return Object.values(contributions).some((items) => items && items.length > 0)
     ? contributions
     : undefined;
+}
+
+function createValidationResult(
+  manifest: PluginManifest | null,
+  errors: PluginValidationError[],
+  warnings: string[],
+): PluginValidationResult {
+  const uniqueWarnings = Array.from(new Set(warnings));
+  return {
+    valid: Boolean(manifest) && errors.length === 0,
+    manifest,
+    normalizedManifest: manifest,
+    errors,
+    warnings: uniqueWarnings,
+  };
+}
+
+function warnCapabilityContributionMismatch(
+  capabilities: PluginCapability[],
+  contributions: PluginContributions | undefined,
+  warnings: string[],
+) {
+  const contributionCounts: Record<PluginCapability, number> = {
+    export: contributions?.exporters?.length ?? 0,
+    themes: contributions?.themes?.length ?? 0,
+    icons: contributions?.icons?.length ?? 0,
+    nodeTypes:
+      (contributions?.nodeTypes?.length ?? 0) +
+      (contributions?.nodeTypePacks?.length ?? 0),
+    templates: contributions?.templatePacks?.length ?? 0,
+    tools: contributions?.tools?.length ?? 0,
+  };
+
+  for (const capability of SUPPORTED_CAPABILITIES) {
+    const declared = capabilities.includes(capability);
+    const contributed = contributionCounts[capability] > 0;
+    if (declared && !contributed) {
+      warnings.push(
+        `capabilities 声明了 ${capability}，但未提供对应 contributions。`,
+      );
+    } else if (!declared && contributed) {
+      warnings.push(
+        `contributions 提供了 ${capability}，但 capabilities 未声明。`,
+      );
+    }
+  }
 }
 
 function validatePluginManifestInternal(
@@ -567,9 +811,9 @@ function validatePluginManifestInternal(
   const errors: PluginValidationError[] = [];
   const warnings: string[] = [];
   if (!isRecord(value)) {
-    return {
-      manifest: null,
-      errors: [
+    return createValidationResult(
+      null,
+      [
         {
           code: 'invalid-json-object',
           message: '插件 manifest 必须是 JSON 对象。',
@@ -577,7 +821,7 @@ function validatePluginManifestInternal(
         },
       ],
       warnings,
-    };
+    );
   }
 
   const forbiddenField = findForbiddenField(value);
@@ -591,13 +835,25 @@ function validatePluginManifestInternal(
 
   const rawManifestVersion = value.manifestVersion;
   const manifestVersion =
-    allowLegacy && rawManifestVersion === undefined ? 1 : Number(rawManifestVersion);
-  if (!Number.isInteger(manifestVersion) || manifestVersion < 1) {
+    allowLegacy && rawManifestVersion === undefined
+      ? SUPPORTED_MANIFEST_VERSION
+      : Number(rawManifestVersion);
+  if (rawManifestVersion === undefined && !allowLegacy) {
+    errors.push({
+      code: 'missing-required-field',
+      field: 'manifestVersion',
+      value: rawManifestVersion,
+      message: 'manifest 缺少必填字段 manifestVersion。',
+    });
+  } else if (
+    !Number.isInteger(manifestVersion) ||
+    manifestVersion !== SUPPORTED_MANIFEST_VERSION
+  ) {
     errors.push({
       code: 'invalid-manifest-version',
       field: 'manifestVersion',
       value: rawManifestVersion,
-      message: 'manifestVersion 必须是正整数。',
+      message: `manifestVersion 不支持：${String(rawManifestVersion)}。当前仅支持 ${SUPPORTED_MANIFEST_VERSION}。`,
     });
   }
 
@@ -608,7 +864,7 @@ function validatePluginManifestInternal(
     errors.push({
       code: 'missing-required-field',
       field: 'pluginId',
-      message: '缺少必填字段：pluginId',
+      message: 'manifest 缺少必填字段 pluginId。',
     });
   } else if (!isSafePluginId(pluginId)) {
     errors.push({
@@ -622,23 +878,29 @@ function validatePluginManifestInternal(
     errors.push({
       code: 'missing-required-field',
       field: 'name',
-      message: '缺少必填字段：name',
+      message: 'manifest 缺少必填字段 name。',
     });
   }
   if (!version) {
     errors.push({
       code: 'missing-required-field',
       field: 'version',
-      message: '缺少必填字段：version',
+      message: 'manifest 缺少必填字段 version。',
     });
   }
 
+  const usesLegacyExporterType = value.pluginType === 'exporter';
   const pluginType = isPluginType(value.pluginType)
     ? value.pluginType
-    : allowLegacy
+    : allowLegacy || usesLegacyExporterType
       ? normalizeLegacyPluginType(value.pluginType) ??
         pluginTypeForLegacyCategory(value.category)
       : null;
+  if (usesLegacyExporterType && pluginType) {
+    warnings.push(
+      'pluginType 使用旧字段 exporter，已兼容为 import-export。',
+    );
+  }
   if (!pluginType) {
     const supportedTypes = SUPPORTED_PLUGIN_TYPES.join(', ');
     errors.push({
@@ -650,8 +912,8 @@ function validatePluginManifestInternal(
       value: value.pluginType,
       message:
         value.pluginType === undefined
-          ? `缺少必填字段：pluginType。支持的类型：${supportedTypes}`
-          : `pluginType 不受支持：${String(value.pluginType)}。支持的类型：${supportedTypes}`,
+          ? `manifest 缺少必填字段 pluginType。支持的 pluginType：${supportedTypes}`
+          : `pluginType 不支持：${String(value.pluginType)}。支持的 pluginType：${supportedTypes}`,
     });
   }
 
@@ -699,32 +961,41 @@ function validatePluginManifestInternal(
     errors,
     warnings,
   );
+  if (!asString(value.author).trim()) {
+    warnings.push('manifest 缺少 author。');
+  }
+  if (!asString(value.description).trim()) {
+    warnings.push('manifest 缺少 description。');
+  }
+  if (!isRecord(value.contributions) || !Array.isArray(value.contributions.menus)) {
+    warnings.push('未声明 contributions.menus，已按老插件兼容。');
+  }
+  warnCapabilityContributionMismatch(capabilities, contributions, warnings);
   if (errors.length > 0 || !pluginType) {
-    return { manifest: null, errors, warnings };
+    return createValidationResult(null, errors, warnings);
   }
 
-  return {
-    manifest: {
-      manifestVersion,
-      pluginId,
-      name,
-      version,
-      author: asString(value.author, '未知作者').trim() || '未知作者',
-      description: asString(value.description).trim(),
-      pluginType,
-      category: categoryForPluginType(pluginType),
-      capabilities,
-      enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
-      installedAt: normalizeInstalledAt(value.installedAt),
-      builtIn: Boolean(value.builtIn),
-      validationWarnings:
-        warnings.length > 0 ? Array.from(new Set(warnings)) : undefined,
-      config: isRecord(value.config) ? value.config : undefined,
-      contributions,
-    },
-    errors,
-    warnings,
+  const normalizedManifest: PluginManifest = {
+    manifestVersion,
+    pluginId,
+    name,
+    version,
+    author: asString(value.author, '未知作者').trim() || '未知作者',
+    description: asString(value.description).trim(),
+    pluginType,
+    category: categoryForPluginType(pluginType),
+    capabilities,
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
+    installedAt: normalizeInstalledAt(value.installedAt),
+    builtIn: Boolean(value.builtIn),
+    config: isRecord(value.config) ? value.config : undefined,
+    contributions,
+    manifestValid: true,
+    source: Boolean(value.builtIn) ? 'built-in' : 'external',
   };
+  normalizedManifest.validationWarnings =
+    warnings.length > 0 ? Array.from(new Set(warnings)) : undefined;
+  return createValidationResult(normalizedManifest, errors, warnings);
 }
 
 export function validatePluginManifest(value: unknown): PluginValidationResult {
@@ -739,8 +1010,15 @@ function clonePlugin(plugin: PluginManifest): PluginManifest {
   return JSON.parse(JSON.stringify(plugin)) as PluginManifest;
 }
 
-export async function loadPluginRegistry(): Promise<PluginManifest[]> {
-  const storedPlugins = await loadStoredPluginRegistry();
+export async function loadPluginRegistry(options?: {
+  /**
+   * Migration-only escape hatch. Callers must perform a strict reload before
+   * exposing plugins to runtime consumers or UI.
+   */
+  allowRegistryFallback?: boolean;
+}): Promise<PluginManifest[]> {
+  const snapshot = await reloadPluginsFromDisk();
+  const storedPlugins = snapshot.registry;
   const normalizedPlugins = Array.isArray(storedPlugins)
     ? storedPlugins
         .map(normalizePluginManifest)
@@ -752,6 +1030,8 @@ export async function loadPluginRegistry(): Promise<PluginManifest[]> {
   const legacyTxtPlugin = storedById.get('builtin-txt-export');
   const builtIns = BUILT_IN_PLUGINS.map((plugin) => ({
     ...clonePlugin(plugin),
+    source: 'built-in' as const,
+    manifestValid: true,
     enabled:
       storedById.get(plugin.pluginId)?.enabled ??
       (plugin.pluginId === 'localmindmap.export.txt'
@@ -760,19 +1040,174 @@ export async function loadPluginRegistry(): Promise<PluginManifest[]> {
       plugin.enabled,
   }));
   const builtInIds = new Set(builtIns.map((plugin) => plugin.pluginId));
+  const registryPlugins = normalizedPlugins.filter(
+    (plugin) =>
+      !builtInIds.has(plugin.pluginId) &&
+      plugin.pluginId !== 'builtin-txt-export',
+  );
+  const scannedEntries = snapshot.installedManifests;
+  const scannedById = new Map(
+    scannedEntries.map((entry) => [entry.pluginIdHint, entry]),
+  );
+  const processedScanIds = new Set<string>();
+  const createDiagnosticPlugin = (
+    pluginId: string,
+    source: PluginSource,
+    manifestError: string,
+    base?: PluginManifest,
+    manifestPath?: string,
+    validationErrors?: PluginValidationError[],
+  ): PluginManifest => ({
+    manifestVersion: base?.manifestVersion ?? 0,
+    pluginId,
+    name: base?.name || pluginId,
+    version: base?.version || '未知',
+    author: base?.author || '未知作者',
+    description: base?.description || '',
+    pluginType: base?.pluginType ?? 'tool',
+    category: base?.category ?? 'tool',
+    capabilities: base?.capabilities ?? [],
+    enabled: base?.enabled ?? false,
+    installedAt: base?.installedAt ?? new Date().toISOString(),
+    builtIn: false,
+    manifestValid: false,
+    manifestError,
+    validationErrors:
+      validationErrors ??
+      [
+        {
+          code: 'invalid-json-object',
+          message: manifestError,
+        },
+      ],
+    source,
+    manifestPath:
+      manifestPath ??
+      `${USER_DATA_PATHS.installedPlugins}/${pluginId}/manifest.json`,
+    installedDirPath: `${USER_DATA_PATHS.installedPlugins}/${pluginId}`,
+  });
+  const installedPlugins = registryPlugins.map((registryPlugin) => {
+    const scanEntry = scannedById.get(registryPlugin.pluginId);
+    if (scanEntry) {
+      processedScanIds.add(scanEntry.pluginIdHint);
+    }
+    if (!scanEntry) {
+      if (options?.allowRegistryFallback) {
+        return registryPlugin;
+      }
+      return createDiagnosticPlugin(
+        registryPlugin.pluginId,
+        'manifest-missing',
+        'manifest.json 缺失。',
+        registryPlugin,
+      );
+    }
+    if (scanEntry.error || !scanEntry.manifest) {
+      const source: PluginSource = scanEntry.error?.includes('缺失')
+        ? 'manifest-missing'
+        : 'manifest-damaged';
+      return createDiagnosticPlugin(
+        registryPlugin.pluginId,
+        source,
+        scanEntry.error || 'manifest.json 缺失或损坏。',
+        registryPlugin,
+        scanEntry.manifestPath,
+      );
+    }
+
+    const result = validatePluginManifestInternal(scanEntry.manifest, true);
+    if (
+      result.manifest &&
+      result.manifest.pluginId === registryPlugin.pluginId
+    ) {
+      return {
+        ...result.manifest,
+        enabled: registryPlugin.enabled,
+        installedAt: registryPlugin.installedAt,
+        builtIn: false,
+        manifestValid: true,
+        source: 'external' as const,
+        manifestPath: scanEntry.manifestPath,
+        installedDirPath: `${USER_DATA_PATHS.installedPlugins}/${registryPlugin.pluginId}`,
+      };
+    }
+    return createDiagnosticPlugin(
+      registryPlugin.pluginId,
+      'manifest-damaged',
+      result.manifest
+        ? `manifest pluginId 与 registry 不一致：${result.manifest.pluginId}`
+        : result.errors.map((error) => error.message).join(' ') ||
+            'manifest.json 损坏。',
+      registryPlugin,
+      scanEntry.manifestPath,
+      result.errors,
+    );
+  });
+  const orphanPlugins = scannedEntries
+    .filter((entry) => !processedScanIds.has(entry.pluginIdHint))
+    .map((entry) => {
+      if (entry.error || !entry.manifest) {
+        return createDiagnosticPlugin(
+          entry.pluginIdHint,
+          'orphan-manifest',
+          entry.error || 'manifest.json 缺失或损坏。',
+          undefined,
+          entry.manifestPath,
+        );
+      }
+      const result = validatePluginManifestInternal(entry.manifest, true);
+      if (
+        result.manifest &&
+        result.manifest.pluginId === entry.pluginIdHint
+      ) {
+        return {
+          ...result.manifest,
+          enabled: false,
+          source: 'registry-missing' as const,
+          manifestValid: true,
+          manifestPath: entry.manifestPath,
+          installedDirPath: `${USER_DATA_PATHS.installedPlugins}/${entry.pluginIdHint}`,
+          validationWarnings: Array.from(
+            new Set([
+              ...(result.manifest.validationWarnings ?? []),
+              'plugin-registry.json 记录缺失。',
+            ]),
+          ),
+        };
+      }
+      return createDiagnosticPlugin(
+        entry.pluginIdHint,
+        'orphan-manifest',
+        result.manifest
+          ? `manifest pluginId 与目录不一致：${result.manifest.pluginId}`
+          : result.errors.map((error) => error.message).join(' ') ||
+              'manifest.json 损坏。',
+        undefined,
+        entry.manifestPath,
+        result.errors,
+      );
+    });
 
   return [
     ...builtIns,
-    ...normalizedPlugins.filter(
-      (plugin) =>
-        !builtInIds.has(plugin.pluginId) &&
-        plugin.pluginId !== 'builtin-txt-export',
-    ),
+    ...installedPlugins,
+    ...orphanPlugins,
   ];
 }
 
 export async function savePluginRegistry(plugins: PluginManifest[]) {
-  await saveStoredPluginRegistry(plugins);
+  await saveStoredPluginRegistry(getPersistablePluginRegistry(plugins));
+}
+
+export function getPersistablePluginRegistry(plugins: PluginManifest[]) {
+  return plugins.filter(
+    (plugin) =>
+      plugin.builtIn ||
+      plugin.source === undefined ||
+      plugin.source === 'external' ||
+      plugin.source === 'manifest-missing' ||
+      plugin.source === 'manifest-damaged',
+  );
 }
 
 export function setPluginEnabled(
@@ -795,11 +1230,15 @@ export function installPluginManifest(
   plugins: PluginManifest[],
   manifest: PluginManifest,
 ) {
+  const existingPlugin = plugins.find(
+    (plugin) => plugin.pluginId === manifest.pluginId && !plugin.builtIn,
+  );
   const nextManifest: PluginManifest = {
     ...manifest,
     builtIn: false,
-    enabled: true,
+    enabled: existingPlugin?.enabled ?? manifest.enabled,
     installedAt: new Date().toISOString(),
+    source: 'external',
   };
 
   return [
@@ -821,6 +1260,13 @@ export async function installPlugin(
   manifest: PluginManifest,
   overwrite = false,
 ) {
+  if (
+    plugins.some(
+      (plugin) => plugin.pluginId === manifest.pluginId && plugin.builtIn,
+    )
+  ) {
+    throw new Error(`不能覆盖内置插件：${manifest.pluginId}`);
+  }
   const exists = plugins.some(
     (plugin) => plugin.pluginId === manifest.pluginId && !plugin.builtIn,
   );
@@ -857,7 +1303,7 @@ export class PluginManifestError extends Error {
   warnings: string[];
 
   constructor(errors: PluginValidationError[], warnings: string[] = []) {
-    super(errors.map((error) => error.message).join(' '));
+    super(`导入失败：${errors.map((error) => error.message).join(' ')}`);
     this.name = 'PluginManifestError';
     this.validationErrors = errors;
     this.warnings = warnings;
@@ -868,11 +1314,18 @@ export function parsePluginManifestText(text: string) {
   let parsedValue: unknown;
   try {
     parsedValue = JSON.parse(text);
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const positionMatch = detail.match(/position\s+(\d+)/i);
+    const position = positionMatch ? Number(positionMatch[1]) : text.length;
+    const prefix = text.slice(0, position);
+    const line = prefix.split('\n').length;
+    const lastLineBreak = prefix.lastIndexOf('\n');
+    const column = position - lastLineBreak;
     throw new PluginManifestError([
       {
         code: 'invalid-json-object',
-        message: '插件 JSON 解析失败。',
+        message: `JSON 格式错误。第 ${line} 行第 ${column} 列附近存在语法问题。`,
       },
     ]);
   }
@@ -896,7 +1349,66 @@ export async function readLocalPluginManifest() {
 }
 
 export function getEnabledPlugins(plugins: PluginManifest[]) {
-  return plugins.filter((plugin) => plugin.enabled);
+  return plugins.filter(
+    (plugin) => plugin.enabled && plugin.manifestValid !== false,
+  );
+}
+
+export function createPluginOverwritePrompt(
+  currentPlugin: PluginManifest,
+  incomingPlugin: PluginManifest,
+) {
+  return (
+    `插件已安装：${currentPlugin.name}\n` +
+    `当前版本：${currentPlugin.version}\n` +
+    `导入版本：${incomingPlugin.version}\n` +
+    '是否覆盖安装？'
+  );
+}
+
+export function getPluginMenus(plugins: PluginManifest[]) {
+  return getEnabledPlugins(plugins).flatMap((plugin) =>
+    (plugin.contributions?.menus ?? [])
+      .filter((menu) => menu.valid)
+      .map((menu) => ({ plugin, menu })),
+  );
+}
+
+export function getPluginMenuGroups(
+  plugins: PluginManifest[],
+  context: { hasMindmap: boolean; hasSelectedNode: boolean },
+) {
+  const groups = new Map<
+    string,
+    {
+      pluginId: string;
+      pluginName: string;
+      items: PluginMenuContribution[];
+    }
+  >();
+
+  for (const { plugin, menu } of getPluginMenus(plugins)) {
+    const visible =
+      menu.when === 'always' ||
+      (menu.when === 'hasMindmap' && context.hasMindmap) ||
+      (menu.when === 'hasSelectedNode' && context.hasSelectedNode);
+    if (!visible) {
+      continue;
+    }
+    const group = groups.get(plugin.pluginId) ?? {
+      pluginId: plugin.pluginId,
+      pluginName: plugin.name,
+      items: [],
+    };
+    group.items.push(menu);
+    groups.set(plugin.pluginId, group);
+  }
+
+  return Array.from(groups.values());
+}
+
+export function isKnownPluginCommand(command: string): command is PluginCommandId {
+  return isPluginCommandId(command);
 }
 
 export function getPluginThemes(plugins: PluginManifest[]) {
@@ -933,7 +1445,10 @@ export function getPluginTemplates(plugins: PluginManifest[]): MindmapTemplate[]
 
 export function getPluginExporters(plugins: PluginManifest[]) {
   return getEnabledPlugins(plugins).flatMap(
-    (plugin) => plugin.contributions?.exporters ?? [],
+    (plugin) =>
+      (plugin.contributions?.exporters ?? []).filter(
+        (exporter) => exporter.valid,
+      ),
   );
 }
 

@@ -1,0 +1,31 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.test.menu.export",
+  "name": "菜单贡献测试插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Test",
+  "description": "用于验证插件菜单贡献和 command registry。",
+  "pluginType": "import-export",
+  "capabilities": [
+    "export"
+  ],
+  "enabled": true,
+  "contributions": {
+    "exporters": [
+      {
+        "id": "menuExportText",
+        "label": "菜单测试 TXT 导出",
+        "handler": "builtin.exportText"
+      }
+    ],
+    "menus": [
+      {
+        "id": "menuExportTextAction",
+        "label": "菜单测试 TXT 导出",
+        "location": "plugins",
+        "command": "builtin.exportText",
+        "when": "hasMindmap"
+      }
+    ]
+  }
+}

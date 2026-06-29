@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 
 export type TopMenuItem = {
   label: string;
-  onSelect: () => void;
+  onSelect?: () => void;
+  children?: TopMenuItem[];
   disabled?: boolean;
   dividerBefore?: boolean;
 };
@@ -64,8 +65,58 @@ export function TopMenuBar({
   }, [activeMenuId]);
 
   const runMenuItem = (item: TopMenuItem) => {
+    if (!item.onSelect) {
+      return;
+    }
     setActiveMenuId(null);
     item.onSelect();
+  };
+
+  const renderMenuItem = (
+    menuId: string,
+    item: TopMenuItem,
+    index: number,
+  ) => {
+    if (item.children?.length) {
+      return (
+        <div
+          className={[
+            'top-menu-submenu',
+            item.dividerBefore ? 'has-divider' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          key={`${menuId}-${item.label}-${index}`}
+        >
+          <button type="button" role="menuitem" aria-haspopup="menu">
+            <span>{item.label}</span>
+            <span aria-hidden="true">›</span>
+          </button>
+          <div className="top-menu-submenu-popover" role="menu">
+            {item.children.map((child, childIndex) =>
+              renderMenuItem(
+                `${menuId}-${item.label}`,
+                child,
+                childIndex,
+              ),
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <button
+        key={`${menuId}-${item.label}-${index}`}
+        type="button"
+        role="menuitem"
+        disabled={item.disabled}
+        className={item.dividerBefore ? 'has-divider' : undefined}
+        onClick={() => runMenuItem(item)}
+      >
+        {item.label}
+      </button>
+    );
   };
 
   return (
@@ -106,19 +157,17 @@ export function TopMenuBar({
                 <span aria-hidden="true">⌄</span>
               </button>
               {isOpen ? (
-                <div className="top-menu-popover" role="menu">
-                  {menu.items.map((item, index) => (
-                    <button
-                      key={`${menu.id}-${item.label}-${index}`}
-                      type="button"
-                      role="menuitem"
-                      disabled={item.disabled}
-                      className={item.dividerBefore ? 'has-divider' : undefined}
-                      onClick={() => runMenuItem(item)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
+                <div
+                  className={
+                    menu.items.some((item) => item.children?.length)
+                      ? 'top-menu-popover has-submenus'
+                      : 'top-menu-popover'
+                  }
+                  role="menu"
+                >
+                  {menu.items.map((item, index) =>
+                    renderMenuItem(menu.id, item, index),
+                  )}
                 </div>
               ) : null}
             </div>

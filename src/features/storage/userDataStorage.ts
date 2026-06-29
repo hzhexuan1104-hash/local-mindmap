@@ -11,6 +11,12 @@ export const USER_DATA_COMMANDS = {
   installPluginToUserDir: 'install_plugin_to_user_dir',
   uninstallPluginFromUserDir: 'uninstall_plugin_from_user_dir',
   openUserDataDir: 'open_user_data_dir',
+  openPluginDir: 'open_plugin_dir',
+  openPluginDevDir: 'open_plugin_dev_dir',
+  createSamplePlugin: 'create_sample_plugin',
+  openPluginManifestDir: 'open_plugin_manifest_dir',
+  scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
+  reloadPluginsFromDisk: 'reload_plugins_from_disk',
 } as const;
 
 export const USER_DATA_PATHS = {
@@ -20,12 +26,32 @@ export const USER_DATA_PATHS = {
   templatePacks: 'templates/packs',
   pluginRegistry: 'plugins/plugin-registry.json',
   installedPlugins: 'plugins/installed',
+  pluginDev: 'plugins/dev',
   appSettings: 'config/app-settings.json',
   recentFiles: 'config/recent-files.json',
   userPreferences: 'config/user-preferences.json',
   migrationFlag: 'config/migration-state.json',
   backups: 'backups',
 } as const;
+
+export type InstalledPluginScanEntry = {
+  pluginIdHint: string;
+  manifestPath: string;
+  manifest: unknown | null;
+  error?: string;
+};
+
+export type PluginDiskSnapshot = {
+  registry: unknown;
+  installedManifests: InstalledPluginScanEntry[];
+};
+
+export type SamplePluginCreationResult = {
+  created: boolean;
+  directoryPath: string;
+  manifestPath: string;
+  readmePath: string;
+};
 
 const LEGACY_MIGRATION_FLAG_PATH = 'config/migration-v1.6.json';
 
@@ -166,6 +192,16 @@ export async function getUserDataDir() {
   }
 
   return invokeUserDataCommand<string>(USER_DATA_COMMANDS.getUserDataDir);
+}
+
+export function resolveUserDataPath(root: string, path: string) {
+  if (!root || root === '浏览器本地存储') {
+    return path;
+  }
+  if (/^(?:[A-Za-z]:[\\/]|\/)/.test(path)) {
+    return path;
+  }
+  return `${root.replace(/[\\/]$/, '')}/${path.replace(/^[\\/]+/, '')}`;
 }
 
 export async function ensureUserDataDirs() {
@@ -401,6 +437,124 @@ export async function openUserDataDir() {
 
   await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openUserDataDir);
   return true;
+}
+
+export async function openPluginDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginDir);
+  return true;
+}
+
+export async function openPluginDevDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginDevDir);
+  return true;
+}
+
+export async function createSamplePlugin() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  return invokeUserDataCommand<SamplePluginCreationResult>(
+    USER_DATA_COMMANDS.createSamplePlugin,
+  );
+}
+
+export async function openPluginManifestDir(pluginId: string) {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginManifestDir, {
+    pluginId,
+  });
+  return true;
+}
+
+export async function scanInstalledPluginManifests(
+  expectedPluginIds: string[] = [],
+): Promise<
+  InstalledPluginScanEntry[]
+> {
+  if (isDesktopRuntime()) {
+    return invokeUserDataCommand<InstalledPluginScanEntry[]>(
+      USER_DATA_COMMANDS.scanInstalledPluginManifests,
+      { pluginIds: expectedPluginIds },
+    );
+  }
+
+  const prefix = `${USER_DATA_PATHS.installedPlugins}/`;
+  const entries = readWebPathIndex()
+    .filter(
+      (path) => path.startsWith(prefix) && path.endsWith('/manifest.json'),
+    )
+    .map((manifestPath) => {
+      const pluginIdHint =
+        manifestPath.slice(prefix.length).split('/')[0] ?? 'unknown-plugin';
+      const rawValue = getStorage()?.getItem(webStorageKeyForPath(manifestPath));
+      if (!rawValue) {
+        return {
+          pluginIdHint,
+          manifestPath,
+          manifest: null,
+          error: 'manifest.json 缺失。',
+        };
+      }
+      try {
+        return {
+          pluginIdHint,
+          manifestPath,
+          manifest: JSON.parse(rawValue) as unknown,
+        };
+      } catch (error) {
+        return {
+          pluginIdHint,
+          manifestPath,
+          manifest: null,
+          error: `manifest JSON 损坏：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        };
+      }
+    });
+  const scannedIds = new Set(entries.map((entry) => entry.pluginIdHint));
+  for (const pluginId of expectedPluginIds) {
+    if (!scannedIds.has(pluginId)) {
+      entries.push({
+        pluginIdHint: pluginId,
+        manifestPath: `${prefix}${pluginId}/manifest.json`,
+        manifest: null,
+        error: 'manifest.json 缺失。',
+      });
+    }
+  }
+  return entries;
+}
+
+export async function reloadPluginsFromDisk(): Promise<PluginDiskSnapshot> {
+  if (isDesktopRuntime()) {
+    return invokeUserDataCommand<PluginDiskSnapshot>(
+      USER_DATA_COMMANDS.reloadPluginsFromDisk,
+    );
+  }
+
+  const registry = await loadPluginRegistry();
+  const pluginIds = Array.isArray(registry)
+    ? registry
+        .map((plugin) => plugin?.pluginId)
+        .filter((pluginId): pluginId is string => typeof pluginId === 'string')
+    : [];
+  return {
+    registry,
+    installedManifests: await scanInstalledPluginManifests(pluginIds),
+  };
 }
 
 export type UserDataMigrationResult = {

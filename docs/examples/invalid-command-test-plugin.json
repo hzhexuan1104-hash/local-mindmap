@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.test.menu.invalid-command",
+  "name": "非法命令测试插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Test",
+  "description": "用于验证插件菜单 command 白名单校验。",
+  "pluginType": "tool",
+  "capabilities": ["tools"],
+  "enabled": true,
+  "contributions": {
+    "menus": [
+      {
+        "id": "invalidShellAction",
+        "label": "非法 Shell 命令",
+        "location": "plugins",
+        "command": "shell.exec",
+        "when": "always"
+      }
+    ]
+  }
+}

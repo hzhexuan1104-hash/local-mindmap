@@ -2,9 +2,9 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use rfd::FileDialog;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -20,6 +20,12 @@ const LEGACY_IDENTIFIER_DIR_NAME: &str = "com.localmindmap.app";
 const IDENTIFIER_MIGRATION_FLAG_PATH: &str = "config/identifier-migration-v1.6.json";
 const USER_PLUGIN_REGISTRY_PATH: &str = "plugins/plugin-registry.json";
 const USER_PLUGIN_INSTALLED_DIR: &str = "plugins/installed";
+const USER_PLUGIN_DEV_DIR: &str = "plugins/dev";
+const SAMPLE_PLUGIN_DIR_NAME: &str = "sample-json-plugin";
+const SAMPLE_PLUGIN_ID: &str = "localmindmap.dev.sample-json-plugin";
+const SAMPLE_PLUGIN_MANIFEST: &str =
+    include_str!("../../docs/examples/sample-json-plugin/manifest.json");
+const SAMPLE_PLUGIN_README: &str = include_str!("../../docs/examples/sample-json-plugin/README.md");
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -29,6 +35,7 @@ const USER_DATA_DIRS: &[&str] = &[
     "templates/packs",
     "plugins",
     USER_PLUGIN_INSTALLED_DIR,
+    USER_PLUGIN_DEV_DIR,
     CONFIG_DIR_NAME,
     "backups",
 ];
@@ -46,7 +53,6 @@ const FORBIDDEN_DECLARATIVE_FIELDS: &[&str] = &[
     "function",
     "remoteurl",
     "code",
-    "command",
     "shell",
     "executable",
 ];
@@ -377,10 +383,14 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
     if object
         .get("manifestVersion")
         .and_then(Value::as_u64)
-        .filter(|version| *version > 0)
+        .filter(|version| *version == 1)
         .is_none()
     {
-        return Err("manifestVersion is required.".to_string());
+        let value = object
+            .get("manifestVersion")
+            .map(Value::to_string)
+            .unwrap_or_else(|| "missing".to_string());
+        return Err(format!("manifestVersion 不支持：{value}。当前仅支持 1。"));
     }
 
     for required_field in ["name", "version", "pluginType"] {
@@ -427,8 +437,30 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
 
     if let Some(contributions) = object.get("contributions") {
         validate_builtin_handlers(contributions)?;
+        validate_menu_command_shape(contributions)?;
     }
 
+    Ok(())
+}
+
+fn validate_menu_command_shape(contributions: &Value) -> Result<(), String> {
+    let Some(menus) = contributions.get("menus") else {
+        return Ok(());
+    };
+    let menus = menus
+        .as_array()
+        .ok_or_else(|| "contributions.menus must be an array.".to_string())?;
+    for menu in menus {
+        let Some(menu) = menu.as_object() else {
+            continue;
+        };
+        if menu
+            .get("command")
+            .is_some_and(|command| !command.is_string())
+        {
+            return Err("Plugin menu command must be a string.".to_string());
+        }
+    }
     Ok(())
 }
 
@@ -785,6 +817,298 @@ fn open_user_data_dir(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_plugin_dir(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let plugin_dir = plugin_dir_at(&root)?;
+    fs::create_dir_all(&plugin_dir)
+        .map_err(|error| format!("Failed to create plugin directory: {error}"))?;
+
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(&plugin_dir)
+        .spawn()
+        .map_err(|error| format!("Failed to open plugin directory: {error}"))?;
+    Ok(())
+}
+
+fn plugin_dir_at(root: &Path) -> Result<PathBuf, String> {
+    resolve_user_relative_path(root, "plugins")
+}
+
+fn plugin_dev_dir_at(root: &Path) -> Result<PathBuf, String> {
+    resolve_user_relative_path(root, USER_PLUGIN_DEV_DIR)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SamplePluginCreationResult {
+    created: bool,
+    directory_path: String,
+    manifest_path: String,
+    readme_path: String,
+}
+
+fn sample_plugin_creation_result(root: &Path, created: bool) -> SamplePluginCreationResult {
+    let directory = root.join(USER_PLUGIN_DEV_DIR).join(SAMPLE_PLUGIN_DIR_NAME);
+    SamplePluginCreationResult {
+        created,
+        directory_path: directory.to_string_lossy().to_string(),
+        manifest_path: directory
+            .join(MANIFEST_FILE_NAME)
+            .to_string_lossy()
+            .to_string(),
+        readme_path: directory.join("README.md").to_string_lossy().to_string(),
+    }
+}
+
+fn create_sample_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
+    let manifest: Value = serde_json::from_str(SAMPLE_PLUGIN_MANIFEST)
+        .map_err(|error| format!("Bundled sample plugin manifest is invalid: {error}"))?;
+    validate_declarative_manifest(SAMPLE_PLUGIN_ID, &manifest)
+        .map_err(|error| format!("Bundled sample plugin validation failed: {error}"))?;
+
+    let dev_dir = plugin_dev_dir_at(root)?;
+    fs::create_dir_all(&dev_dir)
+        .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
+    let target_dir = dev_dir.join(SAMPLE_PLUGIN_DIR_NAME);
+    if target_dir.exists() {
+        return Ok(sample_plugin_creation_result(root, false));
+    }
+
+    let staging_dir = dev_dir.join(format!(".{SAMPLE_PLUGIN_DIR_NAME}.creating"));
+    remove_path_if_exists(&staging_dir)?;
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("Failed to create sample plugin staging directory: {error}"))?;
+
+    let write_result = (|| {
+        fs::write(staging_dir.join(MANIFEST_FILE_NAME), SAMPLE_PLUGIN_MANIFEST)
+            .map_err(|error| format!("Failed to write sample plugin manifest: {error}"))?;
+        fs::write(staging_dir.join("README.md"), SAMPLE_PLUGIN_README)
+            .map_err(|error| format!("Failed to write sample plugin README: {error}"))?;
+        fs::rename(&staging_dir, &target_dir)
+            .map_err(|error| format!("Failed to commit sample plugin directory: {error}"))
+    })();
+
+    if let Err(error) = write_result {
+        let _ = remove_path_if_exists(&staging_dir);
+        return Err(error);
+    }
+
+    Ok(sample_plugin_creation_result(root, true))
+}
+
+#[tauri::command]
+fn open_plugin_dev_dir(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let dev_dir = plugin_dev_dir_at(&root)?;
+    fs::create_dir_all(&dev_dir)
+        .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
+
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(&dev_dir)
+        .spawn()
+        .map_err(|error| format!("Failed to open plugin development directory: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn create_sample_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    create_sample_plugin_at(&root)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledPluginScanEntry {
+    plugin_id_hint: String,
+    manifest_path: String,
+    manifest: Option<Value>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiskSnapshot {
+    registry: Value,
+    installed_manifests: Vec<InstalledPluginScanEntry>,
+}
+
+fn scan_installed_plugin_manifests_at(
+    root: &Path,
+    expected_plugin_ids: &[String],
+) -> Result<Vec<InstalledPluginScanEntry>, String> {
+    let installed_dir = resolve_user_relative_path(root, USER_PLUGIN_INSTALLED_DIR)?;
+    fs::create_dir_all(&installed_dir)
+        .map_err(|error| format!("Failed to create installed plugin directory: {error}"))?;
+    let mut results = Vec::new();
+
+    for entry in fs::read_dir(&installed_dir)
+        .map_err(|error| format!("Failed to scan installed plugin directory: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Failed to read installed plugin entry: {error}"))?;
+        if !entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect installed plugin entry: {error}"))?
+            .is_dir()
+        {
+            continue;
+        }
+
+        let plugin_id_hint = entry.file_name().to_string_lossy().to_string();
+        if plugin_id_hint.starts_with('.') {
+            continue;
+        }
+        let relative_manifest_path =
+            format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id_hint}/{MANIFEST_FILE_NAME}");
+        let manifest_path = entry.path().join(MANIFEST_FILE_NAME);
+        if !manifest_path.is_file() {
+            results.push(InstalledPluginScanEntry {
+                plugin_id_hint,
+                manifest_path: relative_manifest_path,
+                manifest: None,
+                error: Some("manifest.json 缺失。".to_string()),
+            });
+            continue;
+        }
+
+        let raw_manifest = match fs::read_to_string(&manifest_path) {
+            Ok(value) => value,
+            Err(error) => {
+                results.push(InstalledPluginScanEntry {
+                    plugin_id_hint,
+                    manifest_path: relative_manifest_path,
+                    manifest: None,
+                    error: Some(format!("manifest 读取失败：{error}")),
+                });
+                continue;
+            }
+        };
+        match serde_json::from_str::<Value>(&raw_manifest) {
+            Ok(manifest) => results.push(InstalledPluginScanEntry {
+                plugin_id_hint,
+                manifest_path: relative_manifest_path,
+                manifest: Some(manifest),
+                error: None,
+            }),
+            Err(error) => results.push(InstalledPluginScanEntry {
+                plugin_id_hint,
+                manifest_path: relative_manifest_path,
+                manifest: None,
+                error: Some(format!(
+                    "manifest JSON 损坏：第 {} 行第 {} 列附近：{}",
+                    error.line(),
+                    error.column(),
+                    error
+                )),
+            }),
+        }
+    }
+
+    for plugin_id in expected_plugin_ids {
+        if !is_safe_plugin_id(plugin_id)
+            || results
+                .iter()
+                .any(|entry| entry.plugin_id_hint == *plugin_id)
+        {
+            continue;
+        }
+        results.push(InstalledPluginScanEntry {
+            plugin_id_hint: plugin_id.clone(),
+            manifest_path: format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/{MANIFEST_FILE_NAME}"),
+            manifest: None,
+            error: Some("manifest.json 缺失。".to_string()),
+        });
+    }
+
+    results.sort_by(|left, right| left.plugin_id_hint.cmp(&right.plugin_id_hint));
+    Ok(results)
+}
+
+#[tauri::command]
+fn scan_installed_plugin_manifests(
+    app: AppHandle,
+    plugin_ids: Option<Vec<String>>,
+) -> Result<Vec<InstalledPluginScanEntry>, String> {
+    let root = ensure_user_data_root(&app)?;
+    scan_installed_plugin_manifests_at(&root, plugin_ids.as_deref().unwrap_or(&[]))
+}
+
+fn reload_plugins_from_disk_at(root: &Path) -> Result<PluginDiskSnapshot, String> {
+    let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))?;
+    let plugin_ids = registry
+        .as_array()
+        .map(|plugins| {
+            plugins
+                .iter()
+                .filter(|plugin| {
+                    !plugin
+                        .get("builtIn")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .filter_map(|plugin| {
+                    plugin
+                        .get("pluginId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let installed_manifests = scan_installed_plugin_manifests_at(&root, &plugin_ids)?;
+    Ok(PluginDiskSnapshot {
+        registry,
+        installed_manifests,
+    })
+}
+
+#[tauri::command]
+fn reload_plugins_from_disk(app: AppHandle) -> Result<PluginDiskSnapshot, String> {
+    let root = ensure_user_data_root(&app)?;
+    reload_plugins_from_disk_at(&root)
+}
+
+#[tauri::command]
+fn open_plugin_manifest_dir(app: AppHandle, plugin_id: String) -> Result<(), String> {
+    if !is_safe_plugin_id(&plugin_id) {
+        return Err("Invalid pluginId.".to_string());
+    }
+    let root = ensure_user_data_root(&app)?;
+    let plugin_dir =
+        resolve_user_relative_path(&root, &format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}"))?;
+    if !plugin_dir.is_dir() {
+        return Err(format!("插件目录不存在：{plugin_id}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(&plugin_dir)
+        .spawn()
+        .map_err(|error| format!("Failed to open plugin manifest directory: {error}"))?;
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OpenedLocalFile {
@@ -834,8 +1158,8 @@ fn open_local_file_with_dialog(
     let Some(path) = dialog.pick_file() else {
         return Ok(None);
     };
-    let bytes = fs::read(&path)
-        .map_err(|error| format!("Failed to read `{}`: {error}", path.display()))?;
+    let bytes =
+        fs::read(&path).map_err(|error| format!("Failed to read `{}`: {error}", path.display()))?;
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1280,6 +1604,12 @@ fn main() {
             install_plugin_to_user_dir,
             uninstall_plugin_from_user_dir,
             open_user_data_dir,
+            open_plugin_dir,
+            open_plugin_dev_dir,
+            create_sample_plugin,
+            open_plugin_manifest_dir,
+            scan_installed_plugin_manifests,
+            reload_plugins_from_disk,
             save_local_file_with_dialog,
             write_local_file,
             read_local_file,
@@ -1550,6 +1880,56 @@ mod tests {
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
 
+    #[test]
+    fn resolves_plugin_directory_inside_user_root() {
+        let root = test_root("open-plugin-dir");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+
+        assert_eq!(
+            plugin_dir_at(&root).expect("plugin directory should resolve"),
+            root.join("plugins")
+        );
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn creates_valid_sample_plugin_without_overwriting_existing_files() {
+        let root = test_root("sample-plugin");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+
+        let created =
+            create_sample_plugin_at(&root).expect("sample plugin creation should succeed");
+        assert!(created.created);
+        let manifest_path = PathBuf::from(&created.manifest_path);
+        let readme_path = PathBuf::from(&created.readme_path);
+        assert!(manifest_path.is_file());
+        assert!(readme_path.is_file());
+
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("sample manifest should be readable"),
+        )
+        .expect("sample manifest should be JSON");
+        validate_declarative_manifest(SAMPLE_PLUGIN_ID, &manifest)
+            .expect("sample manifest should satisfy the v1.7 schema");
+        assert_eq!(manifest["pluginId"], SAMPLE_PLUGIN_ID);
+        assert_eq!(
+            manifest["contributions"]["menus"][0]["command"],
+            "builtin.exportText"
+        );
+
+        fs::write(&readme_path, "user-owned content")
+            .expect("test should replace README with user content");
+        let existing = create_sample_plugin_at(&root).expect("existing sample should be reported");
+        assert!(!existing.created);
+        assert_eq!(
+            fs::read_to_string(&readme_path).expect("README should remain readable"),
+            "user-owned content"
+        );
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn codex_localcache_alias_does_not_affect_lexical_user_path_resolution() {
@@ -1661,6 +2041,41 @@ mod tests {
     }
 
     #[test]
+    fn plugin_install_commits_manifest_before_registry() {
+        let root = test_root("plugin-write-order");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let plugin_id = "localmindmap.test.write.order";
+        let manifest = test_declarative_plugin(plugin_id);
+        let mut writes = Vec::new();
+
+        install_plugin_to_user_dir_at_with_writer(
+            &root,
+            plugin_id,
+            &manifest,
+            false,
+            |writer_root, relative_path, value| {
+                writes.push(relative_path.to_string());
+                write_user_json_at(writer_root, relative_path, value)
+            },
+        )
+        .expect("installation should succeed");
+
+        assert_eq!(
+            writes,
+            vec![
+                format!("{USER_PLUGIN_INSTALLED_DIR}/.{plugin_id}.installing/{MANIFEST_FILE_NAME}"),
+                USER_PLUGIN_REGISTRY_PATH.to_string(),
+            ]
+        );
+        assert!(root
+            .join(format!(
+                "{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/{MANIFEST_FILE_NAME}"
+            ))
+            .is_file());
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
     fn orphan_plugin_directory_is_cleaned_before_reinstall() {
         let root = test_root("plugin-orphan-reinstall");
         ensure_user_data_dirs_at(&root).expect("user directories should be created");
@@ -1713,6 +2128,181 @@ mod tests {
     }
 
     #[test]
+    fn overwrite_install_updates_manifest_and_registry() {
+        let root = test_root("plugin-overwrite");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let plugin_id = "localmindmap.test.update";
+        let mut first = test_declarative_plugin(plugin_id);
+        first["version"] = Value::String("1.0.0".to_string());
+        first["name"] = Value::String("Old plugin".to_string());
+        install_plugin_to_user_dir_at(&root, plugin_id, &first, false)
+            .expect("initial install should succeed");
+
+        let mut update = first.clone();
+        update["version"] = Value::String("1.0.1".to_string());
+        update["name"] = Value::String("Updated plugin".to_string());
+        update["enabled"] = Value::Bool(false);
+        install_plugin_to_user_dir_at(&root, plugin_id, &update, true)
+            .expect("overwrite should succeed");
+
+        let manifest = read_user_json_at(
+            &root,
+            &format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/{MANIFEST_FILE_NAME}"),
+            Value::Null,
+        )
+        .expect("updated manifest should be readable");
+        let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))
+            .expect("updated registry should be readable");
+        assert_eq!(manifest["version"], "1.0.1");
+        assert_eq!(manifest["name"], "Updated plugin");
+        assert_eq!(manifest["enabled"], false);
+        assert_eq!(registry[0]["version"], "1.0.1");
+        assert_eq!(registry[0]["enabled"], false);
+        let scanned = scan_installed_plugin_manifests_at(&root, &[])
+            .expect("installed plugin scan should succeed");
+        let installed = scanned
+            .iter()
+            .find(|entry| entry.plugin_id_hint == plugin_id)
+            .expect("overwritten plugin should be scanned");
+        assert!(root.join(&installed.manifest_path).is_file());
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn overwrite_registry_failure_restores_previous_installation() {
+        let root = test_root("plugin-overwrite-rollback");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let plugin_id = "localmindmap.test.update.rollback";
+        let mut first = test_declarative_plugin(plugin_id);
+        first["version"] = Value::String("1.0.0".to_string());
+        install_plugin_to_user_dir_at(&root, plugin_id, &first, false)
+            .expect("initial install should succeed");
+
+        let mut update = first.clone();
+        update["version"] = Value::String("1.0.1".to_string());
+        install_plugin_to_user_dir_at_with_writer(
+            &root,
+            plugin_id,
+            &update,
+            true,
+            |writer_root, relative_path, value| {
+                if relative_path == USER_PLUGIN_REGISTRY_PATH {
+                    Err("simulated overwrite registry failure".to_string())
+                } else {
+                    write_user_json_at(writer_root, relative_path, value)
+                }
+            },
+        )
+        .expect_err("overwrite should fail");
+
+        let manifest = read_user_json_at(
+            &root,
+            &format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/{MANIFEST_FILE_NAME}"),
+            Value::Null,
+        )
+        .expect("previous manifest should be restored");
+        let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))
+            .expect("previous registry should be restored");
+        assert_eq!(manifest["version"], "1.0.0");
+        assert_eq!(registry[0]["version"], "1.0.0");
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn scans_valid_missing_and_damaged_installed_manifests() {
+        let root = test_root("plugin-diagnostics");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let valid_id = "localmindmap.test.valid";
+        let valid_dir = root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{valid_id}"));
+        fs::create_dir_all(&valid_dir).expect("valid plugin directory should be created");
+        fs::write(
+            valid_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_string(&test_declarative_plugin(valid_id))
+                .expect("manifest should serialize"),
+        )
+        .expect("valid manifest should be written");
+
+        let missing_id = "localmindmap.test.missing";
+        fs::create_dir_all(root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{missing_id}")))
+            .expect("missing manifest directory should be created");
+
+        let damaged_id = "localmindmap.test.damaged";
+        let damaged_dir = root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{damaged_id}"));
+        fs::create_dir_all(&damaged_dir).expect("damaged plugin directory should be created");
+        fs::write(damaged_dir.join(MANIFEST_FILE_NAME), "{ broken")
+            .expect("damaged manifest should be written");
+
+        let absent_id = "localmindmap.test.absent".to_string();
+        let entries = scan_installed_plugin_manifests_at(&root, &[absent_id.clone()])
+            .expect("scan should complete");
+        let valid = entries
+            .iter()
+            .find(|entry| entry.plugin_id_hint == valid_id)
+            .expect("valid plugin should be listed");
+        let missing = entries
+            .iter()
+            .find(|entry| entry.plugin_id_hint == missing_id)
+            .expect("missing plugin should be listed");
+        let damaged = entries
+            .iter()
+            .find(|entry| entry.plugin_id_hint == damaged_id)
+            .expect("damaged plugin should be listed");
+        let absent = entries
+            .iter()
+            .find(|entry| entry.plugin_id_hint == absent_id)
+            .expect("registry plugin without a directory should be listed");
+        assert!(valid.manifest.is_some());
+        assert!(valid.error.is_none());
+        assert!(missing
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("缺失"));
+        assert!(damaged
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("损坏"));
+        assert!(absent
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("manifest.json 缺失"));
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn reload_snapshot_reports_deleted_registry_manifest_as_missing() {
+        let root = test_root("plugin-reload-deleted-manifest");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let plugin_id = "localmindmap.test.reload.deleted";
+        let manifest = test_declarative_plugin(plugin_id);
+        install_plugin_to_user_dir_at(&root, plugin_id, &manifest, false)
+            .expect("plugin installation should succeed");
+
+        let manifest_path = root.join(format!(
+            "{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/{MANIFEST_FILE_NAME}"
+        ));
+        assert!(manifest_path.is_file());
+        fs::remove_file(&manifest_path).expect("manifest should be deleted");
+
+        let snapshot = reload_plugins_from_disk_at(&root).expect("reload snapshot should succeed");
+        let entry = snapshot
+            .installed_manifests
+            .iter()
+            .find(|entry| entry.plugin_id_hint == plugin_id)
+            .expect("registry plugin should remain in the snapshot");
+        assert!(entry.manifest.is_none());
+        assert!(entry
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("manifest.json 缺失"));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
     fn declarative_manifest_rejects_unsafe_fields_and_handlers() {
         let valid_manifest = json!({
             "manifestVersion": 1,
@@ -1726,6 +2316,13 @@ mod tests {
                     "id": "exportText",
                     "label": "TXT",
                     "handler": "builtin.exportText"
+                }],
+                "menus": [{
+                    "id": "exportTextMenu",
+                    "label": "Export TXT",
+                    "location": "plugins",
+                    "command": "builtin.exportText",
+                    "when": "hasMindmap"
                 }]
             }
         });
@@ -1742,6 +2339,13 @@ mod tests {
         unsafe_handler["contributions"]["exporters"][0]["handler"] =
             Value::String("custom.execute".to_string());
         assert!(validate_declarative_manifest("localmindmap.export.txt", &unsafe_handler).is_err());
+
+        let mut unsupported_version = test_declarative_plugin("localmindmap.test.version");
+        unsupported_version["manifestVersion"] = json!(2);
+        let version_error =
+            validate_declarative_manifest("localmindmap.test.version", &unsupported_version)
+                .expect_err("unsupported manifest version should fail");
+        assert!(version_error.contains("当前仅支持 1"));
     }
 
     #[test]

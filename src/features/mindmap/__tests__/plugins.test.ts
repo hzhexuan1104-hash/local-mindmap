@@ -9,12 +9,16 @@ import {
   uninstallDesktopPlugin,
 } from '../desktopPlugins';
 import { ensureDesktopConfigDir, getDesktopConfigDir } from '../desktopConfig';
+import samplePluginManifest from '../../../../docs/examples/sample-json-plugin/manifest.json';
 import {
   FORBIDDEN_PLUGIN_FIELDS,
+  createPluginOverwritePrompt,
   SUPPORTED_CAPABILITIES,
   SUPPORTED_PLUGIN_TYPES,
   getPluginNodeTypes,
+  getPluginMenuGroups,
   getPluginTemplates,
+  installPlugin,
   installPluginManifest,
   normalizePluginManifest,
   parsePluginManifestText,
@@ -33,6 +37,31 @@ const validManifest = {
   category: 'theme',
   capabilities: ['themePack'],
 };
+
+describe('bundled developer sample plugin', () => {
+  it('is a valid and importable v1.7 declarative manifest', () => {
+    const validation = validatePluginManifest(samplePluginManifest);
+    expect(validation.valid).toBe(true);
+    expect(validation.manifest).toMatchObject({
+      pluginId: 'localmindmap.dev.sample-json-plugin',
+      manifestVersion: 1,
+      manifestValid: true,
+    });
+    expect(
+      parsePluginManifestText(JSON.stringify(samplePluginManifest)),
+    ).toMatchObject({
+      pluginId: 'localmindmap.dev.sample-json-plugin',
+      contributions: {
+        menus: [
+          expect.objectContaining({
+            command: 'builtin.exportText',
+            valid: true,
+          }),
+        ],
+      },
+    });
+  });
+});
 
 describe('normalizePluginManifest', () => {
   it('accepts a valid plugin manifest', () => {
@@ -77,7 +106,9 @@ const validDeclarativeManifest = {
 
 describe('declarative plugin manifest validation', () => {
   it('reports a concrete JSON parsing error', () => {
-    expect(() => parsePluginManifestText('{')).toThrow('插件 JSON 解析失败。');
+    expect(() => parsePluginManifestText('{\n  "pluginId":')).toThrow(
+      /导入失败：JSON 格式错误。第 2 行第 \d+ 列附近存在语法问题。/,
+    );
   });
 
   it('publishes one canonical schema vocabulary', () => {
@@ -148,6 +179,121 @@ describe('declarative plugin manifest validation', () => {
     });
   });
 
+  it('normalizes valid menu contributions and filters them by enabled state and when', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        ...validDeclarativeManifest.contributions,
+        menus: [
+          {
+            id: 'export-menu',
+            label: '导出为 TXT',
+            location: 'plugins',
+            command: 'builtin.exportText',
+            when: 'hasMindmap',
+          },
+          {
+            id: 'selection-menu',
+            label: '选中节点操作',
+            location: 'plugins',
+            command: 'builtin.exportText',
+            when: 'hasSelectedNode',
+          },
+        ],
+      },
+    });
+    const manifest = result.manifest as PluginManifest;
+
+    expect(manifest.contributions?.menus).toMatchObject([
+      { id: 'export-menu', valid: true },
+      { id: 'selection-menu', valid: true },
+    ]);
+    expect(
+      getPluginMenuGroups([manifest], {
+        hasMindmap: true,
+        hasSelectedNode: false,
+      })[0]?.items.map((menu) => menu.id),
+    ).toEqual(['export-menu']);
+    expect(
+      getPluginMenuGroups(setPluginEnabled([manifest], manifest.pluginId, false), {
+        hasMindmap: true,
+        hasSelectedNode: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('keeps an unknown menu command visible in manager data but marks it invalid', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        menus: [
+          {
+            id: 'unknown-command',
+            label: '未知命令',
+            location: 'plugins',
+            command: 'builtin.notRegistered',
+          },
+          {
+            id: 'wrong-location',
+            label: '错误位置',
+            location: 'file',
+            command: 'builtin.exportText',
+          },
+        ],
+      },
+    });
+
+    expect(result.manifest?.contributions?.menus).toMatchObject([
+      {
+        id: 'unknown-command',
+        valid: false,
+        invalidReason: '插件命令不存在：builtin.notRegistered',
+      },
+      {
+        id: 'wrong-location',
+        valid: false,
+        invalidReason: '不支持的菜单位置：file',
+      },
+    ]);
+    expect(
+      getPluginMenuGroups([result.manifest as PluginManifest], {
+        hasMindmap: true,
+        hasSelectedNode: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('keeps an unknown builtin exporter handler as an invalid warning', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        exporters: [
+          {
+            id: 'unknown-exporter',
+            label: '未知导出',
+            handler: 'builtin.unknownExporter',
+          },
+        ],
+      },
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.manifest?.contributions?.exporters?.[0]).toMatchObject({
+      valid: false,
+      invalidReason: '插件导出 handler 不存在：builtin.unknownExporter',
+    });
+    expect(result.warnings).toContain(
+      '导出贡献 unknown-exporter 无效：插件导出 handler 不存在：builtin.unknownExporter',
+    );
+  });
+
+  it('keeps v1.6 manifests without menus compatible', () => {
+    const result = validatePluginManifest(validDeclarativeManifest);
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.contributions?.menus).toBeUndefined();
+  });
+
   it.each(['pluginId', 'name'])('rejects a manifest missing %s', (fieldName) => {
     const value = { ...validDeclarativeManifest };
     delete value[fieldName as keyof typeof value];
@@ -158,7 +304,7 @@ describe('declarative plugin manifest validation', () => {
       expect.objectContaining({
         code: 'missing-required-field',
         field: fieldName,
-        message: `缺少必填字段：${fieldName}`,
+        message: `manifest 缺少必填字段 ${fieldName}。`,
       }),
     );
   });
@@ -185,26 +331,121 @@ describe('declarative plugin manifest validation', () => {
     const result = validatePluginManifest(value);
 
     expect(result.manifest).toBeNull();
-    expect(result.errors[0]?.message).toContain('缺少必填字段：pluginType');
+    expect(result.errors[0]?.message).toContain(
+      'manifest 缺少必填字段 pluginType。',
+    );
     expect(result.errors[0]?.message).toContain(
       SUPPORTED_PLUGIN_TYPES.join(', '),
+    );
+  });
+
+  it('compatibly normalizes the legacy exporter pluginType with a warning', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      pluginType: 'exporter',
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.manifest?.pluginType).toBe('import-export');
+    expect(result.warnings).toContain(
+      'pluginType 使用旧字段 exporter，已兼容为 import-export。',
+    );
+  });
+
+  it('rejects a contribution collection with a severe structural error', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        menus: { id: 'not-an-array' },
+      },
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'invalid-contributions',
+        field: 'contributions.menus',
+        message: 'contributions.menus 必须是数组。',
+      }),
     );
   });
 
   it('reports an unsupported pluginType and the supported type list', () => {
     const result = validatePluginManifest({
       ...validDeclarativeManifest,
-      pluginType: 'exporter',
+      pluginType: 'remote-plugin',
     });
 
-    expect(result.manifest).toBeNull();
+    expect(result.valid).toBe(false);
     expect(result.errors[0]).toMatchObject({
       code: 'unsupported-plugin-type',
       field: 'pluginType',
-      value: 'exporter',
+      value: 'remote-plugin',
     });
     expect(result.errors[0]?.message).toContain(
       SUPPORTED_PLUGIN_TYPES.join(', '),
+    );
+  });
+
+  it('rejects unsupported manifestVersion with the current version', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      manifestVersion: 2,
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'invalid-manifest-version',
+        message: 'manifestVersion 不支持：2。当前仅支持 1。',
+      }),
+    );
+  });
+
+  it('rejects a newly imported manifest missing manifestVersion', () => {
+    const value: Partial<typeof validDeclarativeManifest> = {
+      ...validDeclarativeManifest,
+    };
+    delete value.manifestVersion;
+    const result = validatePluginManifest(value);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'missing-required-field',
+        field: 'manifestVersion',
+        message: 'manifest 缺少必填字段 manifestVersion。',
+      }),
+    );
+  });
+
+  it('returns valid, errors, warnings, and normalizedManifest', () => {
+    const result = validatePluginManifest(validDeclarativeManifest);
+
+    expect(result).toMatchObject({
+      valid: true,
+      errors: [],
+      normalizedManifest: {
+        pluginId: validDeclarativeManifest.pluginId,
+      },
+    });
+    expect(result.warnings).toContain(
+      '未声明 contributions.menus，已按老插件兼容。',
+    );
+  });
+
+  it('warns when capabilities and contributions do not match', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      capabilities: ['themes'],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toContain(
+      'contributions 提供了 export，但 capabilities 未声明。',
+    );
+    expect(result.warnings).toContain(
+      'capabilities 声明了 themes，但未提供对应 contributions。',
     );
   });
 
@@ -257,6 +498,84 @@ describe('declarative plugin manifest validation', () => {
       false,
     );
     expect(uninstallPlugin(installed, manifest.pluginId)).toEqual([]);
+  });
+
+  it('preserves enabled state while replacing manifest data during overwrite', () => {
+    const original = {
+      ...(validatePluginManifest(validDeclarativeManifest)
+        .manifest as PluginManifest),
+      enabled: false,
+      version: '1.0.0',
+      name: '旧名称',
+    };
+    const update = {
+      ...original,
+      enabled: true,
+      version: '1.0.1',
+      name: '新名称',
+      contributions: {
+        ...original.contributions,
+        menus: [
+          {
+            id: 'updated-menu',
+            label: '更新后的菜单',
+            location: 'plugins',
+            command: 'builtin.exportText',
+            when: 'always' as const,
+            valid: true,
+          },
+        ],
+      },
+    };
+
+    const overwritten = installPluginManifest([original], update);
+
+    expect(overwritten).toHaveLength(1);
+    expect(overwritten[0]).toMatchObject({
+      name: '新名称',
+      version: '1.0.1',
+      enabled: false,
+      source: 'external',
+    });
+    expect(
+      getPluginMenuGroups(
+        setPluginEnabled(overwritten, original.pluginId, true),
+        {
+        hasMindmap: true,
+        hasSelectedNode: false,
+        },
+      )[0]?.items[0]?.label,
+    ).toBe('更新后的菜单');
+  });
+
+  it('reports duplicate install conflicts in Chinese when overwrite is not confirmed', async () => {
+    const manifest = validatePluginManifest(validDeclarativeManifest)
+      .manifest as PluginManifest;
+
+    await expect(
+      installPlugin([manifest], manifest, false),
+    ).rejects.toThrow(`插件已存在：${manifest.pluginId}`);
+  });
+
+  it('builds a clear overwrite prompt with plugin name and versions', () => {
+    const current = {
+      ...(validatePluginManifest(validDeclarativeManifest)
+        .manifest as PluginManifest),
+      name: '覆盖安装测试插件',
+      version: '1.0.0',
+    };
+    const incoming = {
+      ...current,
+      name: '覆盖安装测试插件新版',
+      version: '1.0.1',
+    };
+
+    expect(createPluginOverwritePrompt(current, incoming)).toBe(
+      '插件已安装：覆盖安装测试插件\n' +
+        '当前版本：1.0.0\n' +
+        '导入版本：1.0.1\n' +
+        '是否覆盖安装？',
+    );
   });
 
   it('shows node type and template pack contributions only while enabled', () => {

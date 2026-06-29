@@ -3,6 +3,7 @@ import {
   LEGACY_STORAGE_KEYS,
   USER_DATA_COMMANDS,
   USER_DATA_PATHS,
+  createSamplePlugin,
   ensureUserDataDirs,
   getUserDataDir,
   installPluginToUserDir,
@@ -12,7 +13,13 @@ import {
   loadUserNodeTypes,
   loadUserTemplates,
   migrateLegacyLocalStorageToUserData,
+  openPluginDir,
+  openPluginDevDir,
+  openPluginManifestDir,
+  scanInstalledPluginManifests,
   readUserJson,
+  reloadPluginsFromDisk,
+  resolveUserDataPath,
   savePluginRegistry,
   saveRecentFiles,
   saveUserNodeTypes,
@@ -148,6 +155,23 @@ describe('userDataStorage web fallback', () => {
 });
 
 describe('userDataStorage desktop commands', () => {
+  it('resolves a copied installed manifest path to an absolute user-data path', () => {
+    expect(
+      resolveUserDataPath(
+        'C:\\Users\\test\\AppData\\Roaming\\com.localmindmap.desktop',
+        'plugins/installed/test.plugin/manifest.json',
+      ),
+    ).toBe(
+      'C:\\Users\\test\\AppData\\Roaming\\com.localmindmap.desktop/plugins/installed/test.plugin/manifest.json',
+    );
+    expect(
+      resolveUserDataPath(
+        'C:\\Users\\test\\AppData\\Roaming\\com.localmindmap.desktop',
+        'D:\\portable\\manifest.json',
+      ),
+    ).toBe('D:\\portable\\manifest.json');
+  });
+
   beforeEach(() => installWindow(true));
 
   afterEach(() => {
@@ -312,6 +336,104 @@ describe('userDataStorage desktop commands', () => {
     ]);
   });
 
+  it('opens the plugins user directory through the dedicated desktop command', async () => {
+    const calls: string[] = [];
+    setUserDataStorageInvokerForTests(async (command) => {
+      calls.push(command);
+      return undefined as never;
+    });
+
+    await expect(openPluginDir()).resolves.toBe(true);
+    expect(calls).toEqual([USER_DATA_COMMANDS.openPluginDir]);
+  });
+
+  it('opens the development directory and creates the bundled sample plugin', async () => {
+    const calls: string[] = [];
+    setUserDataStorageInvokerForTests(async (command) => {
+      calls.push(command);
+      if (command === USER_DATA_COMMANDS.createSamplePlugin) {
+        return {
+          created: true,
+          directoryPath: 'C:/data/plugins/dev/sample-json-plugin',
+          manifestPath:
+            'C:/data/plugins/dev/sample-json-plugin/manifest.json',
+          readmePath: 'C:/data/plugins/dev/sample-json-plugin/README.md',
+        } as never;
+      }
+      return undefined as never;
+    });
+
+    await expect(openPluginDevDir()).resolves.toBe(true);
+    await expect(createSamplePlugin()).resolves.toMatchObject({
+      created: true,
+      manifestPath: expect.stringContaining(
+        'plugins/dev/sample-json-plugin/manifest.json',
+      ),
+    });
+    expect(calls).toEqual([
+      USER_DATA_COMMANDS.openPluginDevDir,
+      USER_DATA_COMMANDS.createSamplePlugin,
+    ]);
+  });
+
+  it('scans installed manifests and opens a specific manifest directory', async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    setUserDataStorageInvokerForTests(async (command, args) => {
+      calls.push({ command, args });
+      if (command === USER_DATA_COMMANDS.scanInstalledPluginManifests) {
+        return [
+          {
+            pluginIdHint: 'test.plugin',
+            manifestPath: 'plugins/installed/test.plugin/manifest.json',
+            manifest: plugin,
+          },
+        ] as never;
+      }
+      return undefined as never;
+    });
+
+    await expect(scanInstalledPluginManifests()).resolves.toHaveLength(1);
+    await expect(openPluginManifestDir('test.plugin')).resolves.toBe(true);
+    expect(calls).toEqual([
+      {
+        command: USER_DATA_COMMANDS.scanInstalledPluginManifests,
+        args: { pluginIds: [] },
+      },
+      {
+        command: USER_DATA_COMMANDS.openPluginManifestDir,
+        args: { pluginId: 'test.plugin' },
+      },
+    ]);
+  });
+
+  it('reloads registry and installed manifests in one desktop disk snapshot', async () => {
+    setUserDataStorageInvokerForTests(async (command) => {
+      expect(command).toBe(USER_DATA_COMMANDS.reloadPluginsFromDisk);
+      return {
+        registry: [plugin],
+        installedManifests: [
+          {
+            pluginIdHint: plugin.pluginId,
+            manifestPath: `plugins/installed/${plugin.pluginId}/manifest.json`,
+            manifest: null,
+            error: 'manifest.json 缺失。',
+          },
+        ],
+      } as never;
+    });
+
+    await expect(reloadPluginsFromDisk()).resolves.toMatchObject({
+      registry: [plugin],
+      installedManifests: [
+        {
+          pluginIdHint: plugin.pluginId,
+          manifest: null,
+          error: 'manifest.json 缺失。',
+        },
+      ],
+    });
+  });
+
   it('exposes the concrete desktop write error', async () => {
     setUserDataStorageInvokerForTests(async () => {
       throw 'access denied';
@@ -401,6 +523,43 @@ describe('userDataStorage desktop commands', () => {
     await savePluginRegistry(afterUninstall);
     await expect(loadPluginRegistry()).resolves.toEqual([]);
     expect(files.has(installedPath)).toBe(false);
+  });
+
+  it('passes a preserved enabled state through overwrite installation', async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    setUserDataStorageInvokerForTests(async (command, args) => {
+      calls.push({ command, args });
+      return undefined as never;
+    });
+    const original: PluginManifest = {
+      ...plugin,
+      name: '旧插件',
+      version: '1.0.0',
+      enabled: false,
+      source: 'external',
+    };
+    const update: PluginManifest = {
+      ...original,
+      name: '新插件',
+      version: '1.0.1',
+      enabled: true,
+    };
+
+    const result = await installPlugin([original], update, true);
+
+    expect(result.manifest).toMatchObject({
+      name: '新插件',
+      version: '1.0.1',
+      enabled: false,
+    });
+    expect(calls).toContainEqual({
+      command: USER_DATA_COMMANDS.installPluginToUserDir,
+      args: {
+        pluginId: original.pluginId,
+        manifest: result.manifest,
+        overwrite: true,
+      },
+    });
   });
 
   it('migrates legacy localStorage after creating a backup and keeps old data', async () => {

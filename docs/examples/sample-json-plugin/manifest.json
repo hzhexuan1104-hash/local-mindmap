@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.dev.sample-json-plugin",
+  "name": "示例 JSON 插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "这是一个声明式 JSON 插件示例，用于演示菜单贡献和安全内置命令。",
+  "pluginType": "import-export",
+  "capabilities": ["export"],
+  "enabled": true,
+  "contributions": {
+    "menus": [
+      {
+        "id": "sampleExportText",
+        "label": "示例 TXT 导出",
+        "location": "plugins",
+        "command": "builtin.exportText",
+        "when": "hasMindmap"
+      }
+    ],
+    "exporters": [
+      {
+        "id": "sampleExporter",
+        "label": "示例 TXT 导出",
+        "handler": "builtin.exportText"
+      }
+    ]
+  }
+}
