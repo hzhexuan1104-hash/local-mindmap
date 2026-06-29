@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { PluginCategory, PluginManifest } from './plugins';
+import { resolveUserDataPath } from '../storage/userDataStorage';
 
 type PluginManagerPanelProps = {
   plugins: PluginManifest[];
@@ -14,6 +15,11 @@ type PluginManagerPanelProps = {
   onOpenUserDataDir: () => void;
   onOpenPluginDir: () => void;
   onCopyPluginId: (pluginId: string) => void;
+  onCopyPath: (relativePath: string, label: string) => void;
+  onOpenManifestDir: (pluginId: string) => void;
+  onReload: () => void;
+  onRepairRegistry: (pluginId: string) => void;
+  onCleanRecord: (pluginId: string) => void;
 };
 
 const CATEGORY_OPTIONS: Array<{ value: '' | PluginCategory; label: string }> = [
@@ -59,11 +65,129 @@ function contributionSummary(plugin: PluginManifest) {
   };
 }
 
-function joinUserPath(root: string, relativePath: string) {
-  if (!root || root === '浏览器本地存储') {
-    return relativePath;
+const SOURCE_LABELS: Record<
+  NonNullable<PluginManifest['source']>,
+  string
+> = {
+  'built-in': '内置',
+  external: '外部安装',
+  'orphan-manifest': '孤儿 manifest',
+  'registry-missing': 'registry 记录缺失',
+  'manifest-missing': '插件文件缺失',
+  'manifest-damaged': 'manifest 损坏',
+};
+
+function countTemplateNodes(node: {
+  children?: Array<{ children?: unknown[] }>;
+}): number {
+  return (
+    1 +
+    (node.children ?? []).reduce(
+      (sum, child) =>
+        sum +
+        countTemplateNodes(
+          child as { children?: Array<{ children?: unknown[] }> },
+        ),
+      0,
+    )
+  );
+}
+
+function ContributionDetails({ plugin }: { plugin: PluginManifest }) {
+  const contributions = plugin.contributions;
+  const nodeTypes = [
+    ...(contributions?.nodeTypes ?? []),
+    ...(contributions?.nodeTypePacks ?? []).flatMap((pack) => pack.nodeTypes),
+  ];
+  const templates = (contributions?.templatePacks ?? []).flatMap(
+    (pack) => pack.templates,
+  );
+  const hasContributions = Object.values(contributionSummary(plugin)).some(
+    (count) => count > 0,
+  );
+
+  if (!hasContributions) {
+    return <p className="empty-note">暂无贡献点</p>;
   }
-  return `${root.replace(/[\\/]$/, '')}/${relativePath}`;
+
+  return (
+    <div className="plugin-contribution-details">
+      {(contributions?.menus ?? []).map((menu) => (
+        <dl
+          className={menu.valid ? undefined : 'is-invalid'}
+          key={`menu-${menu.id}`}
+        >
+          <strong>menu · {menu.id}</strong>
+          <div><dt>label</dt><dd>{menu.label}</dd></div>
+          <div><dt>location</dt><dd>{menu.location}</dd></div>
+          <div><dt>command</dt><dd>{menu.command}</dd></div>
+          <div><dt>when</dt><dd>{menu.when}</dd></div>
+          <div><dt>valid</dt><dd>{String(menu.valid)}</dd></div>
+          {!menu.valid ? <div><dt>invalidReason</dt><dd>{menu.invalidReason}</dd></div> : null}
+        </dl>
+      ))}
+      {(contributions?.exporters ?? []).map((exporter) => (
+        <dl
+          className={exporter.valid ? undefined : 'is-invalid'}
+          key={`exporter-${exporter.id}`}
+        >
+          <strong>exporter · {exporter.id}</strong>
+          <div><dt>label</dt><dd>{exporter.label}</dd></div>
+          <div><dt>handler</dt><dd>{exporter.handler}</dd></div>
+          <div><dt>fileName</dt><dd>{exporter.fileName ?? '未声明'}</dd></div>
+          <div><dt>valid</dt><dd>{String(exporter.valid)}</dd></div>
+          {!exporter.valid ? <div><dt>invalidReason</dt><dd>{exporter.invalidReason}</dd></div> : null}
+        </dl>
+      ))}
+      {(contributions?.themes ?? []).map((theme) => (
+        <dl key={`theme-${theme.id}`}>
+          <strong>theme · {theme.id}</strong>
+          <div><dt>name</dt><dd>{theme.name}</dd></div>
+          <div><dt>nodeBackground</dt><dd>{theme.nodeBackground}</dd></div>
+          <div><dt>nodeBorder</dt><dd>{theme.nodeBorder}</dd></div>
+          <div><dt>nodeText</dt><dd>{theme.nodeText}</dd></div>
+          <div><dt>lineColor</dt><dd>{theme.lineColor}</dd></div>
+          <div><dt>canvasBackground</dt><dd>{theme.canvasBackground}</dd></div>
+        </dl>
+      ))}
+      {(contributions?.icons ?? []).map((icon, index) => (
+        <dl key={`icon-${icon.value}-${index}`}>
+          <strong>icon · {icon.label}</strong>
+          <div><dt>label</dt><dd>{icon.label}</dd></div>
+          <div><dt>value</dt><dd>{icon.value}</dd></div>
+        </dl>
+      ))}
+      {nodeTypes.map((nodeType) => (
+        <dl key={`node-type-${nodeType.id}`}>
+          <strong>nodeType · {nodeType.id}</strong>
+          <div><dt>name</dt><dd>{nodeType.name}</dd></div>
+          <div><dt>icon</dt><dd>{nodeType.icon}</dd></div>
+          <div><dt>shape</dt><dd>{nodeType.shape}</dd></div>
+          <div><dt>defaultText</dt><dd>{nodeType.defaultText}</dd></div>
+        </dl>
+      ))}
+      {templates.map((template) => (
+        <dl key={`template-${template.id}`}>
+          <strong>template · {template.id}</strong>
+          <div><dt>name</dt><dd>{template.name}</dd></div>
+          <div><dt>category</dt><dd>{template.category}</dd></div>
+          <div><dt>node count</dt><dd>{countTemplateNodes(template.rootNode)}</dd></div>
+        </dl>
+      ))}
+      {(contributions?.tools ?? []).map((tool) => (
+        <dl
+          className={tool.valid ? undefined : 'is-invalid'}
+          key={`tool-${tool.toolId}`}
+        >
+          <strong>tool · {tool.toolId}</strong>
+          <div><dt>label</dt><dd>{tool.label}</dd></div>
+          <div><dt>command / handler</dt><dd>{tool.command ?? tool.handler ?? '未声明'}</dd></div>
+          <div><dt>valid</dt><dd>{String(tool.valid)}</dd></div>
+          {!tool.valid ? <div><dt>invalidReason</dt><dd>{tool.invalidReason}</dd></div> : null}
+        </dl>
+      ))}
+    </div>
+  );
 }
 
 export function PluginManagerPanel({
@@ -79,6 +203,11 @@ export function PluginManagerPanel({
   onOpenUserDataDir,
   onOpenPluginDir,
   onCopyPluginId,
+  onCopyPath,
+  onOpenManifestDir,
+  onReload,
+  onRepairRegistry,
+  onCleanRecord,
 }: PluginManagerPanelProps) {
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<'' | PluginCategory>('');
@@ -164,9 +293,14 @@ export function PluginManagerPanel({
                   仅接受 .json / .lmplugin；不会执行 JS、命令、Shell 或远程代码。
                 </p>
               </div>
-              <button type="button" className="secondary-action" onClick={onInstall}>
-                导入本地插件
-              </button>
+              <div className="plugin-manager-actions">
+                <button type="button" className="secondary-action" onClick={onReload}>
+                  重新加载插件
+                </button>
+                <button type="button" className="secondary-action" onClick={onInstall}>
+                  导入本地插件
+                </button>
+              </div>
             </div>
 
             {lastInstallError ? (
@@ -216,6 +350,10 @@ export function PluginManagerPanel({
                       <p>{plugin.description || '暂无描述'}</p>
                       <dl className="plugin-meta">
                         <div>
+                          <dt>pluginId</dt>
+                          <dd>{plugin.pluginId}</dd>
+                        </div>
+                        <div>
                           <dt>版本</dt>
                           <dd>{plugin.version}</dd>
                         </div>
@@ -226,6 +364,31 @@ export function PluginManagerPanel({
                         <div>
                           <dt>类型</dt>
                           <dd>{plugin.pluginType}</dd>
+                        </div>
+                        <div>
+                          <dt>manifestVersion</dt>
+                          <dd>{plugin.manifestVersion}</dd>
+                        </div>
+                        <div>
+                          <dt>builtIn</dt>
+                          <dd>{String(Boolean(plugin.builtIn))}</dd>
+                        </div>
+                        <div>
+                          <dt>enabled</dt>
+                          <dd>{String(plugin.enabled)}</dd>
+                        </div>
+                        <div>
+                          <dt>manifestValid</dt>
+                          <dd>{String(plugin.manifestValid !== false)}</dd>
+                        </div>
+                        <div>
+                          <dt>来源</dt>
+                          <dd>
+                            {SOURCE_LABELS[
+                              plugin.source ??
+                                (plugin.builtIn ? 'built-in' : 'external')
+                            ]}
+                          </dd>
                         </div>
                         <div>
                           <dt>安装时间</dt>
@@ -246,6 +409,25 @@ export function PluginManagerPanel({
                           <p>{plugin.manifestError}</p>
                         </div>
                       ) : null}
+                      {plugin.validationErrors?.length ? (
+                        <div className="plugin-validation-report is-error">
+                          <strong>Schema errors</strong>
+                          {plugin.validationErrors.map((error, index) => (
+                            <p key={`${error.code}-${index}`}>
+                              {error.field ? `${error.field}：` : ''}
+                              {error.message}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
+                      {plugin.validationWarnings?.length ? (
+                        <div className="plugin-validation-report is-warning">
+                          <strong>Schema warnings</strong>
+                          {plugin.validationWarnings.map((warning, index) => (
+                            <p key={`${warning}-${index}`}>{warning}</p>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="plugin-contribution-summary">
                         {Object.entries(contributionSummary(plugin)).map(
                           ([name, count]) => (
@@ -260,20 +442,33 @@ export function PluginManagerPanel({
                           <dt>manifest 路径</dt>
                           <dd>
                             {plugin.builtIn
-                              ? '内置插件（无独立 manifest 文件）'
-                              : joinUserPath(
+                              ? '内置插件，无独立 manifest 文件'
+                              : resolveUserDataPath(
                                   userDataDir,
-                                  `plugins/installed/${plugin.pluginId}/manifest.json`,
+                                  plugin.manifestPath ??
+                                    `plugins/installed/${plugin.pluginId}/manifest.json`,
                                 )}
                           </dd>
                         </div>
                         <div>
                           <dt>registry 路径</dt>
                           <dd>
-                            {joinUserPath(
+                            {resolveUserDataPath(
                               userDataDir,
                               'plugins/plugin-registry.json',
                             )}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>installed 目录</dt>
+                          <dd>
+                            {plugin.builtIn
+                              ? '内置插件'
+                              : resolveUserDataPath(
+                                  userDataDir,
+                                  plugin.installedDirPath ??
+                                    `plugins/installed/${plugin.pluginId}`,
+                                )}
                           </dd>
                         </div>
                       </dl>
@@ -284,46 +479,7 @@ export function PluginManagerPanel({
                           ))}
                         </div>
                       ) : null}
-                      {plugin.contributions?.exporters?.length ? (
-                        <div className="plugin-capability-list">
-                          {plugin.contributions.exporters.map((exporter) => (
-                            <span key={exporter.id}>
-                              {exporter.label} · {exporter.handler}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {plugin.contributions?.menus?.length ? (
-                        <div className="plugin-menu-details">
-                          <strong>菜单贡献详情</strong>
-                          {plugin.contributions.menus.map((menu) => (
-                            <dl key={menu.id}>
-                              <div>
-                                <dt>label</dt>
-                                <dd>{menu.label}</dd>
-                              </div>
-                              <div>
-                                <dt>command</dt>
-                                <dd>{menu.command || '未填写'}</dd>
-                              </div>
-                              <div>
-                                <dt>location</dt>
-                                <dd>{menu.location || '未填写'}</dd>
-                              </div>
-                              <div>
-                                <dt>状态</dt>
-                                <dd>{menu.valid ? '有效' : '无效'}</dd>
-                              </div>
-                              {!menu.valid ? (
-                                <div>
-                                  <dt>无效原因</dt>
-                                  <dd>{menu.invalidReason}</dd>
-                                </div>
-                              ) : null}
-                            </dl>
-                          ))}
-                        </div>
-                      ) : null}
+                      <ContributionDetails plugin={plugin} />
                     </div>
                     <div className="plugin-item-actions">
                       <button
@@ -333,6 +489,48 @@ export function PluginManagerPanel({
                       >
                         复制 pluginId
                       </button>
+                      {!plugin.builtIn ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() =>
+                            onCopyPath(
+                              plugin.manifestPath ??
+                                `plugins/installed/${plugin.pluginId}/manifest.json`,
+                              'manifest 路径',
+                            )
+                          }
+                        >
+                          复制 manifest 路径
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        onClick={() =>
+                          onCopyPath(
+                            'plugins/plugin-registry.json',
+                            'registry 路径',
+                          )
+                        }
+                      >
+                        复制 registry 路径
+                      </button>
+                      {!plugin.builtIn ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() =>
+                            onCopyPath(
+                              plugin.installedDirPath ??
+                                `plugins/installed/${plugin.pluginId}`,
+                              'installed 目录路径',
+                            )
+                          }
+                        >
+                          复制 installed 目录
+                        </button>
+                      ) : null}
                       {isDesktopApp ? (
                         <button
                           type="button"
@@ -342,13 +540,53 @@ export function PluginManagerPanel({
                           打开插件目录
                         </button>
                       ) : null}
+                      {isDesktopApp && !plugin.builtIn ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() => onOpenManifestDir(plugin.pluginId)}
+                        >
+                          打开 manifest 所在目录
+                        </button>
+                      ) : null}
+                      {plugin.source === 'registry-missing' ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() => onRepairRegistry(plugin.pluginId)}
+                        >
+                          修复 registry
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="secondary-action"
+                        disabled={
+                          plugin.manifestValid === false ||
+                          plugin.source === 'registry-missing'
+                        }
+                        title={
+                          plugin.manifestValid === false
+                            ? '异常插件不能启用或禁用，请先清理或重新安装'
+                            : plugin.source === 'registry-missing'
+                              ? '请先修复 registry 记录'
+                              : undefined
+                        }
                         onClick={() => onToggle(plugin.pluginId, !plugin.enabled)}
                       >
                         {plugin.enabled ? '禁用' : '启用'}
                       </button>
+                      {plugin.manifestValid === false ||
+                      plugin.source === 'registry-missing' ||
+                      plugin.source === 'orphan-manifest' ? (
+                        <button
+                          type="button"
+                          className="secondary-action danger-action"
+                          onClick={() => onCleanRecord(plugin.pluginId)}
+                        >
+                          清理异常记录
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="secondary-action danger-action"

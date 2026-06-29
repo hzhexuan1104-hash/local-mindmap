@@ -103,6 +103,7 @@ import {
   getPluginNodeTypes,
   getPluginTemplates,
   getPluginThemes,
+  createPluginOverwritePrompt,
   installPlugin,
   isTxtExportPluginEnabled,
   loadPluginRegistry,
@@ -181,6 +182,8 @@ import {
   migrateLegacyLocalStorageToUserData,
   openUserDataDir,
   openPluginDir,
+  openPluginManifestDir,
+  resolveUserDataPath,
   uninstallPluginFromUserDir,
 } from '../features/storage/userDataStorage';
 import type {
@@ -566,6 +569,7 @@ export function App() {
   const lastPanPointRef = useRef({ x: 0, y: 0 });
   const canvasPanStateRef = useRef<CanvasPanState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
+  const pluginReloadRequestRef = useRef(0);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -740,7 +744,7 @@ export function App() {
         await ensureUserDataDirs();
         const [
           templatesResult,
-          pluginsResult,
+          initialPluginsResult,
           nodeTypesResult,
           userDataDirResult,
           recentFilesResult,
@@ -752,23 +756,32 @@ export function App() {
             loadAllUserNodeTypes(),
             getUserDataDir(),
             loadRecentFileEntries(),
-          ]);
+        ]);
+        let pluginsResult = initialPluginsResult;
         let pluginStorageSyncFailed = false;
 
         if (
           isDesktopApp &&
           migration.migrated &&
-          pluginsResult.status === 'fulfilled'
+          initialPluginsResult.status === 'fulfilled'
         ) {
           try {
-            await Promise.all(
-              pluginsResult.value
-                .filter((plugin) => !plugin.builtIn)
-                .map((plugin) => installPluginToUserDir(plugin, true)),
-            );
-            await savePluginRegistry(pluginsResult.value);
+            for (const plugin of initialPluginsResult.value.filter(
+              (item) => !item.builtIn,
+            )) {
+              await installPluginToUserDir(plugin, true);
+            }
+            await savePluginRegistry(initialPluginsResult.value);
           } catch {
             pluginStorageSyncFailed = true;
+          }
+          try {
+            pluginsResult = {
+              status: 'fulfilled',
+              value: await loadPluginRegistry(),
+            };
+          } catch (error) {
+            pluginsResult = { status: 'rejected', reason: error };
           }
         }
 
@@ -1369,12 +1382,21 @@ export function App() {
         return;
       }
 
-      const exists = plugins.some(
+      const existingPlugin = plugins.find(
         (plugin) => plugin.pluginId === manifest.pluginId,
       );
+      if (existingPlugin?.builtIn) {
+        throw new Error(`不能覆盖内置插件：${manifest.pluginId}`);
+      }
+      const exists = Boolean(existingPlugin);
 
-      if (exists && !window.confirm('插件已安装，是否覆盖安装？')) {
-        const duplicateMessage = `插件已安装：${manifest.pluginId}`;
+      if (
+        existingPlugin &&
+        !window.confirm(createPluginOverwritePrompt(existingPlugin, manifest))
+      ) {
+        const duplicateMessage =
+          `插件已安装：${existingPlugin.name}（${existingPlugin.pluginId}）。` +
+          '已取消覆盖安装。';
         setLastPluginInstallError(duplicateMessage);
         showMessage(duplicateMessage);
         return;
@@ -1387,12 +1409,15 @@ export function App() {
       setPlugins(nextPlugins);
       setLastPluginInstallError('');
       const installPaths =
-        `已安装插件：${installedManifest.name}。` +
+        `已${exists ? '覆盖安装' : '安装'}插件：${installedManifest.name}。` +
+        `pluginId：${installedManifest.pluginId}。` +
+        `版本：${installedManifest.version}。` +
         `已保存到用户目录：plugins/installed/${installedManifest.pluginId}/manifest.json。` +
         '已更新插件注册表：plugins/plugin-registry.json。';
+      const warningCount = installedManifest.validationWarnings?.length ?? 0;
       showMessage(
-        installedManifest.validationWarnings?.length
-          ? `${installPaths}${installedManifest.validationWarnings.join(' ')}`
+        warningCount > 0
+          ? `${installPaths}插件已安装，但存在 ${warningCount} 个警告，请在插件详情中查看。`
           : installPaths,
       );
     } catch (error) {
@@ -1464,6 +1489,20 @@ export function App() {
     }
   };
 
+  const handleCopyPluginPath = async (
+    relativePath: string,
+    label: string,
+  ) => {
+    try {
+      await navigator.clipboard.writeText(
+        resolveUserDataPath(userDataDir, relativePath),
+      );
+      showMessage(`${label}已复制`);
+    } catch {
+      showMessage(`复制${label}失败`);
+    }
+  };
+
   const handleOpenPluginDir = async () => {
     if (!isDesktopApp) {
       showMessage('Web 端不支持打开插件目录');
@@ -1480,14 +1519,83 @@ export function App() {
   };
 
   const handleReloadPlugins = async () => {
+    const requestId = pluginReloadRequestRef.current + 1;
+    pluginReloadRequestRef.current = requestId;
     try {
       const reloadedPlugins = await loadPluginRegistry();
+      if (requestId !== pluginReloadRequestRef.current) {
+        return;
+      }
       setPlugins(reloadedPlugins);
       setLastPluginInstallError('');
       showMessage('插件已重新加载。');
     } catch (error) {
+      if (requestId !== pluginReloadRequestRef.current) {
+        return;
+      }
       showMessage(
         `插件重新加载失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleOpenPluginManifestDir = async (pluginId: string) => {
+    if (!isDesktopApp) {
+      showMessage('Web 端不支持打开 manifest 所在目录');
+      return;
+    }
+    try {
+      await openPluginManifestDir(pluginId);
+      showMessage('已打开 manifest 所在目录');
+    } catch (error) {
+      showMessage(
+        `打开 manifest 所在目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleRepairPluginRegistry = async (pluginId: string) => {
+    const target = plugins.find((plugin) => plugin.pluginId === pluginId);
+    if (!target || target.source !== 'registry-missing') {
+      showMessage('该插件不需要修复 registry');
+      return;
+    }
+    try {
+      const repaired = plugins.map((plugin) =>
+        plugin.pluginId === pluginId
+          ? {
+              ...plugin,
+              source: 'external' as const,
+              enabled: false,
+              validationWarnings: plugin.validationWarnings?.filter(
+                (warning) => !warning.includes('registry'),
+              ),
+            }
+          : plugin,
+      );
+      await savePluginRegistry(repaired);
+      setPlugins(await loadPluginRegistry());
+      showMessage('插件 registry 记录已修复，插件保持禁用');
+    } catch (error) {
+      showMessage(
+        `修复 registry 失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleCleanPluginRecord = async (pluginId: string) => {
+    if (!window.confirm(`确定清理异常插件记录 ${pluginId} 吗？`)) {
+      return;
+    }
+    try {
+      await uninstallPluginFromUserDir(pluginId);
+      const nextPlugins = uninstallPlugin(plugins, pluginId);
+      await savePluginRegistry(nextPlugins);
+      setPlugins(await loadPluginRegistry());
+      showMessage('异常插件记录已清理');
+    } catch (error) {
+      showMessage(
+        `清理异常插件记录失败：${getErrorMessage(error, '未知错误')}`,
       );
     }
   };
@@ -3516,6 +3624,19 @@ export function App() {
           onOpenUserDataDir={() => void handleOpenUserDataDir()}
           onOpenPluginDir={() => void handleOpenPluginDir()}
           onCopyPluginId={(pluginId) => void handleCopyPluginId(pluginId)}
+          onCopyPath={(relativePath, label) =>
+            void handleCopyPluginPath(relativePath, label)
+          }
+          onOpenManifestDir={(pluginId) =>
+            void handleOpenPluginManifestDir(pluginId)
+          }
+          onReload={() => void handleReloadPlugins()}
+          onRepairRegistry={(pluginId) =>
+            void handleRepairPluginRegistry(pluginId)
+          }
+          onCleanRecord={(pluginId) =>
+            void handleCleanPluginRecord(pluginId)
+          }
         />
       ) : null}
 

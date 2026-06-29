@@ -17,12 +17,16 @@ const pluginWithMenus: PluginManifest = {
   capabilities: ['export'],
   enabled: false,
   installedAt: '2026-06-28T00:00:00.000Z',
+  source: 'external',
+  manifestValid: true,
+  validationWarnings: ['菜单贡献 bad-menu 无效：插件命令不存在'],
   contributions: {
     exporters: [
       {
         id: 'export',
         label: '导出',
         handler: 'builtin.exportText',
+        valid: true,
       },
     ],
     menus: [
@@ -55,6 +59,11 @@ describe('PluginManagerPanel installation errors', () => {
         onOpenUserDataDir={noop}
         onOpenPluginDir={noop}
         onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
       />,
     );
 
@@ -78,6 +87,11 @@ describe('PluginManagerPanel installation errors', () => {
         onOpenUserDataDir={noop}
         onOpenPluginDir={noop}
         onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
       />,
     );
 
@@ -86,9 +100,139 @@ describe('PluginManagerPanel installation errors', () => {
     expect(html).toContain('menus: 1');
     expect(html).toContain('exporters: 1');
     expect(html).toContain('插件命令不存在：builtin.unknown');
+    expect(html).toContain('Schema warnings');
+    expect(html).toContain('菜单贡献 bad-menu 无效');
+    expect(html).toContain('manifestVersion');
+    expect(html).toContain('外部安装');
     expect(html).toContain(
-      'plugins/installed/test.menu.plugin/manifest.json',
+      'C:/Users/test/AppData/Roaming/com.localmindmap.desktop/plugins/installed/test.menu.plugin/manifest.json',
     );
-    expect(html).toContain('plugins/plugin-registry.json');
+    expect(html).toContain(
+      'C:/Users/test/AppData/Roaming/com.localmindmap.desktop/plugins/plugin-registry.json',
+    );
+  });
+
+  it('shows the explicit built-in manifest path explanation', () => {
+    const html = renderToStaticMarkup(
+      <PluginManagerPanel
+        plugins={[
+          {
+            ...pluginWithMenus,
+            pluginId: 'builtin-test',
+            name: '内置测试插件',
+            builtIn: true,
+            source: 'built-in',
+          },
+        ]}
+        lastInstallError=""
+        userDataDir="C:/Users/test/AppData/Roaming/com.localmindmap.desktop"
+        isDesktopApp
+        onClose={noop}
+        onInstall={noop}
+        onToggle={noop}
+        onUninstall={noop}
+        onCopyUserDataDir={noop}
+        onOpenUserDataDir={noop}
+        onOpenPluginDir={noop}
+        onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
+      />,
+    );
+
+    expect(html).toContain('内置插件，无独立 manifest 文件');
+    expect(html).toContain('disabled=""');
+  });
+
+  it('shows an explicit empty contribution state', () => {
+    const html = renderToStaticMarkup(
+      <PluginManagerPanel
+        plugins={[
+          {
+            ...pluginWithMenus,
+            pluginId: 'empty-plugin',
+            name: '无贡献插件',
+            contributions: undefined,
+          },
+        ]}
+        lastInstallError=""
+        userDataDir="浏览器本地存储"
+        isDesktopApp={false}
+        onClose={noop}
+        onInstall={noop}
+        onToggle={noop}
+        onUninstall={noop}
+        onCopyUserDataDir={noop}
+        onOpenUserDataDir={noop}
+        onOpenPluginDir={noop}
+        onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
+      />,
+    );
+
+    expect(html).toContain('暂无贡献点');
+  });
+
+  it('shows a missing installed manifest as invalid with every contribution count at zero', () => {
+    const html = renderToStaticMarkup(
+      <PluginManagerPanel
+        plugins={[
+          {
+            ...pluginWithMenus,
+            source: 'manifest-missing',
+            manifestValid: false,
+            manifestError: 'manifest.json 缺失。',
+            validationErrors: [
+              {
+                code: 'invalid-json-object',
+                message: 'manifest.json 缺失。',
+              },
+            ],
+            contributions: undefined,
+          },
+        ]}
+        lastInstallError=""
+        userDataDir="C:/Users/test/AppData/Roaming/com.localmindmap.desktop"
+        isDesktopApp
+        onClose={noop}
+        onInstall={noop}
+        onToggle={noop}
+        onUninstall={noop}
+        onCopyUserDataDir={noop}
+        onOpenUserDataDir={noop}
+        onOpenPluginDir={noop}
+        onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
+      />,
+    );
+
+    expect(html).toContain('<dd>false</dd>');
+    expect(html).toContain('插件文件缺失');
+    expect(html).toContain('Schema errors');
+    expect(html).toContain('manifest.json 缺失');
+    for (const contribution of [
+      'themes',
+      'icons',
+      'exporters',
+      'nodeTypes',
+      'templates',
+      'menus',
+      'tools',
+    ]) {
+      expect(html).toContain(`${contribution}: 0`);
+    }
+    expect(html).toContain('清理异常记录');
+    expect(html).toContain('卸载');
   });
 });

@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.test.menu.update",
+  "name": "覆盖安装测试插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Test",
+  "description": "覆盖安装测试 v1。",
+  "pluginType": "import-export",
+  "capabilities": ["export"],
+  "enabled": true,
+  "contributions": {
+    "menus": [
+      {
+        "id": "updateMenuExport",
+        "label": "覆盖安装测试导出",
+        "location": "plugins",
+        "command": "builtin.exportText",
+        "when": "hasMindmap"
+      }
+    ]
+  }
+}

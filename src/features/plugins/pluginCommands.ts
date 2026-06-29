@@ -32,11 +32,14 @@ export async function executePluginCommand(options: {
     throw new Error(`插件命令不存在：${commandId}`);
   }
 
-  if (
-    pluginId &&
-    !plugins.some((plugin) => plugin.pluginId === pluginId && plugin.enabled)
-  ) {
-    throw new Error(`插件已禁用：${pluginId}`);
+  if (pluginId) {
+    const plugin = plugins.find((item) => item.pluginId === pluginId);
+    if (!plugin?.enabled) {
+      throw new Error(`插件已禁用：${pluginId}`);
+    }
+    if (plugin.manifestValid === false) {
+      throw new Error(`插件 manifest 无效：${pluginId}`);
+    }
   }
 
   const handler = handlers[commandId];

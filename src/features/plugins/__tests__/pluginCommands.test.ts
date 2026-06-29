@@ -70,4 +70,18 @@ describe('plugin command registry', () => {
     ).rejects.toThrow(`插件已禁用：${plugin.pluginId}`);
     expect(exportText).not.toHaveBeenCalled();
   });
+
+  it('does not execute menu commands when the installed manifest is missing', async () => {
+    const exportText = vi.fn();
+
+    await expect(
+      executePluginCommand({
+        commandId: 'builtin.exportText',
+        pluginId: plugin.pluginId,
+        plugins: [{ ...plugin, manifestValid: false, contributions: undefined }],
+        handlers: { 'builtin.exportText': exportText },
+      }),
+    ).rejects.toThrow(`插件 manifest 无效：${plugin.pluginId}`);
+    expect(exportText).not.toHaveBeenCalled();
+  });
 });

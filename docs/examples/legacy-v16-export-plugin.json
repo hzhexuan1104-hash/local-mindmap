@@ -1,0 +1,20 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.test.legacy.v16.export",
+  "name": "v1.6 老插件兼容测试",
+  "version": "1.0.0",
+  "author": "Local Mindmap Test",
+  "description": "用于验证没有 contributions.menus 的 v1.6 老插件仍能正常导入和管理。",
+  "pluginType": "import-export",
+  "capabilities": ["export"],
+  "enabled": true,
+  "contributions": {
+    "exporters": [
+      {
+        "id": "legacyV16ExportText",
+        "label": "v1.6 老插件 TXT 导出",
+        "handler": "builtin.exportText"
+      }
+    ]
+  }
+}
