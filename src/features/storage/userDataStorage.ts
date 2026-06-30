@@ -7,6 +7,7 @@ export const USER_DATA_COMMANDS = {
   ensureUserDataDirs: 'ensure_user_data_dirs',
   readUserJson: 'read_user_json',
   writeUserJson: 'write_user_json',
+  readUserText: 'read_user_text',
   listUserFiles: 'list_user_files',
   installPluginToUserDir: 'install_plugin_to_user_dir',
   uninstallPluginFromUserDir: 'uninstall_plugin_from_user_dir',
@@ -14,6 +15,8 @@ export const USER_DATA_COMMANDS = {
   openPluginDir: 'open_plugin_dir',
   openPluginDevDir: 'open_plugin_dev_dir',
   createSamplePlugin: 'create_sample_plugin',
+  createSampleScriptPlugin: 'create_sample_script_plugin',
+  openSampleScriptPluginDir: 'open_sample_script_plugin_dir',
   openPluginManifestDir: 'open_plugin_manifest_dir',
   scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
   reloadPluginsFromDisk: 'reload_plugins_from_disk',
@@ -51,6 +54,13 @@ export type SamplePluginCreationResult = {
   directoryPath: string;
   manifestPath: string;
   readmePath: string;
+  mainPath?: string;
+};
+
+export type PluginInstallAsset = {
+  relativePath: string;
+  sourcePath?: string | null;
+  text?: string;
 };
 
 const LEGACY_MIGRATION_FLAG_PATH = 'config/migration-v1.6.json';
@@ -243,6 +253,30 @@ export async function writeUserJson<T>(
   writeWebJson(relativePath, value, webStorageKey);
 }
 
+export async function readUserText(relativePath: string): Promise<string> {
+  if (isDesktopRuntime()) {
+    return invokeUserDataCommand<string>(USER_DATA_COMMANDS.readUserText, {
+      relativePath,
+    });
+  }
+
+  const storage = getStorage();
+  const value = storage?.getItem(webStorageKeyForPath(relativePath));
+  if (value === null || value === undefined) {
+    throw new Error(`用户目录文件不存在：${relativePath}`);
+  }
+  return value;
+}
+
+function writeWebText(relativePath: string, value: string) {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+  storage.setItem(webStorageKeyForPath(relativePath), value);
+  rememberWebPath(relativePath);
+}
+
 export function isDirectUserJsonFile(
   relativePath: string,
   relativeDir: string,
@@ -385,6 +419,8 @@ export async function saveRecentFiles(recentFiles: string[]) {
 export async function installPluginToUserDir(
   manifest: PluginManifest,
   overwrite = false,
+  assets: PluginInstallAsset[] = [],
+  sourceManifestPath?: string | null,
 ) {
   try {
     if (isDesktopRuntime()) {
@@ -394,6 +430,8 @@ export async function installPluginToUserDir(
           pluginId: manifest.pluginId,
           manifest,
           overwrite,
+          assets,
+          sourceManifestPath,
         },
       );
       return;
@@ -403,6 +441,15 @@ export async function installPluginToUserDir(
       `${USER_DATA_PATHS.installedPlugins}/${manifest.pluginId}/manifest.json`,
       manifest,
     );
+    for (const asset of assets) {
+      if (typeof asset.text !== 'string') {
+        throw new Error(`脚本入口文件不存在：${asset.relativePath}。`);
+      }
+      writeWebText(
+        `${USER_DATA_PATHS.installedPlugins}/${manifest.pluginId}/${asset.relativePath}`,
+        asset.text,
+      );
+    }
   } catch (error) {
     const detail =
       typeof error === 'string'
@@ -465,6 +512,25 @@ export async function createSamplePlugin() {
   return invokeUserDataCommand<SamplePluginCreationResult>(
     USER_DATA_COMMANDS.createSamplePlugin,
   );
+}
+
+export async function createSampleScriptPlugin() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  return invokeUserDataCommand<SamplePluginCreationResult>(
+    USER_DATA_COMMANDS.createSampleScriptPlugin,
+  );
+}
+
+export async function openSampleScriptPluginDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openSampleScriptPluginDir);
+  return true;
 }
 
 export async function openPluginManifestDir(pluginId: string) {

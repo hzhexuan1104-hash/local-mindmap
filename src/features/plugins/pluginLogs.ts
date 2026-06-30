@@ -12,7 +12,14 @@ export type PluginLogEvent =
   | 'uninstalled'
   | 'manifest-missing'
   | 'manifest-damaged'
-  | 'command-invalid';
+  | 'command-invalid'
+  | 'script-plugin-imported'
+  | 'script-runner-disabled'
+  | 'script-execution-started'
+  | 'script-execution-succeeded'
+  | 'script-execution-failed'
+  | 'script-action-validation-failed'
+  | 'script-action-applied';
 
 export type PluginLogEntry = {
   id: string;

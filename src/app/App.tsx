@@ -107,7 +107,7 @@ import {
   installPlugin,
   isTxtExportPluginEnabled,
   loadPluginRegistry,
-  readLocalPluginManifest,
+  readLocalPluginPackage,
   savePluginRegistry,
   setPluginEnabled,
   uninstallPlugin,
@@ -127,6 +127,13 @@ import {
   type PluginLogEvent,
   type PluginLogLevel,
 } from '../features/plugins/pluginLogs';
+import {
+  applyScriptPluginActions,
+  createScriptPluginContext,
+  validateScriptPluginActions,
+  type ScriptShowMessageAction,
+} from '../features/plugins/pluginScriptActions';
+import { runScriptPlugin } from '../features/plugins/pluginScriptRunner';
 import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
   openFileLocation,
@@ -185,15 +192,18 @@ import {
 } from '../features/mindmap/typedNodeCreation';
 import {
   createSamplePlugin,
+  createSampleScriptPlugin,
   ensureUserDataDirs,
   getUserDataDir,
   installPluginToUserDir,
   isDesktopRuntime,
   migrateLegacyLocalStorageToUserData,
+  openSampleScriptPluginDir,
   openUserDataDir,
   openPluginDir,
   openPluginDevDir,
   openPluginManifestDir,
+  readUserText,
   resolveUserDataPath,
   uninstallPluginFromUserDir,
 } from '../features/storage/userDataStorage';
@@ -559,6 +569,19 @@ export function App() {
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [lastPluginInstallError, setLastPluginInstallError] = useState('');
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
+  const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
+  const [scriptRunResults, setScriptRunResults] = useState<
+    Record<
+      string,
+      {
+        status: 'success' | 'failed' | 'disabled';
+        message: string;
+        actionCount?: number;
+        durationMs?: number;
+        validationError?: string;
+      }
+    >
+  >({});
   const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
   const [isDesktopApp] = useState(isDesktopRuntime);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
@@ -1388,10 +1411,18 @@ export function App() {
 
   const handleInstallPlugin = async () => {
     try {
-      const manifest = await readLocalPluginManifest();
+      const pluginPackage = await readLocalPluginPackage();
 
-      if (!manifest) {
+      if (!pluginPackage) {
         return;
+      }
+      const { manifest } = pluginPackage;
+      if (manifest.pluginType === 'script') {
+        if (!manifest.entry || !pluginPackage.scriptEntry?.sourcePath) {
+          throw new Error(
+            `导入失败：脚本入口文件不存在：${manifest.entry ?? 'main.js'}。`,
+          );
+        }
       }
 
       const existingPlugin = plugins.find(
@@ -1417,7 +1448,20 @@ export function App() {
       const {
         plugins: nextPlugins,
         manifest: installedManifest,
-      } = await installPlugin(plugins, manifest, exists);
+      } = await installPlugin(
+        plugins,
+        manifest,
+        exists,
+        pluginPackage.scriptEntry
+          ? [
+              {
+                relativePath: pluginPackage.scriptEntry.relativePath,
+                sourcePath: pluginPackage.scriptEntry.sourcePath,
+              },
+            ]
+          : [],
+        pluginPackage.manifestSourcePath,
+      );
       setPlugins(nextPlugins);
       setLastPluginInstallError('');
       const installPaths =
@@ -1429,7 +1473,9 @@ export function App() {
       const warningCount = installedManifest.validationWarnings?.length ?? 0;
       recordPluginLog(
         'info',
-        'import-success',
+        installedManifest.pluginType === 'script'
+          ? 'script-plugin-imported'
+          : 'import-success',
         `${exists ? '覆盖安装' : '导入'}成功：${installedManifest.name}`,
         installedManifest.pluginId,
       );
@@ -1597,6 +1643,44 @@ export function App() {
     } catch (error) {
       showMessage(
         `创建示例插件失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleCreateSampleScriptPlugin = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端创建本地脚本插件目录。');
+      return;
+    }
+    try {
+      const result = await createSampleScriptPlugin();
+      if (!result) {
+        showMessage('不支持在 Web 端创建本地脚本插件目录。');
+        return;
+      }
+      showMessage(
+        result.created
+          ? `脚本插件示例已创建：${result.directoryPath}`
+          : '脚本插件示例已存在，未覆盖用户文件。',
+      );
+    } catch (error) {
+      showMessage(
+        `创建脚本插件示例失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleOpenSampleScriptPluginDir = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端打开本地脚本插件目录。');
+      return;
+    }
+    try {
+      await openSampleScriptPluginDir();
+      showMessage('已打开脚本插件示例目录。');
+    } catch (error) {
+      showMessage(
+        `打开脚本插件示例目录失败：${getErrorMessage(error, '未知错误')}`,
       );
     }
   };
@@ -2780,6 +2864,156 @@ export function App() {
     }
   };
 
+  const showScriptMessages = (messages: ScriptShowMessageAction[]) => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage) {
+      showMessage(lastMessage.message);
+    }
+  };
+
+  const setScriptRunResult = (
+    pluginId: string,
+    result: (typeof scriptRunResults)[string],
+  ) => {
+    setScriptRunResults((current) => ({
+      ...current,
+      [pluginId]: result,
+    }));
+  };
+
+  const handleRunScriptPlugin = async (pluginId?: string) => {
+    if (!pluginId) {
+      showMessage('脚本插件缺少 pluginId。');
+      return;
+    }
+    const plugin = plugins.find((item) => item.pluginId === pluginId);
+    if (!plugin?.enabled) {
+      showMessage(`插件已禁用：${pluginId}`);
+      return;
+    }
+    if (plugin.manifestValid === false) {
+      showMessage(`插件 manifest 无效：${pluginId}`);
+      return;
+    }
+    if (plugin.pluginType !== 'script') {
+      showMessage(`插件不是 script 类型：${pluginId}`);
+      return;
+    }
+    if (!plugin.entry) {
+      showMessage(`脚本插件缺少 entry：${pluginId}`);
+      return;
+    }
+    if (!isScriptRunnerEnabled) {
+      const messageText = '脚本插件运行器尚未启用。';
+      setScriptRunResult(pluginId, {
+        status: 'disabled',
+        message: messageText,
+      });
+      recordPluginLog(
+        'warning',
+        'script-runner-disabled',
+        messageText,
+        pluginId,
+      );
+      showMessage(messageText);
+      return;
+    }
+
+    const scriptPath = `plugins/installed/${plugin.pluginId}/${plugin.entry}`;
+    recordPluginLog(
+      'info',
+      'script-execution-started',
+      `script execution started: ${plugin.entry}`,
+      pluginId,
+    );
+    try {
+      const source = await readUserText(scriptPath);
+      const context = createScriptPluginContext(mindmap, selectedNodeId);
+      const runResult = await runScriptPlugin({ source, context });
+      if (!runResult.ok) {
+        setScriptRunResult(pluginId, {
+          status: 'failed',
+          message: runResult.error,
+          durationMs: runResult.durationMs,
+        });
+        recordPluginLog(
+          'error',
+          'script-execution-failed',
+          `${runResult.error} durationMs=${runResult.durationMs}`,
+          pluginId,
+        );
+        showMessage(`脚本执行失败：${runResult.error}`);
+        return;
+      }
+
+      const validation = validateScriptPluginActions(
+        runResult.actions,
+        mindmap,
+      );
+      if (!validation.valid) {
+        setScriptRunResult(pluginId, {
+          status: 'failed',
+          message: validation.error,
+          durationMs: runResult.durationMs,
+          validationError: validation.error,
+        });
+        recordPluginLog(
+          'error',
+          'script-action-validation-failed',
+          `${validation.error} durationMs=${runResult.durationMs}`,
+          pluginId,
+        );
+        showMessage(`脚本 action 校验失败：${validation.error}`);
+        return;
+      }
+
+      const mutatesMindmap = validation.actions.some(
+        (action) => action.type !== 'showMessage',
+      );
+      const applied = applyScriptPluginActions(mindmap, validation.actions);
+      if (mutatesMindmap) {
+        recordHistory();
+        setMindmap(applied.rootNode);
+        setIsDocumentDirty(true);
+      }
+      showScriptMessages(applied.messages);
+      setScriptRunResult(pluginId, {
+        status: 'success',
+        message: `已执行 ${applied.appliedCount} 个 actions。`,
+        actionCount: validation.actions.length,
+        durationMs: runResult.durationMs,
+      });
+      recordPluginLog(
+        'info',
+        'script-action-applied',
+        `script action applied actionCount=${validation.actions.length} durationMs=${runResult.durationMs}`,
+        pluginId,
+      );
+      recordPluginLog(
+        'info',
+        'script-execution-succeeded',
+        `script execution succeeded actionCount=${validation.actions.length} durationMs=${runResult.durationMs}`,
+        pluginId,
+      );
+      if (applied.messages.length === 0) {
+        showMessage('脚本插件执行完成。');
+      }
+    } catch (error) {
+      const reason = getErrorMessage(error, '脚本执行失败。');
+      setScriptRunResult(pluginId, {
+        status: 'failed',
+        message: reason,
+      });
+      recordPluginLog(
+        'error',
+        'script-execution-failed',
+        reason,
+        pluginId,
+      );
+      showMessage(`脚本执行失败：${reason}`);
+    }
+  };
+
   const pluginCommandHandlers: PluginCommandHandlers = {
     'builtin.openPluginManager': () => setIsPluginManagerVisible(true),
     'builtin.reloadPlugins': handleReloadPlugins,
@@ -2789,6 +3023,10 @@ export function App() {
 
   const runPluginCommand = async (commandId: string, pluginId?: string) => {
     try {
+      if (commandId === 'plugin.runScript') {
+        await handleRunScriptPlugin(pluginId);
+        return;
+      }
       await executePluginCommand({
         commandId,
         pluginId,
@@ -3724,6 +3962,15 @@ export function App() {
           onOpenPluginDir={() => void handleOpenPluginDir()}
           onOpenPluginDevDir={() => void handleOpenPluginDevDir()}
           onCreateSamplePlugin={() => void handleCreateSamplePlugin()}
+          onCreateSampleScriptPlugin={() =>
+            void handleCreateSampleScriptPlugin()
+          }
+          onOpenSampleScriptPluginDir={() =>
+            void handleOpenSampleScriptPluginDir()
+          }
+          isScriptRunnerEnabled={isScriptRunnerEnabled}
+          onScriptRunnerEnabledChange={setIsScriptRunnerEnabled}
+          scriptRunResults={scriptRunResults}
           onCopyPluginId={(pluginId) => void handleCopyPluginId(pluginId)}
           onCopyPath={(relativePath, label) =>
             void handleCopyPluginPath(relativePath, label)

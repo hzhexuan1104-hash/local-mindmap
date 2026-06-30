@@ -5,7 +5,7 @@ import type { NodeTypePack } from './nodeTypePacks';
 import type { TemplatePack } from './templatePacks';
 import { parseNodeTypePack } from './nodeTypePacks';
 import { parseTemplatePack } from './templatePacks';
-import { selectLocalFile } from './fileUtils';
+import { openLocalTextFile } from './localFileOperations';
 import {
   isPluginCommandId,
   type PluginCommandId,
@@ -17,6 +17,7 @@ import {
   savePluginRegistry as saveStoredPluginRegistry,
   uninstallPluginFromUserDir,
   USER_DATA_PATHS,
+  type PluginInstallAsset,
 } from '../storage/userDataStorage';
 
 export type PluginCategory =
@@ -33,7 +34,8 @@ export type PluginType =
   | 'template-pack'
   | 'theme-pack'
   | 'icon-pack'
-  | 'tool';
+  | 'tool'
+  | 'script';
 
 export type PluginCapability =
   | 'export'
@@ -41,7 +43,18 @@ export type PluginCapability =
   | 'templates'
   | 'themes'
   | 'icons'
-  | 'tools';
+  | 'tools'
+  | 'script'
+  | 'mindmap:read'
+  | 'mindmap:write'
+  | 'node:read'
+  | 'node:write';
+
+export type PluginPermission =
+  | 'mindmap:read'
+  | 'mindmap:write'
+  | 'node:read'
+  | 'node:write';
 
 export type PluginIconContribution = {
   value: string;
@@ -110,6 +123,8 @@ export type PluginManifest = {
   capabilities: PluginCapability[];
   enabled: boolean;
   installedAt: string;
+  entry?: string;
+  permissions?: PluginPermission[];
   builtIn?: boolean;
   validationWarnings?: string[];
   manifestValid?: boolean;
@@ -145,7 +160,9 @@ export type PluginValidationErrorCode =
   | 'missing-required-field'
   | 'invalid-plugin-id'
   | 'unsupported-plugin-type'
+  | 'invalid-script-entry'
   | 'invalid-capabilities'
+  | 'invalid-permissions'
   | 'unsupported-capability'
   | 'invalid-contributions';
 
@@ -163,6 +180,7 @@ export const SUPPORTED_PLUGIN_TYPES: readonly PluginType[] = [
   'node-type-pack',
   'template-pack',
   'tool',
+  'script',
 ] as const;
 
 export const SUPPORTED_CAPABILITIES: readonly PluginCapability[] = [
@@ -172,6 +190,18 @@ export const SUPPORTED_CAPABILITIES: readonly PluginCapability[] = [
   'nodeTypes',
   'templates',
   'tools',
+  'script',
+  'mindmap:read',
+  'mindmap:write',
+  'node:read',
+  'node:write',
+] as const;
+
+export const SUPPORTED_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
+  'mindmap:read',
+  'mindmap:write',
+  'node:read',
+  'node:write',
 ] as const;
 
 export const FORBIDDEN_PLUGIN_FIELDS = [
@@ -325,7 +355,32 @@ const isPluginCapability = (value: unknown): value is PluginCapability =>
   typeof value === 'string' &&
   SUPPORTED_CAPABILITIES.includes(value as PluginCapability);
 
+const isPluginPermission = (value: unknown): value is PluginPermission =>
+  typeof value === 'string' &&
+  SUPPORTED_PLUGIN_PERMISSIONS.includes(value as PluginPermission);
+
 const isSafePluginId = (value: string) => /^[A-Za-z0-9._-]+$/.test(value);
+
+export function validateScriptEntryPath(value: unknown) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return 'pluginType=script 时 entry 必填。';
+  }
+  const entry = value.trim().replace(/\\/g, '/');
+  if (/^(?:[A-Za-z]:\/|\/|\/\/)/.test(entry)) {
+    return 'entry 只能是相对路径，不能是绝对路径。';
+  }
+  if (
+    entry
+      .split('/')
+      .some((segment) => segment === '..' || segment === '.' || segment === '')
+  ) {
+    return 'entry 不允许包含 ..、. 或空路径片段。';
+  }
+  if (!entry.toLowerCase().endsWith('.js')) {
+    return 'entry 本批只支持 .js 文件。';
+  }
+  return null;
+}
 
 function findForbiddenField(value: unknown): string | null {
   if (Array.isArray(value)) {
@@ -363,6 +418,7 @@ function categoryForPluginType(pluginType: PluginType): PluginCategory {
     'theme-pack': 'theme',
     'icon-pack': 'icon-pack',
     tool: 'tool',
+    script: 'tool',
   };
   return categories[pluginType];
 }
@@ -787,9 +843,22 @@ function warnCapabilityContributionMismatch(
       (contributions?.nodeTypePacks?.length ?? 0),
     templates: contributions?.templatePacks?.length ?? 0,
     tools: contributions?.tools?.length ?? 0,
+    script: contributions?.menus?.length ?? 0,
+    'mindmap:read': 0,
+    'mindmap:write': 0,
+    'node:read': 0,
+    'node:write': 0,
   };
 
   for (const capability of SUPPORTED_CAPABILITIES) {
+    if (
+      capability === 'mindmap:read' ||
+      capability === 'mindmap:write' ||
+      capability === 'node:read' ||
+      capability === 'node:write'
+    ) {
+      continue;
+    }
     const declared = capabilities.includes(capability);
     const contributed = contributionCounts[capability] > 0;
     if (declared && !contributed) {
@@ -956,11 +1025,75 @@ function validatePluginManifestInternal(
     }
   }
 
+  let entry: string | undefined;
+  if (pluginType === 'script') {
+    const entryError = validateScriptEntryPath(value.entry);
+    if (entryError) {
+      errors.push({
+        code:
+          value.entry === undefined || value.entry === ''
+            ? 'missing-required-field'
+            : 'invalid-script-entry',
+        field: 'entry',
+        value: value.entry,
+        message: entryError,
+      });
+    } else {
+      entry = asString(value.entry).trim().replace(/\\/g, '/');
+    }
+  } else if (value.entry !== undefined) {
+    warnings.push('entry 仅在 pluginType=script 时生效。');
+  }
+
+  let permissions: PluginPermission[] | undefined;
+  if (value.permissions !== undefined) {
+    if (!Array.isArray(value.permissions)) {
+      errors.push({
+        code: 'invalid-permissions',
+        field: 'permissions',
+        value: value.permissions,
+        message: 'permissions 必须是数组。',
+      });
+    } else {
+      const unsupportedPermissions = value.permissions.filter(
+        (permission) => !isPluginPermission(permission),
+      );
+      if (unsupportedPermissions.length > 0) {
+        errors.push({
+          code: 'invalid-permissions',
+          field: 'permissions',
+          value: unsupportedPermissions,
+          message: `permissions 包含不支持的值：${unsupportedPermissions
+            .map(String)
+            .join(', ')}。支持的 permissions：${SUPPORTED_PLUGIN_PERMISSIONS.join(', ')}`,
+        });
+      } else {
+        permissions = Array.from(
+          new Set(value.permissions as PluginPermission[]),
+        );
+      }
+    }
+  }
+
   const contributions = normalizeContributions(
     value.contributions,
     errors,
     warnings,
   );
+  if (pluginType === 'script') {
+    for (const menu of contributions?.menus ?? []) {
+      if (menu.command !== 'plugin.runScript') {
+        menu.valid = false;
+        menu.invalidReason = 'script 插件菜单 command 必须是 plugin.runScript。';
+        errors.push({
+          code: 'invalid-contributions',
+          field: 'contributions.menus.command',
+          value: menu.command,
+          message: `script 插件菜单 ${menu.id} 的 command 必须是 plugin.runScript。`,
+        });
+      }
+    }
+  }
   if (!asString(value.author).trim()) {
     warnings.push('manifest 缺少 author。');
   }
@@ -987,6 +1120,8 @@ function validatePluginManifestInternal(
     capabilities,
     enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
     installedAt: normalizeInstalledAt(value.installedAt),
+    entry,
+    permissions,
     builtIn: Boolean(value.builtIn),
     config: isRecord(value.config) ? value.config : undefined,
     contributions,
@@ -1259,6 +1394,8 @@ export async function installPlugin(
   plugins: PluginManifest[],
   manifest: PluginManifest,
   overwrite = false,
+  assets: PluginInstallAsset[] = [],
+  sourceManifestPath?: string | null,
 ) {
   if (
     plugins.some(
@@ -1279,7 +1416,12 @@ export async function installPlugin(
     (plugin) => plugin.pluginId === manifest.pluginId,
   ) as PluginManifest;
 
-  await installPluginToUserDir(installedManifest, overwrite);
+  await installPluginToUserDir(
+    installedManifest,
+    overwrite,
+    assets,
+    sourceManifestPath,
+  );
   if (isDesktopRuntime()) {
     return { plugins: nextPlugins, manifest: installedManifest };
   }
@@ -1338,14 +1480,55 @@ export function parsePluginManifestText(text: string) {
 }
 
 export async function readLocalPluginManifest() {
-  const file = await selectLocalFile(
-    '.json,.lmplugin,application/json,application/octet-stream',
-  );
-  if (!file) {
+  const pluginPackage = await readLocalPluginPackage();
+  return pluginPackage?.manifest ?? null;
+}
+
+export type LocalPluginPackage = {
+  manifest: PluginManifest;
+  manifestSourcePath: string | null;
+  scriptEntry?: {
+    relativePath: string;
+    sourcePath: string | null;
+  };
+};
+
+function resolveSiblingEntryPath(manifestPath: string | null, entry: string) {
+  if (!manifestPath) {
+    return null;
+  }
+  const normalizedPath = manifestPath.replace(/\\/g, '/');
+  const lastSlash = normalizedPath.lastIndexOf('/');
+  if (lastSlash < 0) {
+    return entry;
+  }
+  return `${normalizedPath.slice(0, lastSlash + 1)}${entry}`;
+}
+
+export async function readLocalPluginPackage(): Promise<LocalPluginPackage | null> {
+  const opened = await openLocalTextFile({
+    accept: '.json,.lmplugin,application/json,application/octet-stream',
+    filterName: 'Plugin manifest',
+    extensions: ['json', 'lmplugin'],
+  });
+  if (!opened) {
     return null;
   }
 
-  return parsePluginManifestText(await file.text());
+  const manifest = parsePluginManifestText(opened.content);
+  const scriptEntry =
+    manifest.pluginType === 'script' && manifest.entry
+      ? {
+          relativePath: manifest.entry,
+          sourcePath: resolveSiblingEntryPath(opened.path, manifest.entry),
+        }
+      : undefined;
+
+  return {
+    manifest,
+    manifestSourcePath: opened.path,
+    scriptEntry,
+  };
 }
 
 export function getEnabledPlugins(plugins: PluginManifest[]) {

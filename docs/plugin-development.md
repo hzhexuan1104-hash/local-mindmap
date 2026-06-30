@@ -106,3 +106,124 @@ v1.7 只提供 TypeScript 类型和校验函数，不执行 action。
 3. 点击“重新加载插件”重新读取磁盘 manifest。
 4. 在插件详情检查 Schema errors、Schema warnings 和 `invalidReason`。
 5. 在开发者模式查看最近插件日志。
+## v1.8 脚本插件实验能力
+
+脚本插件是实验功能，默认关闭。用户需要在插件管理器的开发者模式中显式启用“实验性脚本插件运行器”后，顶部“插件”菜单中的脚本插件才会执行。未启用时，点击脚本菜单只会提示“脚本插件运行器尚未启用。”，不会读取或执行脚本。
+
+### Manifest
+
+脚本插件使用 `pluginType: "script"`，并且必须声明 `entry`：
+
+```json
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.script.append-check",
+  "name": "脚本插件：节点追加标记",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "给当前选中节点标题追加标记。",
+  "pluginType": "script",
+  "capabilities": ["script", "mindmap:read", "mindmap:write"],
+  "enabled": true,
+  "entry": "main.js",
+  "permissions": ["mindmap:read", "mindmap:write", "node:read", "node:write"],
+  "contributions": {
+    "menus": [
+      {
+        "id": "appendCheckToSelectedNode",
+        "label": "给当前节点追加 ✅",
+        "location": "plugins",
+        "command": "plugin.runScript",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}
+```
+
+`entry` 只能是插件目录内的相对 `.js` 文件路径，不允许绝对路径、`.`、`..` 或空路径片段。`pluginType=script` 的菜单命令必须是 `plugin.runScript`。
+
+### 安装
+
+导入脚本插件时，选择插件目录内的 `manifest.json`。宿主会复制 `manifest.json` 和同目录下的 `entry` 文件到：
+
+```text
+plugins/installed/<pluginId>/
+  manifest.json
+  main.js
+```
+
+如果 `entry` 指向的文件不存在，导入失败，并提示脚本入口文件不存在。
+
+### Context Snapshot
+
+脚本收到的是 JSON 可序列化快照，不是 React state、DOM、Tauri API 或文件路径：
+
+```json
+{
+  "mindmap": { "title": "中心主题", "nodeCount": 5 },
+  "selectedNode": { "id": "node-1", "text": "节点标题", "remark": "备注" },
+  "nodes": [
+    { "id": "node-1", "text": "节点标题", "parentId": null, "remark": "备注" }
+  ]
+}
+```
+
+### 脚本入口
+
+当前支持全局 `run(context)`，也支持简单的 `export async function run(context)` 形式：
+
+```js
+async function run(context) {
+  const node = context.selectedNode;
+
+  if (!node) {
+    return [{ type: "showMessage", level: "warning", message: "请先选择一个节点。" }];
+  }
+
+  return [
+    {
+      type: "updateNode",
+      nodeId: node.id,
+      patch: { text: node.text + " ✅" }
+    },
+    { type: "showMessage", level: "info", message: "已更新当前节点。" }
+  ];
+}
+```
+
+### Action Protocol
+
+本批只执行以下 actions：
+
+- `showMessage`: `level` 支持 `info`、`warning`、`error`。
+- `updateNode`: 只允许 `patch.text` 和 `patch.remark`。
+- `setNodeRemark`: 修改指定节点备注。
+- `addChildNode`: 给指定父节点新增子节点。
+
+`addNode` 和 `deleteNode` 本批不执行，会返回明确的不支持错误。
+
+Action 校验采用整批拒绝策略：任一 action 非法时，本批 actions 全部不执行。单次最多 20 个 actions；`text` 最大 500 字符；`remark` 最大 5000 字符；`nodeId` 和 `parentId` 必须存在。
+
+### 安全边界与限制
+
+脚本运行在 Web Worker 中，只接收 context JSON，只返回 actions JSON，并设置超时。宿主不会把内部函数、React state、DOM、Tauri API、用户数据目录绝对路径或文件路径传入脚本。
+
+当前限制：
+
+- 实验性能力，默认关闭。
+- 不支持 Shell。
+- 不支持 DLL。
+- 不支持文件系统访问。
+- 不支持网络访问或远程模块。
+- 不支持 Tauri API。
+- 当前不保证第三方脚本已经完全强隔离。
+
+开发者模式提供“创建脚本插件示例”，会生成：
+
+```text
+plugins/dev/sample-script-plugin/
+  manifest.json
+  main.js
+  README.md
+```

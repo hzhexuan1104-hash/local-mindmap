@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.dev.sample-script-plugin",
+  "name": "示例脚本插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "给当前选中节点追加 ✅，用于演示受控脚本插件。",
+  "pluginType": "script",
+  "capabilities": ["script", "mindmap:read", "mindmap:write"],
+  "enabled": true,
+  "entry": "main.js",
+  "permissions": [
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write"
+  ],
+  "contributions": {
+    "menus": [
+      {
+        "id": "appendCheckToSelectedNode",
+        "label": "给当前节点追加 ✅",
+        "location": "plugins",
+        "command": "plugin.runScript",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}
