@@ -119,6 +119,7 @@ describe('declarative plugin manifest validation', () => {
       'node-type-pack',
       'template-pack',
       'tool',
+      'script',
     ]);
     expect(SUPPORTED_CAPABILITIES).toEqual([
       'themes',
@@ -127,6 +128,11 @@ describe('declarative plugin manifest validation', () => {
       'nodeTypes',
       'templates',
       'tools',
+      'script',
+      'mindmap:read',
+      'mindmap:write',
+      'node:read',
+      'node:write',
     ]);
   });
 
@@ -177,6 +183,107 @@ describe('declarative plugin manifest validation', () => {
       pluginId: 'localmindmap.export.example',
       pluginType: 'import-export',
     });
+  });
+
+  it('accepts a valid script plugin manifest', () => {
+    const result = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.append-check',
+      name: 'Script plugin',
+      version: '1.0.0',
+      author: 'Tester',
+      description: 'Script test.',
+      pluginType: 'script',
+      capabilities: ['script', 'mindmap:read', 'mindmap:write'],
+      enabled: true,
+      entry: 'main.js',
+      permissions: ['mindmap:read', 'mindmap:write', 'node:read', 'node:write'],
+      contributions: {
+        menus: [
+          {
+            id: 'appendCheck',
+            label: 'Append check',
+            location: 'plugins',
+            command: 'plugin.runScript',
+            when: 'hasSelectedNode',
+          },
+        ],
+      },
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({
+      pluginType: 'script',
+      entry: 'main.js',
+      permissions: ['mindmap:read', 'mindmap:write', 'node:read', 'node:write'],
+      contributions: {
+        menus: [expect.objectContaining({ command: 'plugin.runScript', valid: true })],
+      },
+    });
+  });
+
+  it.each([
+    [undefined, 'pluginType=script 时 entry 必填。'],
+    ['/tmp/main.js', 'entry 只能是相对路径，不能是绝对路径。'],
+    ['../main.js', 'entry 不允许包含 ..、. 或空路径片段。'],
+    ['main.ts', 'entry 本批只支持 .js 文件。'],
+  ])('rejects invalid script entry %s', (entry, message) => {
+    const result = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.invalid-entry',
+      name: 'Script plugin',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry,
+      contributions: {
+        menus: [
+          {
+            id: 'run',
+            label: 'Run',
+            location: 'plugins',
+            command: 'plugin.runScript',
+          },
+        ],
+      },
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        field: 'entry',
+        message,
+      }),
+    );
+  });
+
+  it('rejects script plugin menus that do not use plugin.runScript', () => {
+    const result = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.bad-command',
+      name: 'Script plugin',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+      contributions: {
+        menus: [
+          {
+            id: 'run',
+            label: 'Run',
+            location: 'plugins',
+            command: 'builtin.exportText',
+          },
+        ],
+      },
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        field: 'contributions.menus.command',
+      }),
+    );
   });
 
   it('normalizes valid menu contributions and filters them by enabled state and when', () => {

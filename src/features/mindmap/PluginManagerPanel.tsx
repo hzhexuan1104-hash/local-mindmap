@@ -17,6 +17,20 @@ type PluginManagerPanelProps = {
   onOpenPluginDir: () => void;
   onOpenPluginDevDir: () => void;
   onCreateSamplePlugin: () => void;
+  onCreateSampleScriptPlugin?: () => void;
+  onOpenSampleScriptPluginDir?: () => void;
+  isScriptRunnerEnabled?: boolean;
+  onScriptRunnerEnabledChange?: (enabled: boolean) => void;
+  scriptRunResults?: Record<
+    string,
+    {
+      status: 'success' | 'failed' | 'disabled';
+      message: string;
+      actionCount?: number;
+      durationMs?: number;
+      validationError?: string;
+    }
+  >;
   onCopyPluginId: (pluginId: string) => void;
   onCopyPath: (relativePath: string, label: string) => void;
   onOpenManifestDir: (pluginId: string) => void;
@@ -209,6 +223,11 @@ export function PluginManagerPanel({
   onOpenPluginDir,
   onOpenPluginDevDir,
   onCreateSamplePlugin,
+  onCreateSampleScriptPlugin,
+  onOpenSampleScriptPluginDir,
+  isScriptRunnerEnabled = false,
+  onScriptRunnerEnabledChange,
+  scriptRunResults = {},
   onCopyPluginId,
   onCopyPath,
   onOpenManifestDir,
@@ -312,6 +331,19 @@ export function PluginManagerPanel({
                 当前版本不会执行插件内的 JS、命令、Shell、DLL 或远程代码。
                 后续版本将提供受控插件 API。
               </p>
+              <label className="stacked-control">
+                <span>启用实验性脚本插件运行器</span>
+                <input
+                  type="checkbox"
+                  checked={isScriptRunnerEnabled}
+                  onChange={(event) =>
+                    onScriptRunnerEnabledChange?.(event.target.checked)
+                  }
+                />
+              </label>
+              <p className="plugin-safety-note">
+                脚本插件是实验能力，默认关闭。脚本只能返回 actions，由宿主校验后执行；本批不支持 Shell、DLL、文件系统或网络访问。
+              </p>
               {!isDesktopApp ? (
                 <p className="plugin-web-warning">
                   不支持在 Web 端打开本地目录。
@@ -338,6 +370,22 @@ export function PluginManagerPanel({
                   onClick={onCreateSamplePlugin}
                 >
                   创建示例插件
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onCreateSampleScriptPlugin}
+                  disabled={!onCreateSampleScriptPlugin}
+                >
+                  创建脚本插件示例
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onOpenSampleScriptPluginDir}
+                  disabled={!onOpenSampleScriptPluginDir}
+                >
+                  打开脚本插件示例目录
                 </button>
                 <button
                   type="button"
@@ -494,6 +542,28 @@ export function PluginManagerPanel({
                           <dt>类型</dt>
                           <dd>{plugin.pluginType}</dd>
                         </div>
+                        {plugin.pluginType === 'script' ? (
+                          <>
+                            <div>
+                              <dt>entry</dt>
+                              <dd>{plugin.entry ?? '未声明'}</dd>
+                            </div>
+                            <div>
+                              <dt>permissions</dt>
+                              <dd>
+                                {(plugin.permissions ?? []).length > 0
+                                  ? plugin.permissions?.join(', ')
+                                  : '未声明'}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>script runner</dt>
+                              <dd>
+                                {isScriptRunnerEnabled ? 'enabled' : 'disabled'}
+                              </dd>
+                            </div>
+                          </>
+                        ) : null}
                         <div>
                           <dt>manifestVersion</dt>
                           <dd>{plugin.manifestVersion}</dd>
@@ -606,6 +676,37 @@ export function PluginManagerPanel({
                           {plugin.capabilities.map((capability) => (
                             <span key={capability}>{capability}</span>
                           ))}
+                        </div>
+                      ) : null}
+                      {plugin.pluginType === 'script' &&
+                      scriptRunResults[plugin.pluginId] ? (
+                        <div
+                          className={
+                            scriptRunResults[plugin.pluginId].status === 'success'
+                              ? 'plugin-validation-report'
+                              : 'plugin-validation-report is-error'
+                          }
+                        >
+                          <strong>最近一次脚本运行</strong>
+                          <p>{scriptRunResults[plugin.pluginId].message}</p>
+                          {scriptRunResults[plugin.pluginId].actionCount !==
+                          undefined ? (
+                            <p>
+                              actionCount: {scriptRunResults[plugin.pluginId].actionCount}
+                            </p>
+                          ) : null}
+                          {scriptRunResults[plugin.pluginId].durationMs !==
+                          undefined ? (
+                            <p>
+                              durationMs: {scriptRunResults[plugin.pluginId].durationMs}
+                            </p>
+                          ) : null}
+                          {scriptRunResults[plugin.pluginId].validationError ? (
+                            <p>
+                              validationError:{' '}
+                              {scriptRunResults[plugin.pluginId].validationError}
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
                       <ContributionDetails plugin={plugin} />

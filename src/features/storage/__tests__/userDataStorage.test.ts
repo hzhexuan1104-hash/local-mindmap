@@ -327,6 +327,8 @@ describe('userDataStorage desktop commands', () => {
           pluginId: plugin.pluginId,
           manifest: plugin,
           overwrite: false,
+          assets: [],
+          sourceManifestPath: undefined,
         },
       },
       {
@@ -558,6 +560,8 @@ describe('userDataStorage desktop commands', () => {
         pluginId: original.pluginId,
         manifest: result.manifest,
         overwrite: true,
+        assets: [],
+        sourceManifestPath: undefined,
       },
     });
   });

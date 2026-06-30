@@ -30,6 +30,7 @@ describe('plugin command registry', () => {
       'builtin.applyTheme',
       'builtin.insertNodeType',
       'builtin.applyTemplate',
+      'plugin.runScript',
     ]);
   });
 

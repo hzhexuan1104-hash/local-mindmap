@@ -9,6 +9,7 @@ export const PLUGIN_COMMAND_IDS = [
   'builtin.applyTheme',
   'builtin.insertNodeType',
   'builtin.applyTemplate',
+  'plugin.runScript',
 ] as const;
 
 export type PluginCommandId = (typeof PLUGIN_COMMAND_IDS)[number];

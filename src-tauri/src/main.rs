@@ -26,6 +26,14 @@ const SAMPLE_PLUGIN_ID: &str = "localmindmap.dev.sample-json-plugin";
 const SAMPLE_PLUGIN_MANIFEST: &str =
     include_str!("../../docs/examples/sample-json-plugin/manifest.json");
 const SAMPLE_PLUGIN_README: &str = include_str!("../../docs/examples/sample-json-plugin/README.md");
+const SAMPLE_SCRIPT_PLUGIN_DIR_NAME: &str = "sample-script-plugin";
+const SAMPLE_SCRIPT_PLUGIN_ID: &str = "localmindmap.dev.sample-script-plugin";
+const SAMPLE_SCRIPT_PLUGIN_MANIFEST: &str =
+    include_str!("../../docs/examples/sample-script-plugin/manifest.json");
+const SAMPLE_SCRIPT_PLUGIN_MAIN: &str =
+    include_str!("../../docs/examples/sample-script-plugin/main.js");
+const SAMPLE_SCRIPT_PLUGIN_README: &str =
+    include_str!("../../docs/examples/sample-script-plugin/README.md");
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -63,6 +71,7 @@ const DECLARATIVE_PLUGIN_TYPES: &[&str] = &[
     "node-type-pack",
     "template-pack",
     "tool",
+    "script",
 ];
 const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "themes",
@@ -71,7 +80,14 @@ const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "nodeTypes",
     "templates",
     "tools",
+    "script",
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write",
 ];
+const SCRIPT_PLUGIN_PERMISSIONS: &[&str] =
+    &["mindmap:read", "mindmap:write", "node:read", "node:write"];
 
 fn user_data_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -322,6 +338,12 @@ fn write_user_json_at(root: &Path, relative_path: &str, value: &Value) -> Result
         .map_err(|error| format!("Failed to write user JSON `{relative_path}`: {error}"))
 }
 
+fn read_user_text_at(root: &Path, relative_path: &str) -> Result<String, String> {
+    let target = resolve_user_relative_path(root, relative_path)?;
+    fs::read_to_string(&target)
+        .map_err(|error| format!("Failed to read user text `{relative_path}`: {error}"))
+}
+
 fn write_local_file_at(path: &Path, bytes: &[u8]) -> Result<String, String> {
     let parent = path
         .parent()
@@ -416,6 +438,15 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
         ));
     }
 
+    if plugin_type == "script" {
+        let entry = object
+            .get("entry")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| "pluginType=script 时 entry 必填。".to_string())?;
+        validate_script_entry_path(entry)?;
+    }
+
     match object.get("capabilities") {
         Some(Value::Array(capabilities))
             if capabilities
@@ -435,11 +466,69 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
         _ => return Err("capabilities 必须是数组。".to_string()),
     }
 
+    if let Some(permissions) = object.get("permissions") {
+        let permissions = permissions
+            .as_array()
+            .ok_or_else(|| "permissions 必须是数组。".to_string())?;
+        for permission in permissions {
+            let permission = permission
+                .as_str()
+                .ok_or_else(|| "permissions 只能包含字符串。".to_string())?;
+            if !SCRIPT_PLUGIN_PERMISSIONS.contains(&permission) {
+                return Err(format!("permissions 包含不支持的值：{permission}"));
+            }
+        }
+    }
+
     if let Some(contributions) = object.get("contributions") {
         validate_builtin_handlers(contributions)?;
         validate_menu_command_shape(contributions)?;
+        if plugin_type == "script" {
+            validate_script_menu_commands(contributions)?;
+        }
     }
 
+    Ok(())
+}
+
+fn validate_script_entry_path(entry: &str) -> Result<(), String> {
+    if entry.trim().is_empty() {
+        return Err("pluginType=script 时 entry 必填。".to_string());
+    }
+    let normalized = entry.replace('\\', "/");
+    if normalized.starts_with('/')
+        || normalized.starts_with("//")
+        || normalized.as_bytes().get(1) == Some(&b':')
+    {
+        return Err("entry 只能是相对路径，不能是绝对路径。".to_string());
+    }
+    if normalized
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err("entry 不允许包含 ..、. 或空路径片段。".to_string());
+    }
+    if !normalized.to_ascii_lowercase().ends_with(".js") {
+        return Err("entry 本批只支持 .js 文件。".to_string());
+    }
+    Ok(())
+}
+
+fn validate_script_menu_commands(contributions: &Value) -> Result<(), String> {
+    let Some(menus) = contributions.get("menus") else {
+        return Ok(());
+    };
+    let menus = menus
+        .as_array()
+        .ok_or_else(|| "contributions.menus must be an array.".to_string())?;
+    for menu in menus {
+        let Some(command) = menu.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if command != "plugin.runScript" {
+            return Err("script 插件菜单 command 必须是 plugin.runScript。".to_string());
+        }
+    }
     Ok(())
 }
 
@@ -572,11 +661,66 @@ fn restore_plugin_registry_after_failed_install(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallAsset {
+    relative_path: String,
+    source_path: Option<String>,
+    text: Option<String>,
+}
+
+fn copy_plugin_install_assets(
+    staging_dir: &Path,
+    manifest_source_path: Option<&str>,
+    assets: &[PluginInstallAsset],
+) -> Result<(), String> {
+    let manifest_parent = manifest_source_path
+        .and_then(|path| Path::new(path).parent())
+        .map(Path::to_path_buf);
+
+    for asset in assets {
+        validate_script_entry_path(&asset.relative_path)?;
+        let relative_path = normalized_user_relative_path(&asset.relative_path)?;
+        let target_path = staging_dir.join(&relative_path);
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("脚本入口目录创建失败：{error}"))?;
+        }
+
+        if let Some(text) = &asset.text {
+            fs::write(&target_path, text)
+                .map_err(|error| format!("脚本入口文件写入失败：{error}"))?;
+            continue;
+        }
+
+        let source_path = asset
+            .source_path
+            .as_deref()
+            .ok_or_else(|| format!("导入失败：脚本入口文件不存在：{}。", asset.relative_path))?;
+        let source_path = Path::new(source_path);
+        if !source_path.is_file() {
+            return Err(format!("导入失败：脚本入口文件不存在：{}。", asset.relative_path));
+        }
+        if let Some(parent) = &manifest_parent {
+            let expected = parent.join(&relative_path);
+            if expected != source_path {
+                return Err("脚本入口文件必须位于 manifest.json 同目录内。".to_string());
+            }
+        }
+        fs::copy(source_path, &target_path)
+            .map_err(|error| format!("脚本入口文件复制失败：{error}"))?;
+    }
+
+    Ok(())
+}
+
 fn install_plugin_to_user_dir_at_with_writer<F>(
     root: &Path,
     plugin_id: &str,
     manifest: &Value,
     overwrite: bool,
+    manifest_source_path: Option<&str>,
+    assets: &[PluginInstallAsset],
     mut write_json: F,
 ) -> Result<(), String>
 where
@@ -622,6 +766,15 @@ where
         let cleanup_error = remove_path_if_exists(&staging_dir).err();
         return Err(format!(
             "插件 manifest 写入失败：{error}{}",
+            cleanup_error
+                .map(|cleanup| format!("；临时目录回滚失败：{cleanup}"))
+                .unwrap_or_default()
+        ));
+    }
+    if let Err(error) = copy_plugin_install_assets(&staging_dir, manifest_source_path, assets) {
+        let cleanup_error = remove_path_if_exists(&staging_dir).err();
+        return Err(format!(
+            "{error}{}",
             cleanup_error
                 .map(|cleanup| format!("；临时目录回滚失败：{cleanup}"))
                 .unwrap_or_default()
@@ -689,6 +842,8 @@ fn install_plugin_to_user_dir_at(
         plugin_id,
         manifest,
         overwrite,
+        None,
+        &[],
         write_user_json_at,
     )
 }
@@ -741,6 +896,12 @@ fn write_user_json(app: AppHandle, relative_path: String, value: Value) -> Resul
 }
 
 #[tauri::command]
+fn read_user_text(app: AppHandle, relative_path: String) -> Result<String, String> {
+    let root = ensure_user_data_root(&app)?;
+    read_user_text_at(&root, &relative_path)
+}
+
+#[tauri::command]
 fn list_user_files(app: AppHandle, relative_dir: String) -> Result<Vec<String>, String> {
     let root = ensure_user_data_root(&app)?;
     let mut directory = resolve_user_relative_path(&root, &relative_dir)?;
@@ -778,9 +939,19 @@ fn install_plugin_to_user_dir(
     plugin_id: String,
     manifest: Value,
     overwrite: bool,
+    source_manifest_path: Option<String>,
+    assets: Option<Vec<PluginInstallAsset>>,
 ) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
-    install_plugin_to_user_dir_at(&root, &plugin_id, &manifest, overwrite)
+    install_plugin_to_user_dir_at_with_writer(
+        &root,
+        &plugin_id,
+        &manifest,
+        overwrite,
+        source_manifest_path.as_deref(),
+        assets.as_deref().unwrap_or(&[]),
+        write_user_json_at,
+    )
 }
 
 #[tauri::command]
@@ -853,6 +1024,7 @@ struct SamplePluginCreationResult {
     directory_path: String,
     manifest_path: String,
     readme_path: String,
+    main_path: Option<String>,
 }
 
 fn sample_plugin_creation_result(root: &Path, created: bool) -> SamplePluginCreationResult {
@@ -865,6 +1037,23 @@ fn sample_plugin_creation_result(root: &Path, created: bool) -> SamplePluginCrea
             .to_string_lossy()
             .to_string(),
         readme_path: directory.join("README.md").to_string_lossy().to_string(),
+        main_path: None,
+    }
+}
+
+fn sample_script_plugin_creation_result(root: &Path, created: bool) -> SamplePluginCreationResult {
+    let directory = root
+        .join(USER_PLUGIN_DEV_DIR)
+        .join(SAMPLE_SCRIPT_PLUGIN_DIR_NAME);
+    SamplePluginCreationResult {
+        created,
+        directory_path: directory.to_string_lossy().to_string(),
+        manifest_path: directory
+            .join(MANIFEST_FILE_NAME)
+            .to_string_lossy()
+            .to_string(),
+        readme_path: directory.join("README.md").to_string_lossy().to_string(),
+        main_path: Some(directory.join("main.js").to_string_lossy().to_string()),
     }
 }
 
@@ -904,6 +1093,44 @@ fn create_sample_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, St
     Ok(sample_plugin_creation_result(root, true))
 }
 
+fn create_sample_script_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
+    let manifest: Value = serde_json::from_str(SAMPLE_SCRIPT_PLUGIN_MANIFEST)
+        .map_err(|error| format!("Bundled sample script plugin manifest is invalid: {error}"))?;
+    validate_declarative_manifest(SAMPLE_SCRIPT_PLUGIN_ID, &manifest)
+        .map_err(|error| format!("Bundled sample script plugin validation failed: {error}"))?;
+
+    let dev_dir = plugin_dev_dir_at(root)?;
+    fs::create_dir_all(&dev_dir)
+        .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
+    let target_dir = dev_dir.join(SAMPLE_SCRIPT_PLUGIN_DIR_NAME);
+    if target_dir.exists() {
+        return Ok(sample_script_plugin_creation_result(root, false));
+    }
+
+    let staging_dir = dev_dir.join(format!(".{SAMPLE_SCRIPT_PLUGIN_DIR_NAME}.creating"));
+    remove_path_if_exists(&staging_dir)?;
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("Failed to create sample script plugin staging directory: {error}"))?;
+
+    let write_result = (|| {
+        fs::write(staging_dir.join(MANIFEST_FILE_NAME), SAMPLE_SCRIPT_PLUGIN_MANIFEST)
+            .map_err(|error| format!("Failed to write sample script plugin manifest: {error}"))?;
+        fs::write(staging_dir.join("main.js"), SAMPLE_SCRIPT_PLUGIN_MAIN)
+            .map_err(|error| format!("Failed to write sample script plugin main.js: {error}"))?;
+        fs::write(staging_dir.join("README.md"), SAMPLE_SCRIPT_PLUGIN_README)
+            .map_err(|error| format!("Failed to write sample script plugin README: {error}"))?;
+        fs::rename(&staging_dir, &target_dir)
+            .map_err(|error| format!("Failed to commit sample script plugin directory: {error}"))
+    })();
+
+    if let Err(error) = write_result {
+        let _ = remove_path_if_exists(&staging_dir);
+        return Err(error);
+    }
+
+    Ok(sample_script_plugin_creation_result(root, true))
+}
+
 #[tauri::command]
 fn open_plugin_dev_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
@@ -929,6 +1156,35 @@ fn open_plugin_dev_dir(app: AppHandle) -> Result<(), String> {
 fn create_sample_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_plugin_at(&root)
+}
+
+#[tauri::command]
+fn create_sample_script_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    create_sample_script_plugin_at(&root)
+}
+
+#[tauri::command]
+fn open_sample_script_plugin_dir(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let target_dir = root
+        .join(USER_PLUGIN_DEV_DIR)
+        .join(SAMPLE_SCRIPT_PLUGIN_DIR_NAME);
+    fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("Failed to create sample script plugin directory: {error}"))?;
+
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(&target_dir)
+        .spawn()
+        .map_err(|error| format!("Failed to open sample script plugin directory: {error}"))?;
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1600,6 +1856,7 @@ fn main() {
             ensure_user_data_dirs,
             read_user_json,
             write_user_json,
+            read_user_text,
             list_user_files,
             install_plugin_to_user_dir,
             uninstall_plugin_from_user_dir,
@@ -1607,6 +1864,8 @@ fn main() {
             open_plugin_dir,
             open_plugin_dev_dir,
             create_sample_plugin,
+            create_sample_script_plugin,
+            open_sample_script_plugin_dir,
             open_plugin_manifest_dir,
             scan_installed_plugin_manifests,
             reload_plugins_from_disk,
@@ -1651,6 +1910,31 @@ mod tests {
             "pluginType": "import-export",
             "capabilities": ["export"],
             "enabled": true
+        })
+    }
+
+    fn test_script_plugin(plugin_id: &str) -> Value {
+        json!({
+            "manifestVersion": 1,
+            "pluginId": plugin_id,
+            "name": "Script test plugin",
+            "version": "1.0.0",
+            "author": "Local Mindmap Test",
+            "description": "Tests script plugin installation.",
+            "pluginType": "script",
+            "capabilities": ["script", "mindmap:read", "mindmap:write"],
+            "enabled": true,
+            "entry": "main.js",
+            "permissions": ["mindmap:read", "mindmap:write", "node:read", "node:write"],
+            "contributions": {
+                "menus": [{
+                    "id": "run",
+                    "label": "Run",
+                    "location": "plugins",
+                    "command": "plugin.runScript",
+                    "when": "hasSelectedNode"
+                }]
+            }
         })
     }
 
@@ -1988,6 +2272,8 @@ mod tests {
             plugin_id,
             &manifest,
             false,
+            None,
+            &[],
             |_root, relative_path, _value| {
                 if relative_path.ends_with(MANIFEST_FILE_NAME) {
                     Err("simulated manifest write failure".to_string())
@@ -2022,6 +2308,8 @@ mod tests {
             plugin_id,
             &manifest,
             false,
+            None,
+            &[],
             |writer_root, relative_path, value| {
                 if relative_path == USER_PLUGIN_REGISTRY_PATH {
                     Err("simulated registry write failure".to_string())
@@ -2053,6 +2341,8 @@ mod tests {
             plugin_id,
             &manifest,
             false,
+            None,
+            &[],
             |writer_root, relative_path, value| {
                 writes.push(relative_path.to_string());
                 write_user_json_at(writer_root, relative_path, value)
@@ -2110,6 +2400,8 @@ mod tests {
             plugin_id,
             &manifest,
             false,
+            None,
+            &[],
             |_root, _relative_path, _value| Err("simulated write failure".to_string()),
         )
         .expect_err("first installation should fail");
@@ -2185,6 +2477,8 @@ mod tests {
             plugin_id,
             &update,
             true,
+            None,
+            &[],
             |writer_root, relative_path, value| {
                 if relative_path == USER_PLUGIN_REGISTRY_PATH {
                     Err("simulated overwrite registry failure".to_string())
@@ -2365,5 +2659,81 @@ mod tests {
         assert!(
             validate_declarative_manifest("localmindmap.test.persistence.theme", &manifest).is_ok()
         );
+    }
+
+    #[test]
+    fn script_manifest_requires_safe_js_entry() {
+        let plugin_id = "localmindmap.test.script.schema";
+        let mut missing = test_script_plugin(plugin_id);
+        missing.as_object_mut().unwrap().remove("entry");
+        assert!(validate_declarative_manifest(plugin_id, &missing)
+            .expect_err("missing entry should fail")
+            .contains("entry"));
+
+        for entry in ["/tmp/main.js", "../main.js", "main.ts"] {
+            let mut manifest = test_script_plugin(plugin_id);
+            manifest["entry"] = Value::String(entry.to_string());
+            assert!(
+                validate_declarative_manifest(plugin_id, &manifest).is_err(),
+                "{entry} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn script_install_requires_entry_file_and_copies_it() {
+        let root = test_root("script-plugin-install");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let plugin_id = "localmindmap.test.script.install";
+        let manifest = test_script_plugin(plugin_id);
+        let source_dir = root.join("source-script-plugin");
+        fs::create_dir_all(&source_dir).expect("source directory should be created");
+        let manifest_path = source_dir.join(MANIFEST_FILE_NAME);
+        fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap())
+            .expect("source manifest should be written");
+        let manifest_path_string = manifest_path.to_string_lossy().to_string();
+
+        let missing_asset = PluginInstallAsset {
+            relative_path: "main.js".to_string(),
+            source_path: Some(source_dir.join("main.js").to_string_lossy().to_string()),
+            text: None,
+        };
+        let error = install_plugin_to_user_dir_at_with_writer(
+            &root,
+            plugin_id,
+            &manifest,
+            false,
+            Some(&manifest_path_string),
+            &[missing_asset],
+            write_user_json_at,
+        )
+        .expect_err("missing main.js should fail");
+        assert!(error.contains("脚本入口文件不存在：main.js"));
+
+        fs::write(source_dir.join("main.js"), "async function run(){ return []; }")
+            .expect("entry should be written");
+        let asset = PluginInstallAsset {
+            relative_path: "main.js".to_string(),
+            source_path: Some(source_dir.join("main.js").to_string_lossy().to_string()),
+            text: None,
+        };
+        install_plugin_to_user_dir_at_with_writer(
+            &root,
+            plugin_id,
+            &manifest,
+            false,
+            Some(&manifest_path_string),
+            &[asset],
+            write_user_json_at,
+        )
+        .expect("script plugin should install with entry");
+
+        let installed_entry = root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/main.js"));
+        assert!(installed_entry.is_file());
+        assert_eq!(
+            fs::read_to_string(installed_entry).expect("installed entry should be readable"),
+            "async function run(){ return []; }"
+        );
+        fs::remove_dir_all(root).expect("test directory should be removable");
     }
 }
