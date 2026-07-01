@@ -279,7 +279,8 @@ describe('PluginManagerPanel installation errors', () => {
     expect(html).toContain('查看插件 API 文档');
     expect(html).toContain('查看插件日志');
     expect(html).toContain('复制用户数据目录路径');
-    expect(html).toContain('不会执行插件内的 JS、命令、Shell、DLL 或远程代码');
+    expect(html).toContain('通过 Web Worker 执行本地脚本插件');
+    expect(html).toContain('不支持 Shell、DLL、文件系统或网络访问');
     expect(html).toContain('不支持在 Web 端打开本地目录');
   });
 });

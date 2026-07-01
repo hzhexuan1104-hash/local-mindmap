@@ -1,0 +1,31 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.dev.sample-batch-script-plugin",
+  "name": "批量脚本插件示例",
+  "version": "1.0.0",
+  "author": "Local Mindmap",
+  "description": "为右键节点一次新增三个子节点，演示 v1.8 第二批脚本 API。",
+  "pluginType": "script",
+  "capabilities": ["script", "mindmap:read", "node:read", "node:write"],
+  "entry": "main.js",
+  "permissions": ["script", "mindmap:read", "node:read", "node:write"],
+  "enabled": true,
+  "contributions": {
+    "menus": [
+      {
+        "id": "createBatchChildren",
+        "label": "脚本：新增 3 个子节点",
+        "location": "plugins",
+        "command": "plugin.runScript",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "createBatchChildrenFromContext",
+        "label": "脚本：新增 3 个子节点",
+        "location": "node-context",
+        "command": "plugin.runScript",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}

@@ -17,12 +17,15 @@ import {
   SUPPORTED_PLUGIN_TYPES,
   getPluginNodeTypes,
   getPluginMenuGroups,
+  getScriptWritePermissions,
   getPluginTemplates,
   installPlugin,
   installPluginManifest,
   normalizePluginManifest,
   parsePluginManifestText,
   setPluginEnabled,
+  setPluginTrusted,
+  shouldConfirmScriptPluginRun,
   uninstallPlugin,
   validatePluginManifest,
   type PluginManifest,
@@ -222,6 +225,42 @@ describe('declarative plugin manifest validation', () => {
     });
   });
 
+  it('keeps unknown permissions as warnings and defaults scripts to untrusted', () => {
+    const result = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.unknown-permission',
+      name: 'Script plugin',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+      permissions: ['script', 'node:read', 'future:permission'],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.manifest).toMatchObject({
+      trusted: false,
+      permissions: ['script', 'node:read', 'future:permission'],
+    });
+    expect(result.warnings).toContain(
+      '未知 permissions：future:permission。',
+    );
+  });
+
+  it('warns when a script plugin does not declare permissions', () => {
+    const result = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.no-permissions',
+      name: 'Script plugin',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+    });
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toContain('script 插件未声明 permissions。');
+  });
+
   it.each([
     [undefined, 'pluginType=script 时 entry 必填。'],
     ['/tmp/main.js', 'entry 只能是相对路径，不能是绝对路径。'],
@@ -327,6 +366,79 @@ describe('declarative plugin manifest validation', () => {
         hasSelectedNode: true,
       }),
     ).toEqual([]);
+  });
+
+  it('routes node-context contributions separately from top plugin menus', () => {
+    const result = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.context-menu',
+      name: 'Context menu script',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+      permissions: ['script', 'node:read'],
+      contributions: {
+        menus: [
+          {
+            id: 'top',
+            label: 'Top',
+            location: 'plugins',
+            command: 'plugin.runScript',
+            when: 'hasSelectedNode',
+          },
+          {
+            id: 'context',
+            label: 'Context',
+            location: 'node-context',
+            command: 'plugin.runScript',
+            when: 'hasSelectedNode',
+          },
+        ],
+      },
+    });
+    const manifest = result.manifest as PluginManifest;
+    expect(
+      getPluginMenuGroups([manifest], {
+        hasMindmap: true,
+        hasSelectedNode: true,
+        location: 'plugins',
+      })[0].items.map((menu) => menu.id),
+    ).toEqual(['top']);
+    expect(
+      getPluginMenuGroups([manifest], {
+        hasMindmap: true,
+        hasSelectedNode: true,
+        location: 'node-context',
+      })[0].items.map((menu) => menu.id),
+    ).toEqual(['context']);
+    expect(
+      getPluginMenuGroups(setPluginEnabled([manifest], manifest.pluginId, false), {
+        hasMindmap: true,
+        hasSelectedNode: true,
+        location: 'node-context',
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects plugin.runScript on non-script plugin manifests', () => {
+    const result = validatePluginManifest({
+      ...validDeclarativeManifest,
+      contributions: {
+        menus: [{
+          id: 'bad-script-command',
+          label: 'Bad',
+          location: 'plugins',
+          command: 'plugin.runScript',
+        }],
+      },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('非 script 插件'),
+      }),
+    );
   });
 
   it('keeps an unknown menu command visible in manager data but marks it invalid', () => {
@@ -653,6 +765,32 @@ describe('declarative plugin manifest validation', () => {
         },
       )[0]?.items[0]?.label,
     ).toBe('更新后的菜单');
+  });
+
+  it('persists trust changes and preserves trust during script overwrite', () => {
+    const original = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.trusted',
+      name: 'Trusted script',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+      permissions: ['script', 'node:write'],
+    }).manifest as PluginManifest;
+    const trusted = setPluginTrusted([original], original.pluginId, true);
+    expect(trusted[0].trusted).toBe(true);
+    expect(getScriptWritePermissions(original)).toEqual(['node:write']);
+    expect(shouldConfirmScriptPluginRun(original)).toBe(true);
+    expect(shouldConfirmScriptPluginRun(trusted[0])).toBe(false);
+    const overwritten = installPluginManifest(trusted, {
+      ...original,
+      version: '1.1.0',
+    });
+    expect(overwritten[0]).toMatchObject({
+      version: '1.1.0',
+      trusted: true,
+    });
   });
 
   it('reports duplicate install conflicts in Chinese when overwrite is not confirmed', async () => {

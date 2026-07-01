@@ -18,19 +18,28 @@ type PluginManagerPanelProps = {
   onOpenPluginDevDir: () => void;
   onCreateSamplePlugin: () => void;
   onCreateSampleScriptPlugin?: () => void;
+  onCreateSampleBatchScriptPlugin?: () => void;
   onOpenSampleScriptPluginDir?: () => void;
   isScriptRunnerEnabled?: boolean;
   onScriptRunnerEnabledChange?: (enabled: boolean) => void;
   scriptRunResults?: Record<
     string,
     {
-      status: 'success' | 'failed' | 'disabled';
+      status:
+        | 'success'
+        | 'failed'
+        | 'validation_failed'
+        | 'timeout'
+        | 'runner_disabled';
       message: string;
+      lastRunAt: string;
       actionCount?: number;
+      appliedActionCount?: number;
       durationMs?: number;
-      validationError?: string;
+      error?: string;
     }
   >;
+  onSetPluginTrusted?: (pluginId: string, trusted: boolean) => void;
   onCopyPluginId: (pluginId: string) => void;
   onCopyPath: (relativePath: string, label: string) => void;
   onOpenManifestDir: (pluginId: string) => void;
@@ -224,10 +233,12 @@ export function PluginManagerPanel({
   onOpenPluginDevDir,
   onCreateSamplePlugin,
   onCreateSampleScriptPlugin,
+  onCreateSampleBatchScriptPlugin,
   onOpenSampleScriptPluginDir,
   isScriptRunnerEnabled = false,
   onScriptRunnerEnabledChange,
   scriptRunResults = {},
+  onSetPluginTrusted,
   onCopyPluginId,
   onCopyPath,
   onOpenManifestDir,
@@ -328,8 +339,8 @@ export function PluginManagerPanel({
                 图标、节点类型和模板等声明式能力。
               </p>
               <p className="plugin-safety-note">
-                当前版本不会执行插件内的 JS、命令、Shell、DLL 或远程代码。
-                后续版本将提供受控插件 API。
+                仅在显式启用后通过 Web Worker 执行本地脚本插件。脚本只接收
+                JSON context snapshot，只能返回由宿主校验的 actions。
               </p>
               <label className="stacked-control">
                 <span>启用实验性脚本插件运行器</span>
@@ -378,6 +389,13 @@ export function PluginManagerPanel({
                   disabled={!onCreateSampleScriptPlugin}
                 >
                   创建脚本插件示例
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onCreateSampleBatchScriptPlugin}
+                >
+                  创建批量脚本插件示例
                 </button>
                 <button
                   type="button"
@@ -557,6 +575,10 @@ export function PluginManagerPanel({
                               </dd>
                             </div>
                             <div>
+                              <dt>trusted</dt>
+                              <dd>{String(Boolean(plugin.trusted))}</dd>
+                            </div>
+                            <div>
                               <dt>script runner</dt>
                               <dd>
                                 {isScriptRunnerEnabled ? 'enabled' : 'disabled'}
@@ -678,6 +700,48 @@ export function PluginManagerPanel({
                           ))}
                         </div>
                       ) : null}
+                      {plugin.pluginType === 'script' ? (
+                        <div className="plugin-validation-report">
+                          <strong>权限分组</strong>
+                          <p>
+                            读取权限：
+                            {(plugin.permissions ?? [])
+                              .filter((permission) =>
+                                ['mindmap:read', 'node:read'].includes(permission),
+                              )
+                              .join(', ') || '无'}
+                          </p>
+                          <p>
+                            写入权限：
+                            {(plugin.permissions ?? [])
+                              .filter((permission) =>
+                                ['mindmap:write', 'node:write'].includes(permission),
+                              )
+                              .join(', ') || '无'}
+                          </p>
+                          <p>
+                            实验权限：
+                            {(plugin.permissions ?? []).includes('script')
+                              ? 'script'
+                              : '无'}
+                          </p>
+                          <p>
+                            未知权限：
+                            {(plugin.permissions ?? [])
+                              .filter(
+                                (permission) =>
+                                  ![
+                                    'mindmap:read',
+                                    'node:read',
+                                    'mindmap:write',
+                                    'node:write',
+                                    'script',
+                                  ].includes(permission),
+                              )
+                              .join(', ') || '无'}
+                          </p>
+                        </div>
+                      ) : null}
                       {plugin.pluginType === 'script' &&
                       scriptRunResults[plugin.pluginId] ? (
                         <div
@@ -688,6 +752,16 @@ export function PluginManagerPanel({
                           }
                         >
                           <strong>最近一次脚本运行</strong>
+                          <p>
+                            lastRunAt:{' '}
+                            {new Date(
+                              scriptRunResults[plugin.pluginId].lastRunAt,
+                            ).toLocaleString()}
+                          </p>
+                          <p>
+                            lastRunStatus:{' '}
+                            {scriptRunResults[plugin.pluginId].status}
+                          </p>
                           <p>{scriptRunResults[plugin.pluginId].message}</p>
                           {scriptRunResults[plugin.pluginId].actionCount !==
                           undefined ? (
@@ -701,10 +775,16 @@ export function PluginManagerPanel({
                               durationMs: {scriptRunResults[plugin.pluginId].durationMs}
                             </p>
                           ) : null}
-                          {scriptRunResults[plugin.pluginId].validationError ? (
+                          {scriptRunResults[plugin.pluginId].appliedActionCount !==
+                          undefined ? (
                             <p>
-                              validationError:{' '}
-                              {scriptRunResults[plugin.pluginId].validationError}
+                              appliedActionCount:{' '}
+                              {scriptRunResults[plugin.pluginId].appliedActionCount}
+                            </p>
+                          ) : null}
+                          {scriptRunResults[plugin.pluginId].error ? (
+                            <p>
+                              error: {scriptRunResults[plugin.pluginId].error}
                             </p>
                           ) : null}
                         </div>
@@ -712,6 +792,20 @@ export function PluginManagerPanel({
                       <ContributionDetails plugin={plugin} />
                     </div>
                     <div className="plugin-item-actions">
+                      {plugin.pluginType === 'script' ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() =>
+                            onSetPluginTrusted?.(
+                              plugin.pluginId,
+                              !plugin.trusted,
+                            )
+                          }
+                        >
+                          {plugin.trusted ? '取消信任' : '信任此插件'}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="secondary-action"

@@ -34,6 +34,14 @@ const SAMPLE_SCRIPT_PLUGIN_MAIN: &str =
     include_str!("../../docs/examples/sample-script-plugin/main.js");
 const SAMPLE_SCRIPT_PLUGIN_README: &str =
     include_str!("../../docs/examples/sample-script-plugin/README.md");
+const SAMPLE_BATCH_SCRIPT_PLUGIN_DIR_NAME: &str = "sample-batch-script-plugin";
+const SAMPLE_BATCH_SCRIPT_PLUGIN_ID: &str = "localmindmap.dev.sample-batch-script-plugin";
+const SAMPLE_BATCH_SCRIPT_PLUGIN_MANIFEST: &str =
+    include_str!("../../docs/examples/sample-batch-script-plugin/manifest.json");
+const SAMPLE_BATCH_SCRIPT_PLUGIN_MAIN: &str =
+    include_str!("../../docs/examples/sample-batch-script-plugin/main.js");
+const SAMPLE_BATCH_SCRIPT_PLUGIN_README: &str =
+    include_str!("../../docs/examples/sample-batch-script-plugin/README.md");
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -86,9 +94,6 @@ const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "node:read",
     "node:write",
 ];
-const SCRIPT_PLUGIN_PERMISSIONS: &[&str] =
-    &["mindmap:read", "mindmap:write", "node:read", "node:write"];
-
 fn user_data_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -471,12 +476,9 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
             .as_array()
             .ok_or_else(|| "permissions 必须是数组。".to_string())?;
         for permission in permissions {
-            let permission = permission
+            permission
                 .as_str()
                 .ok_or_else(|| "permissions 只能包含字符串。".to_string())?;
-            if !SCRIPT_PLUGIN_PERMISSIONS.contains(&permission) {
-                return Err(format!("permissions 包含不支持的值：{permission}"));
-            }
         }
     }
 
@@ -683,8 +685,7 @@ fn copy_plugin_install_assets(
         let relative_path = normalized_user_relative_path(&asset.relative_path)?;
         let target_path = staging_dir.join(&relative_path);
         if let Some(parent) = target_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("脚本入口目录创建失败：{error}"))?;
+            fs::create_dir_all(parent).map_err(|error| format!("脚本入口目录创建失败：{error}"))?;
         }
 
         if let Some(text) = &asset.text {
@@ -699,7 +700,10 @@ fn copy_plugin_install_assets(
             .ok_or_else(|| format!("导入失败：脚本入口文件不存在：{}。", asset.relative_path))?;
         let source_path = Path::new(source_path);
         if !source_path.is_file() {
-            return Err(format!("导入失败：脚本入口文件不存在：{}。", asset.relative_path));
+            return Err(format!(
+                "导入失败：脚本入口文件不存在：{}。",
+                asset.relative_path
+            ));
         }
         if let Some(parent) = &manifest_parent {
             let expected = parent.join(&relative_path);
@@ -1057,6 +1061,25 @@ fn sample_script_plugin_creation_result(root: &Path, created: bool) -> SamplePlu
     }
 }
 
+fn sample_batch_script_plugin_creation_result(
+    root: &Path,
+    created: bool,
+) -> SamplePluginCreationResult {
+    let directory = root
+        .join(USER_PLUGIN_DEV_DIR)
+        .join(SAMPLE_BATCH_SCRIPT_PLUGIN_DIR_NAME);
+    SamplePluginCreationResult {
+        created,
+        directory_path: directory.to_string_lossy().to_string(),
+        manifest_path: directory
+            .join(MANIFEST_FILE_NAME)
+            .to_string_lossy()
+            .to_string(),
+        readme_path: directory.join("README.md").to_string_lossy().to_string(),
+        main_path: Some(directory.join("main.js").to_string_lossy().to_string()),
+    }
+}
+
 fn create_sample_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
     let manifest: Value = serde_json::from_str(SAMPLE_PLUGIN_MANIFEST)
         .map_err(|error| format!("Bundled sample plugin manifest is invalid: {error}"))?;
@@ -1109,12 +1132,16 @@ fn create_sample_script_plugin_at(root: &Path) -> Result<SamplePluginCreationRes
 
     let staging_dir = dev_dir.join(format!(".{SAMPLE_SCRIPT_PLUGIN_DIR_NAME}.creating"));
     remove_path_if_exists(&staging_dir)?;
-    fs::create_dir_all(&staging_dir)
-        .map_err(|error| format!("Failed to create sample script plugin staging directory: {error}"))?;
+    fs::create_dir_all(&staging_dir).map_err(|error| {
+        format!("Failed to create sample script plugin staging directory: {error}")
+    })?;
 
     let write_result = (|| {
-        fs::write(staging_dir.join(MANIFEST_FILE_NAME), SAMPLE_SCRIPT_PLUGIN_MANIFEST)
-            .map_err(|error| format!("Failed to write sample script plugin manifest: {error}"))?;
+        fs::write(
+            staging_dir.join(MANIFEST_FILE_NAME),
+            SAMPLE_SCRIPT_PLUGIN_MANIFEST,
+        )
+        .map_err(|error| format!("Failed to write sample script plugin manifest: {error}"))?;
         fs::write(staging_dir.join("main.js"), SAMPLE_SCRIPT_PLUGIN_MAIN)
             .map_err(|error| format!("Failed to write sample script plugin main.js: {error}"))?;
         fs::write(staging_dir.join("README.md"), SAMPLE_SCRIPT_PLUGIN_README)
@@ -1129,6 +1156,50 @@ fn create_sample_script_plugin_at(root: &Path) -> Result<SamplePluginCreationRes
     }
 
     Ok(sample_script_plugin_creation_result(root, true))
+}
+
+fn create_sample_batch_script_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
+    let manifest: Value = serde_json::from_str(SAMPLE_BATCH_SCRIPT_PLUGIN_MANIFEST)
+        .map_err(|error| format!("Bundled batch script manifest is invalid: {error}"))?;
+    validate_declarative_manifest(SAMPLE_BATCH_SCRIPT_PLUGIN_ID, &manifest)
+        .map_err(|error| format!("Bundled batch script validation failed: {error}"))?;
+
+    let dev_dir = plugin_dev_dir_at(root)?;
+    fs::create_dir_all(&dev_dir)
+        .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
+    let target_dir = dev_dir.join(SAMPLE_BATCH_SCRIPT_PLUGIN_DIR_NAME);
+    if target_dir.exists() {
+        return Ok(sample_batch_script_plugin_creation_result(root, false));
+    }
+
+    let staging_dir = dev_dir.join(format!(".{SAMPLE_BATCH_SCRIPT_PLUGIN_DIR_NAME}.creating"));
+    remove_path_if_exists(&staging_dir)?;
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("Failed to create batch script staging directory: {error}"))?;
+
+    let write_result = (|| {
+        fs::write(
+            staging_dir.join(MANIFEST_FILE_NAME),
+            SAMPLE_BATCH_SCRIPT_PLUGIN_MANIFEST,
+        )
+        .map_err(|error| format!("Failed to write batch script manifest: {error}"))?;
+        fs::write(staging_dir.join("main.js"), SAMPLE_BATCH_SCRIPT_PLUGIN_MAIN)
+            .map_err(|error| format!("Failed to write batch script main.js: {error}"))?;
+        fs::write(
+            staging_dir.join("README.md"),
+            SAMPLE_BATCH_SCRIPT_PLUGIN_README,
+        )
+        .map_err(|error| format!("Failed to write batch script README: {error}"))?;
+        fs::rename(&staging_dir, &target_dir)
+            .map_err(|error| format!("Failed to commit batch script directory: {error}"))
+    })();
+
+    if let Err(error) = write_result {
+        let _ = remove_path_if_exists(&staging_dir);
+        return Err(error);
+    }
+
+    Ok(sample_batch_script_plugin_creation_result(root, true))
 }
 
 #[tauri::command]
@@ -1162,6 +1233,12 @@ fn create_sample_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, St
 fn create_sample_script_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_script_plugin_at(&root)
+}
+
+#[tauri::command]
+fn create_sample_batch_script_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    create_sample_batch_script_plugin_at(&root)
 }
 
 #[tauri::command]
@@ -1865,6 +1942,7 @@ fn main() {
             open_plugin_dev_dir,
             create_sample_plugin,
             create_sample_script_plugin,
+            create_sample_batch_script_plugin,
             open_sample_script_plugin_dir,
             open_plugin_manifest_dir,
             scan_installed_plugin_manifests,
@@ -2094,6 +2172,7 @@ mod tests {
             "templates/custom-templates.json",
             "plugins/plugin-registry.json",
             "plugins/installed/plugin-id/manifest.json",
+            "config/plugin-settings.json",
             "config/recent-files.json",
         ];
 
@@ -2208,6 +2287,51 @@ mod tests {
         assert!(!existing.created);
         assert_eq!(
             fs::read_to_string(&readme_path).expect("README should remain readable"),
+            "user-owned content"
+        );
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn creates_valid_batch_script_sample_without_overwriting_existing_files() {
+        let root = test_root("sample-batch-script-plugin");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+
+        let created = create_sample_batch_script_plugin_at(&root)
+            .expect("batch script sample creation should succeed");
+        assert!(created.created);
+        let manifest_path = PathBuf::from(&created.manifest_path);
+        let main_path = PathBuf::from(
+            created
+                .main_path
+                .as_ref()
+                .expect("batch script sample should include main.js"),
+        );
+        assert!(manifest_path.is_file());
+        assert!(main_path.is_file());
+
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("sample manifest should be readable"),
+        )
+        .expect("sample manifest should be JSON");
+        validate_declarative_manifest(SAMPLE_BATCH_SCRIPT_PLUGIN_ID, &manifest)
+            .expect("batch script sample should satisfy the schema");
+        assert_eq!(
+            manifest["contributions"]["menus"][1]["location"],
+            "node-context"
+        );
+        assert!(fs::read_to_string(&main_path)
+            .expect("main.js should be readable")
+            .contains("addChildNodes"));
+
+        fs::write(&main_path, "user-owned content")
+            .expect("test should replace main.js with user content");
+        let existing = create_sample_batch_script_plugin_at(&root)
+            .expect("existing batch sample should be reported");
+        assert!(!existing.created);
+        assert_eq!(
+            fs::read_to_string(&main_path).expect("main.js should remain readable"),
             "user-owned content"
         );
 
@@ -2710,8 +2834,11 @@ mod tests {
         .expect_err("missing main.js should fail");
         assert!(error.contains("脚本入口文件不存在：main.js"));
 
-        fs::write(source_dir.join("main.js"), "async function run(){ return []; }")
-            .expect("entry should be written");
+        fs::write(
+            source_dir.join("main.js"),
+            "async function run(){ return []; }",
+        )
+        .expect("entry should be written");
         let asset = PluginInstallAsset {
             relative_path: "main.js".to_string(),
             source_path: Some(source_dir.join("main.js").to_string_lossy().to_string()),

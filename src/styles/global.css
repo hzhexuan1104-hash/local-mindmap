@@ -1126,6 +1126,19 @@ h3 {
   box-shadow: 0 18px 48px rgb(15 23 42 / 20%);
 }
 
+.context-menu-plugin-section {
+  border-top: 1px solid var(--border-color, #dbe3ee);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.context-menu-plugin-section > span {
+  color: #64748b;
+  display: block;
+  font-size: 11px;
+  padding: 4px 10px 2px;
+}
+
 .context-menu button {
   width: 100%;
   min-height: 34px;

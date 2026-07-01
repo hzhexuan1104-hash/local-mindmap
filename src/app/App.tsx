@@ -100,6 +100,7 @@ import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
   getPluginMenuGroups,
+  getScriptWritePermissions,
   getPluginNodeTypes,
   getPluginTemplates,
   getPluginThemes,
@@ -110,6 +111,8 @@ import {
   readLocalPluginPackage,
   savePluginRegistry,
   setPluginEnabled,
+  setPluginTrusted,
+  shouldConfirmScriptPluginRun,
   uninstallPlugin,
   PluginManifestError,
   type PluginManifest,
@@ -130,10 +133,15 @@ import {
 import {
   applyScriptPluginActions,
   createScriptPluginContext,
+  validateScriptActionPermissions,
   validateScriptPluginActions,
   type ScriptShowMessageAction,
 } from '../features/plugins/pluginScriptActions';
 import { runScriptPlugin } from '../features/plugins/pluginScriptRunner';
+import {
+  loadPluginSettings,
+  savePluginSettings,
+} from '../features/plugins/pluginSettings';
 import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
   openFileLocation,
@@ -192,6 +200,7 @@ import {
 } from '../features/mindmap/typedNodeCreation';
 import {
   createSamplePlugin,
+  createSampleBatchScriptPlugin,
   createSampleScriptPlugin,
   ensureUserDataDirs,
   getUserDataDir,
@@ -574,11 +583,18 @@ export function App() {
     Record<
       string,
       {
-        status: 'success' | 'failed' | 'disabled';
+        status:
+          | 'success'
+          | 'failed'
+          | 'validation_failed'
+          | 'timeout'
+          | 'runner_disabled';
         message: string;
+        lastRunAt: string;
         actionCount?: number;
+        appliedActionCount?: number;
         durationMs?: number;
-        validationError?: string;
+        error?: string;
       }
     >
   >({});
@@ -897,6 +913,24 @@ export function App() {
     return () => {
       isActive = false;
       window.clearTimeout(messageTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void loadPluginSettings()
+      .then((settings) => {
+        if (active) {
+          setIsScriptRunnerEnabled(settings.scriptRunnerEnabled);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setIsScriptRunnerEnabled(false);
+        }
+      });
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -1517,6 +1551,41 @@ export function App() {
     }
   };
 
+  const handleSetPluginTrusted = async (
+    pluginId: string,
+    trusted: boolean,
+  ) => {
+    const nextPlugins = setPluginTrusted(plugins, pluginId, trusted);
+    try {
+      await savePluginRegistry(nextPlugins);
+      setPlugins(nextPlugins);
+      recordPluginLog(
+        'info',
+        trusted ? 'script-trust-granted' : 'script-trust-revoked',
+        trusted ? 'script trust granted' : 'script trust revoked',
+        pluginId,
+      );
+      showMessage(trusted ? '已信任此脚本插件' : '已取消信任此脚本插件');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '插件信任状态保存失败'));
+    }
+  };
+
+  const handleScriptRunnerEnabledChange = async (enabled: boolean) => {
+    try {
+      await savePluginSettings({ scriptRunnerEnabled: enabled });
+      setIsScriptRunnerEnabled(enabled);
+      recordPluginLog(
+        'info',
+        'script-runner-setting-saved',
+        `script runner setting saved: ${enabled ? 'enabled' : 'disabled'}`,
+      );
+      showMessage(enabled ? '脚本插件运行器已启用' : '脚本插件运行器已关闭');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '脚本运行器设置保存失败'));
+    }
+  };
+
   const handleUninstallPlugin = async (pluginId: string) => {
     const targetPlugin = plugins.find((plugin) => plugin.pluginId === pluginId);
     if (targetPlugin?.builtIn) {
@@ -1666,6 +1735,29 @@ export function App() {
     } catch (error) {
       showMessage(
         `创建脚本插件示例失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleCreateSampleBatchScriptPlugin = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端创建本地批量脚本插件目录。');
+      return;
+    }
+    try {
+      const result = await createSampleBatchScriptPlugin();
+      if (!result) {
+        showMessage('不支持在 Web 端创建本地批量脚本插件目录。');
+        return;
+      }
+      showMessage(
+        result.created
+          ? `批量脚本插件示例已创建：${result.directoryPath}`
+          : '批量脚本插件示例已存在，未覆盖用户文件。',
+      );
+    } catch (error) {
+      showMessage(
+        `创建批量脚本插件示例失败：${getErrorMessage(error, '未知错误')}`,
       );
     }
   };
@@ -2881,7 +2973,10 @@ export function App() {
     }));
   };
 
-  const handleRunScriptPlugin = async (pluginId?: string) => {
+  const handleRunScriptPlugin = async (
+    pluginId?: string,
+    contextNodeId?: string,
+  ) => {
     if (!pluginId) {
       showMessage('脚本插件缺少 pluginId。');
       return;
@@ -2906,8 +3001,10 @@ export function App() {
     if (!isScriptRunnerEnabled) {
       const messageText = '脚本插件运行器尚未启用。';
       setScriptRunResult(pluginId, {
-        status: 'disabled',
+        status: 'runner_disabled',
         message: messageText,
+        lastRunAt: new Date().toISOString(),
+        error: messageText,
       });
       recordPluginLog(
         'warning',
@@ -2919,6 +3016,23 @@ export function App() {
       return;
     }
 
+    const writePermissions = getScriptWritePermissions(plugin);
+    if (shouldConfirmScriptPluginRun(plugin)) {
+      recordPluginLog(
+        'warning',
+        'script-trust-requested',
+        `script trust requested permissions=${writePermissions.join(', ')}`,
+        pluginId,
+      );
+      const allowed = window.confirm(
+        `该脚本插件请求修改当前导图：\n插件：${plugin.name}\n权限：${writePermissions.join(', ')}\n\n确定：允许本次执行\n取消：取消执行`,
+      );
+      if (!allowed) {
+        showMessage('已取消脚本执行。');
+        return;
+      }
+    }
+
     const scriptPath = `plugins/installed/${plugin.pluginId}/${plugin.entry}`;
     recordPluginLog(
       'info',
@@ -2928,13 +3042,27 @@ export function App() {
     );
     try {
       const source = await readUserText(scriptPath);
-      const context = createScriptPluginContext(mindmap, selectedNodeId);
+      const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
+      const context = createScriptPluginContext(
+        mindmap,
+        effectiveSelectedNodeId,
+        contextNodeId ? [contextNodeId] : selectedNodeIds,
+      );
+      recordPluginLog(
+        'info',
+        'script-context-built',
+        `script context built nodeCount=${context.nodes.length} truncated=${Boolean(context.truncated)}`,
+        pluginId,
+      );
       const runResult = await runScriptPlugin({ source, context });
       if (!runResult.ok) {
+        const isTimeout = runResult.error.includes('执行超时');
         setScriptRunResult(pluginId, {
-          status: 'failed',
+          status: isTimeout ? 'timeout' : 'failed',
           message: runResult.error,
+          lastRunAt: new Date().toISOString(),
           durationMs: runResult.durationMs,
+          error: runResult.error,
         });
         recordPluginLog(
           'error',
@@ -2952,10 +3080,15 @@ export function App() {
       );
       if (!validation.valid) {
         setScriptRunResult(pluginId, {
-          status: 'failed',
+          status: 'validation_failed',
           message: validation.error,
+          lastRunAt: new Date().toISOString(),
           durationMs: runResult.durationMs,
-          validationError: validation.error,
+          actionCount: Array.isArray(runResult.actions)
+            ? runResult.actions.length
+            : undefined,
+          appliedActionCount: 0,
+          error: validation.error,
         });
         recordPluginLog(
           'error',
@@ -2966,6 +3099,35 @@ export function App() {
         showMessage(`脚本 action 校验失败：${validation.error}`);
         return;
       }
+      const permissionValidation = validateScriptActionPermissions(
+        validation.actions,
+        plugin.permissions,
+      );
+      if (!permissionValidation.valid) {
+        setScriptRunResult(pluginId, {
+          status: 'validation_failed',
+          message: permissionValidation.error,
+          lastRunAt: new Date().toISOString(),
+          durationMs: runResult.durationMs,
+          actionCount: validation.actions.length,
+          appliedActionCount: 0,
+          error: permissionValidation.error,
+        });
+        recordPluginLog(
+          'error',
+          'script-action-validation-failed',
+          permissionValidation.error,
+          pluginId,
+        );
+        showMessage(`脚本权限校验失败：${permissionValidation.error}`);
+        return;
+      }
+      recordPluginLog(
+        'info',
+        'script-action-batch-validated',
+        `script action batch validated actionCount=${validation.actions.length}`,
+        pluginId,
+      );
 
       const mutatesMindmap = validation.actions.some(
         (action) => action.type !== 'showMessage',
@@ -2975,12 +3137,20 @@ export function App() {
         recordHistory();
         setMindmap(applied.rootNode);
         setIsDocumentDirty(true);
+        recordPluginLog(
+          'info',
+          'script-undo-batch-created',
+          `script undo batch created mutationCount=${applied.mutationCount}`,
+          pluginId,
+        );
       }
       showScriptMessages(applied.messages);
       setScriptRunResult(pluginId, {
         status: 'success',
         message: `已执行 ${applied.appliedCount} 个 actions。`,
+        lastRunAt: new Date().toISOString(),
         actionCount: validation.actions.length,
+        appliedActionCount: applied.appliedCount,
         durationMs: runResult.durationMs,
       });
       recordPluginLog(
@@ -3003,6 +3173,8 @@ export function App() {
       setScriptRunResult(pluginId, {
         status: 'failed',
         message: reason,
+        lastRunAt: new Date().toISOString(),
+        error: reason,
       });
       recordPluginLog(
         'error',
@@ -3021,10 +3193,14 @@ export function App() {
     'builtin.exportText': handleExportTxt,
   };
 
-  const runPluginCommand = async (commandId: string, pluginId?: string) => {
+  const runPluginCommand = async (
+    commandId: string,
+    pluginId?: string,
+    contextNodeId?: string,
+  ) => {
     try {
       if (commandId === 'plugin.runScript') {
-        await handleRunScriptPlugin(pluginId);
+        await handleRunScriptPlugin(pluginId, contextNodeId);
         return;
       }
       await executePluginCommand({
@@ -3057,6 +3233,12 @@ export function App() {
   const pluginMenuGroups = getPluginMenuGroups(plugins, {
     hasMindmap: Boolean(mindmap),
     hasSelectedNode: Boolean(selectedNodeId),
+    location: 'plugins',
+  });
+  const nodeContextPluginMenuGroups = getPluginMenuGroups(plugins, {
+    hasMindmap: Boolean(mindmap),
+    hasSelectedNode: contextMenu?.type === 'node',
+    location: 'node-context',
   });
 
   const topMenus: TopMenuGroup[] = [
@@ -3965,12 +4147,20 @@ export function App() {
           onCreateSampleScriptPlugin={() =>
             void handleCreateSampleScriptPlugin()
           }
+          onCreateSampleBatchScriptPlugin={() =>
+            void handleCreateSampleBatchScriptPlugin()
+          }
           onOpenSampleScriptPluginDir={() =>
             void handleOpenSampleScriptPluginDir()
           }
           isScriptRunnerEnabled={isScriptRunnerEnabled}
-          onScriptRunnerEnabledChange={setIsScriptRunnerEnabled}
+          onScriptRunnerEnabledChange={(enabled) =>
+            void handleScriptRunnerEnabledChange(enabled)
+          }
           scriptRunResults={scriptRunResults}
+          onSetPluginTrusted={(pluginId, trusted) =>
+            void handleSetPluginTrusted(pluginId, trusted)
+          }
           onCopyPluginId={(pluginId) => void handleCopyPluginId(pluginId)}
           onCopyPath={(relativePath, label) =>
             void handleCopyPluginPath(relativePath, label)
@@ -4209,6 +4399,38 @@ export function App() {
               >
                 重新自动布局
               </button>
+              {nodeContextPluginMenuGroups.map((group) => (
+                <div
+                  className="context-menu-plugin-section"
+                  key={`node-context-${group.pluginId}`}
+                >
+                  <span>{group.pluginName}</span>
+                  {group.items.map((menu) => (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      key={menu.id}
+                      onClick={() =>
+                        runContextMenuAction(() => {
+                          recordPluginLog(
+                            'info',
+                            'script-context-menu-invoked',
+                            `script context menu invoked menu=${menu.id} nodeId=${contextMenu.nodeId}`,
+                            group.pluginId,
+                          );
+                          void runPluginCommand(
+                            menu.command,
+                            group.pluginId,
+                            contextMenu.nodeId,
+                          );
+                        })
+                      }
+                    >
+                      {menu.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
             </>
           ) : (
             <>
