@@ -24,6 +24,16 @@ function normalizeScriptSource(source: string) {
     .replace(/\bexport\s+function\s+run\s*\(/, 'function run(');
 }
 
+function validateScriptSourceSafety(source: string) {
+  if (/\bimport\s*\(/.test(source)) {
+    return '脚本插件不支持动态 import 或远程模块。';
+  }
+  if (/\b(?:SharedWorker|Worker)\s*\(/.test(source)) {
+    return '脚本插件不允许创建子 Worker。';
+  }
+  return null;
+}
+
 function createWorkerSource(source: string, context: ScriptPluginContext) {
   return `
 const blocked = () => {
@@ -34,6 +44,10 @@ self.XMLHttpRequest = undefined;
 self.WebSocket = undefined;
 self.EventSource = undefined;
 self.importScripts = blocked;
+self.Worker = undefined;
+self.SharedWorker = undefined;
+self.WebTransport = undefined;
+self.RTCPeerConnection = undefined;
 self.window = undefined;
 self.document = undefined;
 self.__TAURI__ = undefined;
@@ -65,6 +79,14 @@ export function runScriptPlugin(options: {
 }): Promise<ScriptRunResult> {
   const startedAt = performance.now();
   const timeoutMs = options.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
+  const safetyError = validateScriptSourceSafety(options.source);
+  if (safetyError) {
+    return Promise.resolve({
+      ok: false,
+      error: safetyError,
+      durationMs: 0,
+    });
+  }
 
   if (typeof Worker === 'undefined' || typeof Blob === 'undefined') {
     return Promise.resolve({

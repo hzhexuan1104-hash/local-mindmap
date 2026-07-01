@@ -16,6 +16,7 @@ export const USER_DATA_COMMANDS = {
   openPluginDevDir: 'open_plugin_dev_dir',
   createSamplePlugin: 'create_sample_plugin',
   createSampleScriptPlugin: 'create_sample_script_plugin',
+  createSampleBatchScriptPlugin: 'create_sample_batch_script_plugin',
   openSampleScriptPluginDir: 'open_sample_script_plugin_dir',
   openPluginManifestDir: 'open_plugin_manifest_dir',
   scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
@@ -28,6 +29,7 @@ export const USER_DATA_PATHS = {
   templates: 'templates/custom-templates.json',
   templatePacks: 'templates/packs',
   pluginRegistry: 'plugins/plugin-registry.json',
+  pluginSettings: 'config/plugin-settings.json',
   installedPlugins: 'plugins/installed',
   pluginDev: 'plugins/dev',
   appSettings: 'config/app-settings.json',
@@ -521,6 +523,16 @@ export async function createSampleScriptPlugin() {
 
   return invokeUserDataCommand<SamplePluginCreationResult>(
     USER_DATA_COMMANDS.createSampleScriptPlugin,
+  );
+}
+
+export async function createSampleBatchScriptPlugin() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  return invokeUserDataCommand<SamplePluginCreationResult>(
+    USER_DATA_COMMANDS.createSampleBatchScriptPlugin,
   );
 }
 

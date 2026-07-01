@@ -115,6 +115,34 @@ describe('plugin reload from installed manifests', () => {
     ).toBe('重载后的标签');
   });
 
+  it('restores trusted state from registry instead of the installed manifest', async () => {
+    const plugin = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'test.reload.trusted-script',
+      name: 'Trusted script',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+      permissions: ['script', 'node:write'],
+    }).manifest as PluginManifest;
+    await installPluginToUserDir(plugin, false, [{
+      relativePath: 'main.js',
+      text: 'async function run() { return []; }',
+    }]);
+    await savePluginRegistry([{ ...plugin, trusted: true }]);
+
+    await expect(loadPluginRegistry()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: plugin.pluginId,
+          trusted: true,
+          manifestValid: true,
+        }),
+      ]),
+    );
+  });
+
   it('keeps a registry entry visible but suppresses menus when manifest is missing', async () => {
     const plugin = validatePluginManifest(rawPlugin).manifest as PluginManifest;
     await savePluginRegistry([plugin]);

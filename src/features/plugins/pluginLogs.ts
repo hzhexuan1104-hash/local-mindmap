@@ -19,7 +19,15 @@ export type PluginLogEvent =
   | 'script-execution-succeeded'
   | 'script-execution-failed'
   | 'script-action-validation-failed'
-  | 'script-action-applied';
+  | 'script-action-applied'
+  | 'script-trust-requested'
+  | 'script-trust-granted'
+  | 'script-trust-revoked'
+  | 'script-runner-setting-saved'
+  | 'script-context-built'
+  | 'script-action-batch-validated'
+  | 'script-undo-batch-created'
+  | 'script-context-menu-invoked';
 
 export type PluginLogEntry = {
   id: string;

@@ -50,11 +50,7 @@ export type PluginCapability =
   | 'node:read'
   | 'node:write';
 
-export type PluginPermission =
-  | 'mindmap:read'
-  | 'mindmap:write'
-  | 'node:read'
-  | 'node:write';
+export type PluginPermission = string;
 
 export type PluginIconContribution = {
   value: string;
@@ -125,6 +121,7 @@ export type PluginManifest = {
   installedAt: string;
   entry?: string;
   permissions?: PluginPermission[];
+  trusted?: boolean;
   builtIn?: boolean;
   validationWarnings?: string[];
   manifestValid?: boolean;
@@ -202,6 +199,7 @@ export const SUPPORTED_PLUGIN_PERMISSIONS: readonly PluginPermission[] = [
   'mindmap:write',
   'node:read',
   'node:write',
+  'script',
 ] as const;
 
 export const FORBIDDEN_PLUGIN_FIELDS = [
@@ -215,7 +213,9 @@ export const FORBIDDEN_PLUGIN_FIELDS = [
 ] as const;
 
 const FORBIDDEN_PLUGIN_FIELD_SET = new Set<string>(FORBIDDEN_PLUGIN_FIELDS);
-const SUPPORTED_MENU_LOCATION = 'plugins';
+export const SUPPORTED_MENU_LOCATIONS = ['plugins', 'node-context'] as const;
+export type PluginMenuLocation = (typeof SUPPORTED_MENU_LOCATIONS)[number];
+const DEFAULT_MENU_LOCATION: PluginMenuLocation = 'plugins';
 const SUPPORTED_MENU_WHEN: readonly PluginMenuWhen[] = [
   'always',
   'hasMindmap',
@@ -354,10 +354,6 @@ const isPluginType = (value: unknown): value is PluginType =>
 const isPluginCapability = (value: unknown): value is PluginCapability =>
   typeof value === 'string' &&
   SUPPORTED_CAPABILITIES.includes(value as PluginCapability);
-
-const isPluginPermission = (value: unknown): value is PluginPermission =>
-  typeof value === 'string' &&
-  SUPPORTED_PLUGIN_PERMISSIONS.includes(value as PluginPermission);
 
 const isSafePluginId = (value: string) => /^[A-Za-z0-9._-]+$/.test(value);
 
@@ -646,7 +642,7 @@ function normalizeMenu(
 
   const id = asString(value.id).trim();
   const label = asString(value.label).trim();
-  const location = asString(value.location, SUPPORTED_MENU_LOCATION).trim();
+  const location = asString(value.location, DEFAULT_MENU_LOCATION).trim();
   const command = asString(value.command).trim();
   const rawWhen = asString(value.when, 'always').trim();
   const reasons: string[] = [];
@@ -658,7 +654,7 @@ function normalizeMenu(
   } else if (!isPluginCommandId(command)) {
     reasons.push(`插件命令不存在：${command}`);
   }
-  if (location !== SUPPORTED_MENU_LOCATION) {
+  if (!SUPPORTED_MENU_LOCATIONS.includes(location as PluginMenuLocation)) {
     reasons.push(`不支持的菜单位置：${location || '空'}`);
   }
   if (!SUPPORTED_MENU_WHEN.includes(rawWhen as PluginMenuWhen)) {
@@ -1055,22 +1051,30 @@ function validatePluginManifestInternal(
         message: 'permissions 必须是数组。',
       });
     } else {
-      const unsupportedPermissions = value.permissions.filter(
-        (permission) => !isPluginPermission(permission),
+      const nonStringPermissions = value.permissions.filter(
+        (permission) => typeof permission !== 'string',
       );
-      if (unsupportedPermissions.length > 0) {
+      if (nonStringPermissions.length > 0) {
         errors.push({
           code: 'invalid-permissions',
           field: 'permissions',
-          value: unsupportedPermissions,
-          message: `permissions 包含不支持的值：${unsupportedPermissions
-            .map(String)
-            .join(', ')}。支持的 permissions：${SUPPORTED_PLUGIN_PERMISSIONS.join(', ')}`,
+          value: nonStringPermissions,
+          message: 'permissions 只能包含字符串。',
         });
       } else {
         permissions = Array.from(
-          new Set(value.permissions as PluginPermission[]),
+          new Set(
+            (value.permissions as string[])
+              .map((permission) => permission.trim())
+              .filter(Boolean),
+          ),
         );
+        const unknownPermissions = permissions.filter(
+          (permission) => !SUPPORTED_PLUGIN_PERMISSIONS.includes(permission),
+        );
+        if (unknownPermissions.length > 0) {
+          warnings.push(`未知 permissions：${unknownPermissions.join(', ')}。`);
+        }
       }
     }
   }
@@ -1081,6 +1085,9 @@ function validatePluginManifestInternal(
     warnings,
   );
   if (pluginType === 'script') {
+    if (!permissions || permissions.length === 0) {
+      warnings.push('script 插件未声明 permissions。');
+    }
     for (const menu of contributions?.menus ?? []) {
       if (menu.command !== 'plugin.runScript') {
         menu.valid = false;
@@ -1090,6 +1097,19 @@ function validatePluginManifestInternal(
           field: 'contributions.menus.command',
           value: menu.command,
           message: `script 插件菜单 ${menu.id} 的 command 必须是 plugin.runScript。`,
+        });
+      }
+    }
+  } else {
+    for (const menu of contributions?.menus ?? []) {
+      if (menu.command === 'plugin.runScript') {
+        menu.valid = false;
+        menu.invalidReason = '非 script 插件不能使用 plugin.runScript。';
+        errors.push({
+          code: 'invalid-contributions',
+          field: 'contributions.menus.command',
+          value: menu.command,
+          message: `非 script 插件菜单 ${menu.id} 不能使用 plugin.runScript。`,
         });
       }
     }
@@ -1122,6 +1142,7 @@ function validatePluginManifestInternal(
     installedAt: normalizeInstalledAt(value.installedAt),
     entry,
     permissions,
+    trusted: pluginType === 'script' ? false : undefined,
     builtIn: Boolean(value.builtIn),
     config: isRecord(value.config) ? value.config : undefined,
     contributions,
@@ -1154,10 +1175,29 @@ export async function loadPluginRegistry(options?: {
 }): Promise<PluginManifest[]> {
   const snapshot = await reloadPluginsFromDisk();
   const storedPlugins = snapshot.registry;
+  const storedTrustById = new Map<string, boolean>();
+  if (Array.isArray(storedPlugins)) {
+    for (const value of storedPlugins) {
+      if (
+        isRecord(value) &&
+        typeof value.pluginId === 'string' &&
+        typeof value.trusted === 'boolean'
+      ) {
+        storedTrustById.set(value.pluginId, value.trusted);
+      }
+    }
+  }
   const normalizedPlugins = Array.isArray(storedPlugins)
     ? storedPlugins
         .map(normalizePluginManifest)
         .filter((plugin): plugin is PluginManifest => Boolean(plugin))
+        .map((plugin) => ({
+          ...plugin,
+          trusted:
+            plugin.pluginType === 'script'
+              ? storedTrustById.get(plugin.pluginId) ?? false
+              : undefined,
+        }))
     : [];
   const storedById = new Map(
     normalizedPlugins.map((plugin) => [plugin.pluginId, plugin]),
@@ -1204,6 +1244,7 @@ export async function loadPluginRegistry(options?: {
     capabilities: base?.capabilities ?? [],
     enabled: base?.enabled ?? false,
     installedAt: base?.installedAt ?? new Date().toISOString(),
+    trusted: base?.trusted ?? storedTrustById.get(pluginId) ?? false,
     builtIn: false,
     manifestValid: false,
     manifestError,
@@ -1258,6 +1299,7 @@ export async function loadPluginRegistry(options?: {
       return {
         ...result.manifest,
         enabled: registryPlugin.enabled,
+        trusted: storedTrustById.get(registryPlugin.pluginId) ?? false,
         installedAt: registryPlugin.installedAt,
         builtIn: false,
         manifestValid: true,
@@ -1355,6 +1397,33 @@ export function setPluginEnabled(
   );
 }
 
+export function setPluginTrusted(
+  plugins: PluginManifest[],
+  pluginId: string,
+  trusted: boolean,
+) {
+  return plugins.map((plugin) =>
+    plugin.pluginId === pluginId && plugin.pluginType === 'script'
+      ? { ...plugin, trusted }
+      : plugin,
+  );
+}
+
+export function getScriptWritePermissions(plugin: PluginManifest) {
+  return (plugin.permissions ?? []).filter(
+    (permission) =>
+      permission === 'mindmap:write' || permission === 'node:write',
+  );
+}
+
+export function shouldConfirmScriptPluginRun(plugin: PluginManifest) {
+  return (
+    plugin.pluginType === 'script' &&
+    !plugin.trusted &&
+    getScriptWritePermissions(plugin).length > 0
+  );
+}
+
 export function uninstallPlugin(plugins: PluginManifest[], pluginId: string) {
   return plugins.filter(
     (plugin) => plugin.pluginId !== pluginId || plugin.builtIn,
@@ -1372,6 +1441,10 @@ export function installPluginManifest(
     ...manifest,
     builtIn: false,
     enabled: existingPlugin?.enabled ?? manifest.enabled,
+    trusted:
+      manifest.pluginType === 'script'
+        ? existingPlugin?.trusted ?? false
+        : undefined,
     installedAt: new Date().toISOString(),
     source: 'external',
   };
@@ -1559,7 +1632,11 @@ export function getPluginMenus(plugins: PluginManifest[]) {
 
 export function getPluginMenuGroups(
   plugins: PluginManifest[],
-  context: { hasMindmap: boolean; hasSelectedNode: boolean },
+  context: {
+    hasMindmap: boolean;
+    hasSelectedNode: boolean;
+    location?: PluginMenuLocation;
+  },
 ) {
   const groups = new Map<
     string,
@@ -1571,6 +1648,9 @@ export function getPluginMenuGroups(
   >();
 
   for (const { plugin, menu } of getPluginMenus(plugins)) {
+    if (menu.location !== (context.location ?? 'plugins')) {
+      continue;
+    }
     const visible =
       menu.when === 'always' ||
       (menu.when === 'hasMindmap' && context.hasMindmap) ||
