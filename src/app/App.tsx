@@ -100,6 +100,7 @@ import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
   getPluginMenuGroups,
+  getPluginWritePermissions,
   getScriptWritePermissions,
   getPluginNodeTypes,
   getPluginTemplates,
@@ -113,6 +114,7 @@ import {
   setPluginEnabled,
   setPluginTrusted,
   shouldConfirmScriptPluginRun,
+  shouldConfirmWorkflowPluginRun,
   uninstallPlugin,
   PluginManifestError,
   type PluginManifest,
@@ -138,6 +140,11 @@ import {
   type ScriptShowMessageAction,
 } from '../features/plugins/pluginScriptActions';
 import { runScriptPlugin } from '../features/plugins/pluginScriptRunner';
+import {
+  resolveWorkflowActions,
+  requestWorkflowTrustDecision,
+  workflowHasWriteActions,
+} from '../features/plugins/pluginWorkflow';
 import {
   loadPluginSettings,
   savePluginSettings,
@@ -202,6 +209,7 @@ import {
   createSamplePlugin,
   createSampleBatchScriptPlugin,
   createSampleScriptPlugin,
+  createSampleWorkflowPlugin,
   ensureUserDataDirs,
   getUserDataDir,
   installPluginToUserDir,
@@ -340,6 +348,21 @@ type InternalClipboardState = {
   mode: 'copy' | 'cut';
   nodes: MindmapNode[];
   sourceNodeIds: string[];
+};
+
+type PluginRunRecord = {
+  status:
+    | 'success'
+    | 'failed'
+    | 'validation_failed'
+    | 'timeout'
+    | 'runner_disabled';
+  message: string;
+  lastRunAt: string;
+  actionCount?: number;
+  appliedActionCount?: number;
+  durationMs?: number;
+  error?: string;
 };
 
 type BoxSelectionState = {
@@ -580,23 +603,10 @@ export function App() {
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
   const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
   const [scriptRunResults, setScriptRunResults] = useState<
-    Record<
-      string,
-      {
-        status:
-          | 'success'
-          | 'failed'
-          | 'validation_failed'
-          | 'timeout'
-          | 'runner_disabled';
-        message: string;
-        lastRunAt: string;
-        actionCount?: number;
-        appliedActionCount?: number;
-        durationMs?: number;
-        error?: string;
-      }
-    >
+    Record<string, PluginRunRecord>
+  >({});
+  const [workflowRunResults, setWorkflowRunResults] = useState<
+    Record<string, PluginRunRecord>
   >({});
   const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
   const [isDesktopApp] = useState(isDesktopRuntime);
@@ -1509,6 +1519,8 @@ export function App() {
         'info',
         installedManifest.pluginType === 'script'
           ? 'script-plugin-imported'
+          : installedManifest.pluginType === 'action-workflow'
+            ? 'workflow-imported'
           : 'import-success',
         `${exists ? '覆盖安装' : '导入'}成功：${installedManifest.name}`,
         installedManifest.pluginId,
@@ -1555,17 +1567,25 @@ export function App() {
     pluginId: string,
     trusted: boolean,
   ) => {
+    const targetPlugin = plugins.find((plugin) => plugin.pluginId === pluginId);
+    const isWorkflow = targetPlugin?.pluginType === 'action-workflow';
     const nextPlugins = setPluginTrusted(plugins, pluginId, trusted);
     try {
       await savePluginRegistry(nextPlugins);
       setPlugins(nextPlugins);
       recordPluginLog(
         'info',
-        trusted ? 'script-trust-granted' : 'script-trust-revoked',
-        trusted ? 'script trust granted' : 'script trust revoked',
+        isWorkflow
+          ? trusted
+            ? 'workflow-trust-granted'
+            : 'workflow-trust-revoked'
+          : trusted
+            ? 'script-trust-granted'
+            : 'script-trust-revoked',
+        `${isWorkflow ? 'workflow' : 'script'} trust ${trusted ? 'granted' : 'revoked'}`,
         pluginId,
       );
-      showMessage(trusted ? '已信任此脚本插件' : '已取消信任此脚本插件');
+      showMessage(trusted ? '已信任此插件' : '已取消信任此插件');
     } catch (error) {
       showMessage(getErrorMessage(error, '插件信任状态保存失败'));
     }
@@ -1631,11 +1651,15 @@ export function App() {
     event: PluginLogEvent,
     message: string,
     pluginId?: string,
+    details: Pick<
+      PluginLogEntry,
+      'menuId' | 'actionCount' | 'durationMs'
+    > = {},
   ) => {
     setPluginLogs((current) =>
       appendPluginLog(
         current,
-        createPluginLog({ level, event, message, pluginId }),
+        createPluginLog({ level, event, message, pluginId, ...details }),
       ),
     );
   };
@@ -3186,6 +3210,259 @@ export function App() {
     }
   };
 
+  const handleCreateSampleWorkflowPlugin = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端创建本地 JSON Action 工作流目录。');
+      return;
+    }
+    try {
+      const result = await createSampleWorkflowPlugin();
+      if (!result) {
+        showMessage('不支持在 Web 端创建本地 JSON Action 工作流目录。');
+        return;
+      }
+      showMessage(
+        result.created
+          ? `JSON Action 工作流示例已创建：${result.directoryPath}`
+          : 'JSON Action 工作流示例已存在，未覆盖用户文件。',
+      );
+    } catch (error) {
+      showMessage(
+        `创建 JSON Action 工作流示例失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const setWorkflowRunResult = (
+    pluginId: string,
+    result: PluginRunRecord,
+  ) => {
+    setWorkflowRunResults((current) => ({
+      ...current,
+      [pluginId]: result,
+    }));
+  };
+
+  const handleRunWorkflowPlugin = async (
+    pluginId?: string,
+    contextNodeId?: string,
+    menuId?: string,
+  ) => {
+    if (!pluginId) {
+      showMessage('工作流插件缺少 pluginId。');
+      return;
+    }
+    const plugin = plugins.find((item) => item.pluginId === pluginId);
+    if (!plugin?.enabled) {
+      showMessage(`插件已禁用：${pluginId}`);
+      return;
+    }
+    if (plugin.manifestValid === false) {
+      showMessage(`插件 manifest 无效：${pluginId}`);
+      return;
+    }
+    if (plugin.pluginType !== 'action-workflow' || !plugin.workflow) {
+      showMessage(`插件不是有效的 action-workflow：${pluginId}`);
+      return;
+    }
+
+    const startedAt = performance.now();
+    const duration = () => Math.round(performance.now() - startedAt);
+    recordPluginLog(
+      'info',
+      'workflow-execution-started',
+      'workflow execution started',
+      pluginId,
+      { menuId, actionCount: plugin.workflow.actions.length },
+    );
+
+    try {
+      const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
+      const context = createScriptPluginContext(
+        mindmap,
+        effectiveSelectedNodeId,
+        contextNodeId ? [contextNodeId] : selectedNodeIds,
+      );
+      const resolution = resolveWorkflowActions(
+        plugin.workflow.actions,
+        context,
+      );
+      if (!resolution.ok) {
+        const durationMs = duration();
+        setWorkflowRunResult(pluginId, {
+          status: 'failed',
+          message: resolution.error,
+          lastRunAt: new Date().toISOString(),
+          durationMs,
+          actionCount: plugin.workflow.actions.length,
+          appliedActionCount: 0,
+          error: resolution.error,
+        });
+        recordPluginLog(
+          'error',
+          'workflow-execution-failed',
+          resolution.error,
+          pluginId,
+          { menuId, actionCount: plugin.workflow.actions.length, durationMs },
+        );
+        showMessage(`工作流变量解析失败：${resolution.error}`);
+        return;
+      }
+      recordPluginLog(
+        'info',
+        'workflow-variables-resolved',
+        'workflow variables resolved',
+        pluginId,
+        { menuId, actionCount: resolution.actions.length, durationMs: duration() },
+      );
+
+      const validation = validateScriptPluginActions(
+        resolution.actions,
+        mindmap,
+      );
+      if (!validation.valid) {
+        const durationMs = duration();
+        setWorkflowRunResult(pluginId, {
+          status: 'validation_failed',
+          message: validation.error,
+          lastRunAt: new Date().toISOString(),
+          durationMs,
+          actionCount: resolution.actions.length,
+          appliedActionCount: 0,
+          error: validation.error,
+        });
+        recordPluginLog(
+          'error',
+          'workflow-action-validation-failed',
+          validation.error,
+          pluginId,
+          { menuId, actionCount: resolution.actions.length, durationMs },
+        );
+        showMessage(`工作流 action 校验失败：${validation.error}`);
+        return;
+      }
+
+      const permissionValidation = validateScriptActionPermissions(
+        validation.actions,
+        plugin.permissions,
+        '工作流',
+      );
+      if (!permissionValidation.valid) {
+        const durationMs = duration();
+        setWorkflowRunResult(pluginId, {
+          status: 'validation_failed',
+          message: permissionValidation.error,
+          lastRunAt: new Date().toISOString(),
+          durationMs,
+          actionCount: validation.actions.length,
+          appliedActionCount: 0,
+          error: permissionValidation.error,
+        });
+        recordPluginLog(
+          'error',
+          'workflow-action-validation-failed',
+          permissionValidation.error,
+          pluginId,
+          { menuId, actionCount: validation.actions.length, durationMs },
+        );
+        showMessage(`工作流权限校验失败：${permissionValidation.error}`);
+        return;
+      }
+      recordPluginLog(
+        'info',
+        'workflow-action-batch-validated',
+        'workflow action batch validated',
+        pluginId,
+        { menuId, actionCount: validation.actions.length, durationMs: duration() },
+      );
+
+      if (shouldConfirmWorkflowPluginRun(plugin)) {
+        const writePermissions = getPluginWritePermissions(plugin);
+        recordPluginLog(
+          'warning',
+          'workflow-trust-requested',
+          `workflow trust requested permissions=${writePermissions.join(', ')}`,
+          pluginId,
+          { menuId, actionCount: validation.actions.length },
+        );
+        const trustDecision = requestWorkflowTrustDecision(
+          plugin.name,
+          writePermissions,
+          (message) => window.confirm(message),
+        );
+        if (trustDecision === 'cancel') {
+          showMessage('已取消工作流执行。');
+          return;
+        }
+        if (trustDecision === 'trust') {
+          await handleSetPluginTrusted(pluginId, true);
+        }
+      }
+
+      const mutatesMindmap = workflowHasWriteActions(resolution.actions);
+      const applied = applyScriptPluginActions(mindmap, validation.actions);
+      if (mutatesMindmap) {
+        recordHistory();
+        setMindmap(applied.rootNode);
+        setIsDocumentDirty(true);
+        recordPluginLog(
+          'info',
+          'workflow-undo-batch-created',
+          `workflow undo batch created mutationCount=${applied.mutationCount}`,
+          pluginId,
+          { menuId, actionCount: validation.actions.length, durationMs: duration() },
+        );
+      }
+      showScriptMessages(applied.messages);
+      const durationMs = duration();
+      setWorkflowRunResult(pluginId, {
+        status: 'success',
+        message: `已执行 ${applied.appliedCount} 个 actions。`,
+        lastRunAt: new Date().toISOString(),
+        durationMs,
+        actionCount: validation.actions.length,
+        appliedActionCount: applied.appliedCount,
+      });
+      recordPluginLog(
+        'info',
+        'workflow-action-applied',
+        'workflow action applied',
+        pluginId,
+        { menuId, actionCount: validation.actions.length, durationMs },
+      );
+      recordPluginLog(
+        'info',
+        'workflow-execution-succeeded',
+        'workflow execution succeeded',
+        pluginId,
+        { menuId, actionCount: validation.actions.length, durationMs },
+      );
+      if (applied.messages.length === 0) {
+        showMessage('JSON Action 工作流执行完成。');
+      }
+    } catch (error) {
+      const reason = getErrorMessage(error, '工作流执行失败。');
+      const durationMs = duration();
+      setWorkflowRunResult(pluginId, {
+        status: 'failed',
+        message: reason,
+        lastRunAt: new Date().toISOString(),
+        durationMs,
+        actionCount: plugin.workflow.actions.length,
+        appliedActionCount: 0,
+        error: reason,
+      });
+      recordPluginLog(
+        'error',
+        'workflow-execution-failed',
+        reason,
+        pluginId,
+        { menuId, actionCount: plugin.workflow.actions.length, durationMs },
+      );
+      showMessage(`工作流执行失败：${reason}`);
+    }
+  };
+
   const pluginCommandHandlers: PluginCommandHandlers = {
     'builtin.openPluginManager': () => setIsPluginManagerVisible(true),
     'builtin.reloadPlugins': handleReloadPlugins,
@@ -3197,10 +3474,15 @@ export function App() {
     commandId: string,
     pluginId?: string,
     contextNodeId?: string,
+    menuId?: string,
   ) => {
     try {
       if (commandId === 'plugin.runScript') {
         await handleRunScriptPlugin(pluginId, contextNodeId);
+        return;
+      }
+      if (commandId === 'plugin.runWorkflow') {
+        await handleRunWorkflowPlugin(pluginId, contextNodeId, menuId);
         return;
       }
       await executePluginCommand({
@@ -3402,7 +3684,12 @@ export function App() {
           children: group.items.map((menu) => ({
             label: menu.label,
             onSelect: () =>
-              void runPluginCommand(menu.command, group.pluginId),
+              void runPluginCommand(
+                menu.command,
+                group.pluginId,
+                undefined,
+                menu.id,
+              ),
           })),
         })),
       ],
@@ -4150,6 +4437,9 @@ export function App() {
           onCreateSampleBatchScriptPlugin={() =>
             void handleCreateSampleBatchScriptPlugin()
           }
+          onCreateSampleWorkflowPlugin={() =>
+            void handleCreateSampleWorkflowPlugin()
+          }
           onOpenSampleScriptPluginDir={() =>
             void handleOpenSampleScriptPluginDir()
           }
@@ -4158,6 +4448,7 @@ export function App() {
             void handleScriptRunnerEnabledChange(enabled)
           }
           scriptRunResults={scriptRunResults}
+          workflowRunResults={workflowRunResults}
           onSetPluginTrusted={(pluginId, trusted) =>
             void handleSetPluginTrusted(pluginId, trusted)
           }
@@ -4414,14 +4705,18 @@ export function App() {
                         runContextMenuAction(() => {
                           recordPluginLog(
                             'info',
-                            'script-context-menu-invoked',
-                            `script context menu invoked menu=${menu.id} nodeId=${contextMenu.nodeId}`,
+                            menu.command === 'plugin.runWorkflow'
+                              ? 'workflow-context-menu-invoked'
+                              : 'script-context-menu-invoked',
+                            `${menu.command === 'plugin.runWorkflow' ? 'workflow' : 'script'} context menu invoked menu=${menu.id} nodeId=${contextMenu.nodeId}`,
                             group.pluginId,
+                            { menuId: menu.id },
                           );
                           void runPluginCommand(
                             menu.command,
                             group.pluginId,
                             contextMenu.nodeId,
+                            menu.id,
                           );
                         })
                       }

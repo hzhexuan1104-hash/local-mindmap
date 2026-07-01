@@ -42,6 +42,12 @@ const SAMPLE_BATCH_SCRIPT_PLUGIN_MAIN: &str =
     include_str!("../../docs/examples/sample-batch-script-plugin/main.js");
 const SAMPLE_BATCH_SCRIPT_PLUGIN_README: &str =
     include_str!("../../docs/examples/sample-batch-script-plugin/README.md");
+const SAMPLE_WORKFLOW_PLUGIN_DIR_NAME: &str = "sample-json-workflow-plugin";
+const SAMPLE_WORKFLOW_PLUGIN_ID: &str = "localmindmap.workflow.meeting-outline";
+const SAMPLE_WORKFLOW_PLUGIN_MANIFEST: &str =
+    include_str!("../../docs/examples/sample-json-workflow-plugin/manifest.json");
+const SAMPLE_WORKFLOW_PLUGIN_README: &str =
+    include_str!("../../docs/examples/sample-json-workflow-plugin/README.md");
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -80,6 +86,7 @@ const DECLARATIVE_PLUGIN_TYPES: &[&str] = &[
     "template-pack",
     "tool",
     "script",
+    "action-workflow",
 ];
 const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "themes",
@@ -89,6 +96,7 @@ const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "templates",
     "tools",
     "script",
+    "workflow",
     "mindmap:read",
     "mindmap:write",
     "node:read",
@@ -450,6 +458,11 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
             .map(str::trim)
             .ok_or_else(|| "pluginType=script 时 entry 必填。".to_string())?;
         validate_script_entry_path(entry)?;
+    } else if plugin_type == "action-workflow" {
+        if object.contains_key("entry") {
+            return Err("action-workflow 插件不允许声明 entry。".to_string());
+        }
+        validate_action_workflow(object.get("workflow"))?;
     }
 
     match object.get("capabilities") {
@@ -487,10 +500,50 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
         validate_menu_command_shape(contributions)?;
         if plugin_type == "script" {
             validate_script_menu_commands(contributions)?;
+        } else if plugin_type == "action-workflow" {
+            validate_workflow_menu_commands(contributions)?;
+        } else {
+            validate_non_executable_menu_commands(contributions)?;
         }
     }
 
     Ok(())
+}
+
+fn validate_action_workflow(workflow: Option<&Value>) -> Result<(), String> {
+    let workflow = workflow
+        .and_then(Value::as_object)
+        .ok_or_else(|| "pluginType=action-workflow 时 workflow 必须是对象。".to_string())?;
+    if let Some(field) = find_workflow_execution_field(&Value::Object(workflow.clone())) {
+        return Err(format!("workflow 不允许执行代码相关字段：{field}"));
+    }
+    let actions = workflow
+        .get("actions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "workflow.actions 必须是数组。".to_string())?;
+    if actions.is_empty() {
+        return Err("workflow.actions 不能为空。".to_string());
+    }
+    if actions.len() > 20 {
+        return Err("workflow.actions 最多 20 个 action。".to_string());
+    }
+    Ok(())
+}
+
+fn find_workflow_execution_field(value: &Value) -> Option<String> {
+    match value {
+        Value::Array(items) => items.iter().find_map(find_workflow_execution_field),
+        Value::Object(object) => object.iter().find_map(|(key, child)| {
+            let normalized = key.to_ascii_lowercase();
+            if ["entry", "runtime", "commandline", "script", "code"].contains(&normalized.as_str())
+            {
+                Some(key.clone())
+            } else {
+                find_workflow_execution_field(child)
+            }
+        }),
+        _ => None,
+    }
 }
 
 fn validate_script_entry_path(entry: &str) -> Result<(), String> {
@@ -529,6 +582,43 @@ fn validate_script_menu_commands(contributions: &Value) -> Result<(), String> {
         };
         if command != "plugin.runScript" {
             return Err("script 插件菜单 command 必须是 plugin.runScript。".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_workflow_menu_commands(contributions: &Value) -> Result<(), String> {
+    let Some(menus) = contributions.get("menus") else {
+        return Ok(());
+    };
+    let menus = menus
+        .as_array()
+        .ok_or_else(|| "contributions.menus must be an array.".to_string())?;
+    for menu in menus {
+        let Some(command) = menu.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if command != "plugin.runWorkflow" {
+            return Err("action-workflow 插件菜单 command 必须是 plugin.runWorkflow。".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_non_executable_menu_commands(contributions: &Value) -> Result<(), String> {
+    let Some(menus) = contributions.get("menus") else {
+        return Ok(());
+    };
+    let menus = menus
+        .as_array()
+        .ok_or_else(|| "contributions.menus must be an array.".to_string())?;
+    for menu in menus {
+        let command = menu
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if command == "plugin.runScript" || command == "plugin.runWorkflow" {
+            return Err(format!("当前插件类型不能使用 {command}。"));
         }
     }
     Ok(())
@@ -1080,6 +1170,25 @@ fn sample_batch_script_plugin_creation_result(
     }
 }
 
+fn sample_workflow_plugin_creation_result(
+    root: &Path,
+    created: bool,
+) -> SamplePluginCreationResult {
+    let directory = root
+        .join(USER_PLUGIN_DEV_DIR)
+        .join(SAMPLE_WORKFLOW_PLUGIN_DIR_NAME);
+    SamplePluginCreationResult {
+        created,
+        directory_path: directory.to_string_lossy().to_string(),
+        manifest_path: directory
+            .join(MANIFEST_FILE_NAME)
+            .to_string_lossy()
+            .to_string(),
+        readme_path: directory.join("README.md").to_string_lossy().to_string(),
+        main_path: None,
+    }
+}
+
 fn create_sample_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
     let manifest: Value = serde_json::from_str(SAMPLE_PLUGIN_MANIFEST)
         .map_err(|error| format!("Bundled sample plugin manifest is invalid: {error}"))?;
@@ -1202,6 +1311,45 @@ fn create_sample_batch_script_plugin_at(root: &Path) -> Result<SamplePluginCreat
     Ok(sample_batch_script_plugin_creation_result(root, true))
 }
 
+fn create_sample_workflow_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
+    let manifest: Value = serde_json::from_str(SAMPLE_WORKFLOW_PLUGIN_MANIFEST)
+        .map_err(|error| format!("Bundled workflow manifest is invalid: {error}"))?;
+    validate_declarative_manifest(SAMPLE_WORKFLOW_PLUGIN_ID, &manifest)
+        .map_err(|error| format!("Bundled workflow validation failed: {error}"))?;
+
+    let dev_dir = plugin_dev_dir_at(root)?;
+    fs::create_dir_all(&dev_dir)
+        .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
+    let target_dir = dev_dir.join(SAMPLE_WORKFLOW_PLUGIN_DIR_NAME);
+    if target_dir.exists() {
+        return Ok(sample_workflow_plugin_creation_result(root, false));
+    }
+
+    let staging_dir = dev_dir.join(format!(".{SAMPLE_WORKFLOW_PLUGIN_DIR_NAME}.creating"));
+    remove_path_if_exists(&staging_dir)?;
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("Failed to create workflow staging directory: {error}"))?;
+
+    let write_result = (|| {
+        fs::write(
+            staging_dir.join(MANIFEST_FILE_NAME),
+            SAMPLE_WORKFLOW_PLUGIN_MANIFEST,
+        )
+        .map_err(|error| format!("Failed to write workflow manifest: {error}"))?;
+        fs::write(staging_dir.join("README.md"), SAMPLE_WORKFLOW_PLUGIN_README)
+            .map_err(|error| format!("Failed to write workflow README: {error}"))?;
+        fs::rename(&staging_dir, &target_dir)
+            .map_err(|error| format!("Failed to commit workflow directory: {error}"))
+    })();
+
+    if let Err(error) = write_result {
+        let _ = remove_path_if_exists(&staging_dir);
+        return Err(error);
+    }
+
+    Ok(sample_workflow_plugin_creation_result(root, true))
+}
+
 #[tauri::command]
 fn open_plugin_dev_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
@@ -1239,6 +1387,12 @@ fn create_sample_script_plugin(app: AppHandle) -> Result<SamplePluginCreationRes
 fn create_sample_batch_script_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_batch_script_plugin_at(&root)
+}
+
+#[tauri::command]
+fn create_sample_workflow_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    create_sample_workflow_plugin_at(&root)
 }
 
 #[tauri::command]
@@ -1943,6 +2097,7 @@ fn main() {
             create_sample_plugin,
             create_sample_script_plugin,
             create_sample_batch_script_plugin,
+            create_sample_workflow_plugin,
             open_sample_script_plugin_dir,
             open_plugin_manifest_dir,
             scan_installed_plugin_manifests,
@@ -2336,6 +2491,81 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn creates_valid_workflow_sample_without_overwriting_existing_files() {
+        let root = test_root("sample-workflow-plugin");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+
+        let created = create_sample_workflow_plugin_at(&root)
+            .expect("workflow sample creation should succeed");
+        assert!(created.created);
+        let manifest_path = PathBuf::from(&created.manifest_path);
+        let readme_path = PathBuf::from(&created.readme_path);
+        assert!(manifest_path.is_file());
+        assert!(readme_path.is_file());
+        assert!(created.main_path.is_none());
+
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(&manifest_path).expect("manifest should be readable"),
+        )
+        .expect("workflow manifest should be JSON");
+        validate_declarative_manifest(SAMPLE_WORKFLOW_PLUGIN_ID, &manifest)
+            .expect("workflow sample should satisfy the schema");
+        assert_eq!(manifest["pluginType"], "action-workflow");
+        assert_eq!(
+            manifest["contributions"]["menus"][1]["location"],
+            "node-context"
+        );
+
+        fs::write(&readme_path, "user-owned content")
+            .expect("test should replace README with user content");
+        let existing = create_sample_workflow_plugin_at(&root)
+            .expect("existing workflow sample should be reported");
+        assert!(!existing.created);
+        assert_eq!(
+            fs::read_to_string(&readme_path).expect("README should remain readable"),
+            "user-owned content"
+        );
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn validates_workflow_schema_and_command_ownership() {
+        let valid: Value = serde_json::from_str(SAMPLE_WORKFLOW_PLUGIN_MANIFEST)
+            .expect("bundled workflow should parse");
+        validate_declarative_manifest(SAMPLE_WORKFLOW_PLUGIN_ID, &valid)
+            .expect("bundled workflow should validate");
+
+        let mut missing_workflow = valid.clone();
+        missing_workflow
+            .as_object_mut()
+            .expect("manifest should be object")
+            .remove("workflow");
+        assert!(
+            validate_declarative_manifest(SAMPLE_WORKFLOW_PLUGIN_ID, &missing_workflow)
+                .expect_err("missing workflow should fail")
+                .contains("workflow")
+        );
+
+        let mut wrong_command = valid.clone();
+        wrong_command["contributions"]["menus"][0]["command"] =
+            Value::String("plugin.runScript".to_string());
+        assert!(
+            validate_declarative_manifest(SAMPLE_WORKFLOW_PLUGIN_ID, &wrong_command)
+                .expect_err("workflow runScript command should fail")
+                .contains("plugin.runWorkflow")
+        );
+
+        let mut executable_field = valid;
+        executable_field["workflow"]["runtime"] = Value::String("node".to_string());
+        assert!(
+            validate_declarative_manifest(SAMPLE_WORKFLOW_PLUGIN_ID, &executable_field)
+                .expect_err("workflow runtime should fail")
+                .contains("runtime")
+        );
     }
 
     #[cfg(target_os = "windows")]

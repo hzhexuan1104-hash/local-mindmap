@@ -17,6 +17,7 @@ export const USER_DATA_COMMANDS = {
   createSamplePlugin: 'create_sample_plugin',
   createSampleScriptPlugin: 'create_sample_script_plugin',
   createSampleBatchScriptPlugin: 'create_sample_batch_script_plugin',
+  createSampleWorkflowPlugin: 'create_sample_workflow_plugin',
   openSampleScriptPluginDir: 'open_sample_script_plugin_dir',
   openPluginManifestDir: 'open_plugin_manifest_dir',
   scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
@@ -533,6 +534,16 @@ export async function createSampleBatchScriptPlugin() {
 
   return invokeUserDataCommand<SamplePluginCreationResult>(
     USER_DATA_COMMANDS.createSampleBatchScriptPlugin,
+  );
+}
+
+export async function createSampleWorkflowPlugin() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  return invokeUserDataCommand<SamplePluginCreationResult>(
+    USER_DATA_COMMANDS.createSampleWorkflowPlugin,
   );
 }
 

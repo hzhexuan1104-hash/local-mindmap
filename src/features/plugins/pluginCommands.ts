@@ -10,6 +10,7 @@ export const PLUGIN_COMMAND_IDS = [
   'builtin.insertNodeType',
   'builtin.applyTemplate',
   'plugin.runScript',
+  'plugin.runWorkflow',
 ] as const;
 
 export type PluginCommandId = (typeof PLUGIN_COMMAND_IDS)[number];

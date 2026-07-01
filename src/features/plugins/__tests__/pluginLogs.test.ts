@@ -37,4 +37,23 @@ describe('plugin developer logs', () => {
       }),
     ]);
   });
+
+  it('stores structured workflow execution metadata', () => {
+    const log = createPluginLog({
+      timestamp: '2026-07-01T00:00:00.000Z',
+      level: 'info',
+      event: 'workflow-execution-succeeded',
+      pluginId: 'localmindmap.workflow.meeting-outline',
+      menuId: 'createMeetingOutline',
+      actionCount: 2,
+      durationMs: 4,
+      message: 'workflow execution succeeded',
+    });
+    expect(log).toMatchObject({
+      event: 'workflow-execution-succeeded',
+      menuId: 'createMeetingOutline',
+      actionCount: 2,
+      durationMs: 4,
+    });
+  });
 });

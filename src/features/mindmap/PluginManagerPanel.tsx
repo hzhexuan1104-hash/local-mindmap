@@ -2,6 +2,25 @@ import { useMemo, useState } from 'react';
 import type { PluginCategory, PluginManifest } from './plugins';
 import { resolveUserDataPath } from '../storage/userDataStorage';
 import type { PluginLogEntry } from '../plugins/pluginLogs';
+import {
+  getWorkflowActionTypes,
+  workflowHasWriteActions,
+} from '../plugins/pluginWorkflow';
+
+type PluginRunInfo = {
+  status:
+    | 'success'
+    | 'failed'
+    | 'validation_failed'
+    | 'timeout'
+    | 'runner_disabled';
+  message: string;
+  lastRunAt: string;
+  actionCount?: number;
+  appliedActionCount?: number;
+  durationMs?: number;
+  error?: string;
+};
 
 type PluginManagerPanelProps = {
   plugins: PluginManifest[];
@@ -19,26 +38,12 @@ type PluginManagerPanelProps = {
   onCreateSamplePlugin: () => void;
   onCreateSampleScriptPlugin?: () => void;
   onCreateSampleBatchScriptPlugin?: () => void;
+  onCreateSampleWorkflowPlugin?: () => void;
   onOpenSampleScriptPluginDir?: () => void;
   isScriptRunnerEnabled?: boolean;
   onScriptRunnerEnabledChange?: (enabled: boolean) => void;
-  scriptRunResults?: Record<
-    string,
-    {
-      status:
-        | 'success'
-        | 'failed'
-        | 'validation_failed'
-        | 'timeout'
-        | 'runner_disabled';
-      message: string;
-      lastRunAt: string;
-      actionCount?: number;
-      appliedActionCount?: number;
-      durationMs?: number;
-      error?: string;
-    }
-  >;
+  scriptRunResults?: Record<string, PluginRunInfo>;
+  workflowRunResults?: Record<string, PluginRunInfo>;
   onSetPluginTrusted?: (pluginId: string, trusted: boolean) => void;
   onCopyPluginId: (pluginId: string) => void;
   onCopyPath: (relativePath: string, label: string) => void;
@@ -234,10 +239,12 @@ export function PluginManagerPanel({
   onCreateSamplePlugin,
   onCreateSampleScriptPlugin,
   onCreateSampleBatchScriptPlugin,
+  onCreateSampleWorkflowPlugin,
   onOpenSampleScriptPluginDir,
   isScriptRunnerEnabled = false,
   onScriptRunnerEnabledChange,
   scriptRunResults = {},
+  workflowRunResults = {},
   onSetPluginTrusted,
   onCopyPluginId,
   onCopyPath,
@@ -400,6 +407,14 @@ export function PluginManagerPanel({
                 <button
                   type="button"
                   className="secondary-action"
+                  onClick={onCreateSampleWorkflowPlugin}
+                  disabled={!onCreateSampleWorkflowPlugin}
+                >
+                  创建 JSON Action 工作流示例
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
                   onClick={onOpenSampleScriptPluginDir}
                   disabled={!onOpenSampleScriptPluginDir}
                 >
@@ -442,9 +457,8 @@ export function PluginManagerPanel({
                     完整文档：<code>docs/plugin-development.md</code>
                   </p>
                   <p>
-                    Action Protocol 当前仅定义和校验 addNode、addChildNode、
-                    updateNode、deleteNode、setNodeRemark、showMessage、
-                    exportData 与 applyTemplate；本版本不执行 action。
+                    Script 与 JSON Action workflow 共用受控 Action Protocol；
+                    workflow 只解析占位符并执行宿主校验后的 actions，不执行代码。
                   </p>
                 </div>
               ) : null}
@@ -470,6 +484,14 @@ export function PluginManagerPanel({
                           <time>{new Date(log.timestamp).toLocaleString()}</time>
                           <span>{log.level}</span>
                           {log.pluginId ? <code>{log.pluginId}</code> : null}
+                          <code>{log.event}</code>
+                          {log.menuId ? <code>menuId={log.menuId}</code> : null}
+                          {log.actionCount !== undefined ? (
+                            <code>actionCount={log.actionCount}</code>
+                          ) : null}
+                          {log.durationMs !== undefined ? (
+                            <code>durationMs={log.durationMs}</code>
+                          ) : null}
                           <p>{log.message}</p>
                         </li>
                       ))}
@@ -485,7 +507,8 @@ export function PluginManagerPanel({
               <div>
                 <h3>声明式 JSON 插件</h3>
                 <p>
-                  仅接受 .json / .lmplugin；不会执行 JS、命令、Shell 或远程代码。
+                  仅接受 .json / .lmplugin；JSON workflow 不执行 JS、命令、
+                  Shell 或远程代码，script 插件仍受实验 runner 控制。
                 </p>
               </div>
               <div className="plugin-manager-actions">
@@ -560,12 +583,15 @@ export function PluginManagerPanel({
                           <dt>类型</dt>
                           <dd>{plugin.pluginType}</dd>
                         </div>
-                        {plugin.pluginType === 'script' ? (
+                        {plugin.pluginType === 'script' ||
+                        plugin.pluginType === 'action-workflow' ? (
                           <>
-                            <div>
-                              <dt>entry</dt>
-                              <dd>{plugin.entry ?? '未声明'}</dd>
-                            </div>
+                            {plugin.pluginType === 'script' ? (
+                              <div>
+                                <dt>entry</dt>
+                                <dd>{plugin.entry ?? '未声明'}</dd>
+                              </div>
+                            ) : null}
                             <div>
                               <dt>permissions</dt>
                               <dd>
@@ -578,12 +604,14 @@ export function PluginManagerPanel({
                               <dt>trusted</dt>
                               <dd>{String(Boolean(plugin.trusted))}</dd>
                             </div>
-                            <div>
-                              <dt>script runner</dt>
-                              <dd>
-                                {isScriptRunnerEnabled ? 'enabled' : 'disabled'}
-                              </dd>
-                            </div>
+                            {plugin.pluginType === 'script' ? (
+                              <div>
+                                <dt>script runner</dt>
+                                <dd>
+                                  {isScriptRunnerEnabled ? 'enabled' : 'disabled'}
+                                </dd>
+                              </div>
+                            ) : null}
                           </>
                         ) : null}
                         <div>
@@ -700,7 +728,8 @@ export function PluginManagerPanel({
                           ))}
                         </div>
                       ) : null}
-                      {plugin.pluginType === 'script' ? (
+                      {plugin.pluginType === 'script' ||
+                      plugin.pluginType === 'action-workflow' ? (
                         <div className="plugin-validation-report">
                           <strong>权限分组</strong>
                           <p>
@@ -721,9 +750,9 @@ export function PluginManagerPanel({
                           </p>
                           <p>
                             实验权限：
-                            {(plugin.permissions ?? []).includes('script')
-                              ? 'script'
-                              : '无'}
+                            {(plugin.permissions ?? [])
+                              .filter((permission) => permission === 'script')
+                              .join(', ') || '无'}
                           </p>
                           <p>
                             未知权限：
@@ -740,6 +769,35 @@ export function PluginManagerPanel({
                               )
                               .join(', ') || '无'}
                           </p>
+                        </div>
+                      ) : null}
+                      {plugin.pluginType === 'action-workflow' &&
+                      plugin.workflow ? (
+                        <div className="plugin-validation-report">
+                          <strong>JSON Action Workflow</strong>
+                          <p>workflow.name: {plugin.workflow.name || '未声明'}</p>
+                          <p>
+                            workflow.description:{' '}
+                            {plugin.workflow.description || '未声明'}
+                          </p>
+                          <p>actionCount: {plugin.workflow.actions.length}</p>
+                          <p>
+                            actionTypes:{' '}
+                            {getWorkflowActionTypes(plugin.workflow.actions).join(
+                              ', ',
+                            )}
+                          </p>
+                          <p>
+                            hasWriteActions:{' '}
+                            {String(
+                              workflowHasWriteActions(plugin.workflow.actions),
+                            )}
+                          </p>
+                          {plugin.workflow.actions.map((action, index) => (
+                            <pre key={`workflow-action-${index}`}>
+                              {JSON.stringify(action, null, 2)}
+                            </pre>
+                          ))}
                         </div>
                       ) : null}
                       {plugin.pluginType === 'script' &&
@@ -789,10 +847,54 @@ export function PluginManagerPanel({
                           ) : null}
                         </div>
                       ) : null}
+                      {plugin.pluginType === 'action-workflow' &&
+                      workflowRunResults[plugin.pluginId] ? (
+                        <div
+                          className={
+                            workflowRunResults[plugin.pluginId].status ===
+                            'success'
+                              ? 'plugin-validation-report'
+                              : 'plugin-validation-report is-error'
+                          }
+                        >
+                          <strong>最近一次工作流运行</strong>
+                          <p>
+                            lastRunAt:{' '}
+                            {new Date(
+                              workflowRunResults[plugin.pluginId].lastRunAt,
+                            ).toLocaleString()}
+                          </p>
+                          <p>
+                            lastRunStatus:{' '}
+                            {workflowRunResults[plugin.pluginId].status}
+                          </p>
+                          <p>{workflowRunResults[plugin.pluginId].message}</p>
+                          <p>
+                            actionCount:{' '}
+                            {workflowRunResults[plugin.pluginId].actionCount ?? 0}
+                          </p>
+                          <p>
+                            appliedActionCount:{' '}
+                            {workflowRunResults[plugin.pluginId]
+                              .appliedActionCount ?? 0}
+                          </p>
+                          <p>
+                            durationMs:{' '}
+                            {workflowRunResults[plugin.pluginId].durationMs ?? 0}
+                          </p>
+                          {workflowRunResults[plugin.pluginId].error ? (
+                            <p>
+                              error:{' '}
+                              {workflowRunResults[plugin.pluginId].error}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <ContributionDetails plugin={plugin} />
                     </div>
                     <div className="plugin-item-actions">
-                      {plugin.pluginType === 'script' ? (
+                      {plugin.pluginType === 'script' ||
+                      plugin.pluginType === 'action-workflow' ? (
                         <button
                           type="button"
                           className="secondary-action"
