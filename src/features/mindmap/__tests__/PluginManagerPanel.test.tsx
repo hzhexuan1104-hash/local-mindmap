@@ -50,6 +50,69 @@ const pluginWithMenus: PluginManifest = {
 };
 
 describe('PluginManagerPanel installation errors', () => {
+  it('shows JSON Action workflow details, trust and recent run data', () => {
+    const workflowPlugin: PluginManifest = {
+      ...pluginWithMenus,
+      pluginId: 'localmindmap.workflow.meeting-outline',
+      name: '会议纪要结构生成器',
+      pluginType: 'action-workflow',
+      category: 'tool',
+      capabilities: ['workflow', 'node:write'],
+      permissions: ['node:read', 'node:write'],
+      trusted: false,
+      workflow: {
+        name: '会议纪要结构',
+        description: '生成会议节点',
+        actions: [{
+          type: 'addChildNodes',
+          parentId: '$selectedNode.id',
+          nodes: [{ text: '会议背景' }],
+        }],
+      },
+    };
+    const html = renderToStaticMarkup(
+      <PluginManagerPanel
+        {...developerProps}
+        plugins={[workflowPlugin]}
+        lastInstallError=""
+        userDataDir="浏览器本地存储"
+        isDesktopApp={false}
+        onClose={noop}
+        onInstall={noop}
+        onToggle={noop}
+        onUninstall={noop}
+        onCopyUserDataDir={noop}
+        onOpenUserDataDir={noop}
+        onOpenPluginDir={noop}
+        onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
+        workflowRunResults={{
+          [workflowPlugin.pluginId]: {
+            status: 'success',
+            message: '已执行 1 个 actions。',
+            lastRunAt: '2026-07-01T00:00:00.000Z',
+            durationMs: 2,
+            actionCount: 1,
+            appliedActionCount: 1,
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain('action-workflow');
+    expect(html).toContain('JSON Action Workflow');
+    expect(html).toContain('workflow.name:');
+    expect(html).toContain('会议纪要结构');
+    expect(html).toContain('addChildNodes');
+    expect(html).toContain('hasWriteActions:');
+    expect(html).toContain('最近一次工作流运行');
+    expect(html).toContain('信任此插件');
+  });
+
   it('keeps and displays the concrete last installation error', () => {
     const html = renderToStaticMarkup(
       <PluginManagerPanel

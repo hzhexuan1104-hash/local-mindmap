@@ -31,6 +31,7 @@ describe('plugin command registry', () => {
       'builtin.insertNodeType',
       'builtin.applyTemplate',
       'plugin.runScript',
+      'plugin.runWorkflow',
     ]);
   });
 

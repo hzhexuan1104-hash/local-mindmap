@@ -1,0 +1,56 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.workflow.meeting-outline",
+  "name": "会议纪要结构生成器",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "在当前节点下生成会议纪要结构。",
+  "pluginType": "action-workflow",
+  "capabilities": ["workflow", "mindmap:read", "mindmap:write"],
+  "enabled": true,
+  "permissions": [
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write"
+  ],
+  "contributions": {
+    "menus": [
+      {
+        "id": "createMeetingOutline",
+        "label": "生成会议纪要结构",
+        "location": "plugins",
+        "command": "plugin.runWorkflow",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "createMeetingOutlineFromContext",
+        "label": "工作流：生成会议纪要结构",
+        "location": "node-context",
+        "command": "plugin.runWorkflow",
+        "when": "hasSelectedNode"
+      }
+    ]
+  },
+  "workflow": {
+    "name": "会议纪要结构",
+    "description": "给当前节点生成会议纪要子节点。",
+    "actions": [
+      {
+        "type": "addChildNodes",
+        "parentId": "$selectedNode.id",
+        "nodes": [
+          { "text": "会议背景", "remark": "主题：$selectedNode.text" },
+          { "text": "关键议题", "remark": "" },
+          { "text": "讨论结论", "remark": "" },
+          { "text": "行动项", "remark": "生成时间：$date.now" }
+        ]
+      },
+      {
+        "type": "showMessage",
+        "level": "info",
+        "message": "已生成会议纪要结构。"
+      }
+    ]
+  }
+}

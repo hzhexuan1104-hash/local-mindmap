@@ -567,6 +567,7 @@ export function validateScriptPluginActions(
 export function validateScriptActionPermissions(
   actions: ScriptPluginAction[],
   permissions: string[] = [],
+  subject = '脚本',
 ): ScriptActionPermissionResult {
   const mutatesMindmap = actions.some((action) => action.type !== 'showMessage');
   if (
@@ -576,8 +577,7 @@ export function validateScriptActionPermissions(
   ) {
     return {
       valid: false,
-      error:
-        '脚本返回了导图修改 action，但未声明 node:write 或 mindmap:write 权限。',
+      error: `${subject}返回了导图修改 action，但未声明 node:write 或 mindmap:write 权限。`,
     };
   }
   return { valid: true, error: null };

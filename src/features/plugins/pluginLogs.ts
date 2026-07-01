@@ -27,7 +27,20 @@ export type PluginLogEvent =
   | 'script-context-built'
   | 'script-action-batch-validated'
   | 'script-undo-batch-created'
-  | 'script-context-menu-invoked';
+  | 'script-context-menu-invoked'
+  | 'workflow-imported'
+  | 'workflow-execution-started'
+  | 'workflow-variables-resolved'
+  | 'workflow-action-batch-validated'
+  | 'workflow-action-applied'
+  | 'workflow-undo-batch-created'
+  | 'workflow-execution-succeeded'
+  | 'workflow-execution-failed'
+  | 'workflow-action-validation-failed'
+  | 'workflow-trust-requested'
+  | 'workflow-trust-granted'
+  | 'workflow-trust-revoked'
+  | 'workflow-context-menu-invoked';
 
 export type PluginLogEntry = {
   id: string;
@@ -35,6 +48,9 @@ export type PluginLogEntry = {
   level: PluginLogLevel;
   event: PluginLogEvent;
   pluginId?: string;
+  menuId?: string;
+  actionCount?: number;
+  durationMs?: number;
   message: string;
 };
 

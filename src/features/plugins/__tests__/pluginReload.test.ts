@@ -143,6 +143,39 @@ describe('plugin reload from installed manifests', () => {
     );
   });
 
+  it('restores action-workflow trust from registry', async () => {
+    const plugin = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'test.reload.trusted-workflow',
+      name: 'Trusted workflow',
+      version: '1.0.0',
+      pluginType: 'action-workflow',
+      capabilities: ['workflow'],
+      permissions: ['node:write'],
+      workflow: {
+        name: 'Add child',
+        description: '',
+        actions: [{
+          type: 'addChildNode',
+          parentId: '$selectedNode.id',
+          node: { text: 'Child' },
+        }],
+      },
+    }).manifest as PluginManifest;
+    await installPluginToUserDir(plugin);
+    await savePluginRegistry([{ ...plugin, trusted: true }]);
+
+    await expect(loadPluginRegistry()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: plugin.pluginId,
+          trusted: true,
+          manifestValid: true,
+        }),
+      ]),
+    );
+  });
+
   it('keeps a registry entry visible but suppresses menus when manifest is missing', async () => {
     const plugin = validatePluginManifest(rawPlugin).manifest as PluginManifest;
     await savePluginRegistry([plugin]);

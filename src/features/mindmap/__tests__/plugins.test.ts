@@ -10,6 +10,7 @@ import {
 } from '../desktopPlugins';
 import { ensureDesktopConfigDir, getDesktopConfigDir } from '../desktopConfig';
 import samplePluginManifest from '../../../../docs/examples/sample-json-plugin/manifest.json';
+import sampleWorkflowManifest from '../../../../docs/examples/sample-json-workflow-plugin/manifest.json';
 import {
   FORBIDDEN_PLUGIN_FIELDS,
   createPluginOverwritePrompt,
@@ -26,6 +27,7 @@ import {
   setPluginEnabled,
   setPluginTrusted,
   shouldConfirmScriptPluginRun,
+  shouldConfirmWorkflowPluginRun,
   uninstallPlugin,
   validatePluginManifest,
   type PluginManifest,
@@ -62,6 +64,203 @@ describe('bundled developer sample plugin', () => {
           }),
         ],
       },
+    });
+  });
+});
+
+describe('action-workflow manifest validation', () => {
+  const validWorkflowManifest = {
+    ...sampleWorkflowManifest,
+    installedAt: '2026-07-01T00:00:00.000Z',
+  };
+
+  it('accepts the bundled JSON Action workflow sample', () => {
+    const result = validatePluginManifest(validWorkflowManifest);
+    expect(result.valid).toBe(true);
+    expect(result.manifest).toMatchObject({
+      pluginType: 'action-workflow',
+      trusted: false,
+      workflow: {
+        name: '会议纪要结构',
+        actions: expect.any(Array),
+      },
+    });
+  });
+
+  it('requires workflow and a non-empty actions array with at most 20 items', () => {
+    expect(
+      validatePluginManifest({
+        ...validWorkflowManifest,
+        workflow: undefined,
+      }).errors,
+    ).toContainEqual(
+      expect.objectContaining({
+        field: 'workflow',
+        message: 'pluginType=action-workflow 时 workflow 必填。',
+      }),
+    );
+    expect(
+      validatePluginManifest({
+        ...validWorkflowManifest,
+        workflow: { name: 'bad', actions: {} },
+      }).errors,
+    ).toContainEqual(
+      expect.objectContaining({
+        field: 'workflow.actions',
+        message: 'workflow.actions 必须是数组。',
+      }),
+    );
+    expect(
+      validatePluginManifest({
+        ...validWorkflowManifest,
+        workflow: { name: 'empty', actions: [] },
+      }).errors,
+    ).toContainEqual(
+      expect.objectContaining({
+        message: 'workflow.actions 不能为空。',
+      }),
+    );
+    expect(
+      validatePluginManifest({
+        ...validWorkflowManifest,
+        workflow: {
+          name: 'too-many',
+          actions: Array.from({ length: 21 }, () => ({
+            type: 'showMessage',
+            message: 'hello',
+          })),
+        },
+      }).errors,
+    ).toContainEqual(
+      expect.objectContaining({
+        message: 'workflow.actions 最多 20 个 action。',
+      }),
+    );
+  });
+
+  it('enforces script/workflow command ownership', () => {
+    const workflowWithScriptCommand = validatePluginManifest({
+      ...validWorkflowManifest,
+      contributions: {
+        menus: [{
+          id: 'bad',
+          label: 'Bad',
+          location: 'plugins',
+          command: 'plugin.runScript',
+        }],
+      },
+    });
+    expect(workflowWithScriptCommand.valid).toBe(false);
+    expect(workflowWithScriptCommand.errors).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('必须是 plugin.runWorkflow'),
+      }),
+    );
+
+    const scriptWithWorkflowCommand = validatePluginManifest({
+      manifestVersion: 1,
+      pluginId: 'localmindmap.script.bad-workflow-command',
+      name: 'Bad script',
+      version: '1.0.0',
+      pluginType: 'script',
+      capabilities: ['script'],
+      entry: 'main.js',
+      permissions: ['script'],
+      contributions: {
+        menus: [{
+          id: 'bad',
+          label: 'Bad',
+          location: 'plugins',
+          command: 'plugin.runWorkflow',
+        }],
+      },
+    });
+    expect(scriptWithWorkflowCommand.valid).toBe(false);
+    expect(scriptWithWorkflowCommand.errors).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('必须是 plugin.runScript'),
+      }),
+    );
+  });
+
+  it.each(['entry', 'runtime', 'commandLine', 'code', 'script'])(
+    'rejects executable workflow field %s',
+    (field) => {
+      const input =
+        field === 'entry'
+          ? { ...validWorkflowManifest, entry: 'main.js' }
+          : {
+              ...validWorkflowManifest,
+              workflow: {
+                ...validWorkflowManifest.workflow,
+                [field]: 'unsafe',
+              },
+            };
+      expect(validatePluginManifest(input).valid).toBe(false);
+    },
+  );
+
+  it('warns for missing permissions, undeclared writes, and rejected actions', () => {
+    const result = validatePluginManifest({
+      ...validWorkflowManifest,
+      permissions: undefined,
+      workflow: {
+        name: 'unsafe action sample',
+        description: '',
+        actions: [{ type: 'deleteNode', nodeId: '$selectedNode.id' }],
+      },
+    });
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        'action-workflow 插件未声明 permissions。',
+        'workflow 包含写入 action，但未声明 mindmap:write 或 node:write。',
+        expect.stringContaining('deleteNode'),
+      ]),
+    );
+  });
+
+  it('routes workflow top and node-context menus and removes them when disabled', () => {
+    const manifest = validatePluginManifest(
+      validWorkflowManifest,
+    ).manifest as PluginManifest;
+    expect(
+      getPluginMenuGroups([manifest], {
+        hasMindmap: true,
+        hasSelectedNode: true,
+        location: 'plugins',
+      })[0].items.map((menu) => menu.id),
+    ).toEqual(['createMeetingOutline']);
+    expect(
+      getPluginMenuGroups([manifest], {
+        hasMindmap: true,
+        hasSelectedNode: true,
+        location: 'node-context',
+      })[0].items.map((menu) => menu.id),
+    ).toEqual(['createMeetingOutlineFromContext']);
+    expect(
+      getPluginMenuGroups(setPluginEnabled([manifest], manifest.pluginId, false), {
+        hasMindmap: true,
+        hasSelectedNode: true,
+        location: 'node-context',
+      }),
+    ).toEqual([]);
+  });
+
+  it('preserves workflow trusted state during overwrite', () => {
+    const original = validatePluginManifest(
+      validWorkflowManifest,
+    ).manifest as PluginManifest;
+    const trusted = setPluginTrusted([original], original.pluginId, true);
+    expect(shouldConfirmWorkflowPluginRun(original)).toBe(true);
+    expect(shouldConfirmWorkflowPluginRun(trusted[0])).toBe(false);
+    const overwritten = installPluginManifest(trusted, {
+      ...original,
+      version: '1.1.0',
+    });
+    expect(overwritten[0]).toMatchObject({
+      version: '1.1.0',
+      trusted: true,
     });
   });
 });
@@ -123,6 +322,7 @@ describe('declarative plugin manifest validation', () => {
       'template-pack',
       'tool',
       'script',
+      'action-workflow',
     ]);
     expect(SUPPORTED_CAPABILITIES).toEqual([
       'themes',
@@ -132,6 +332,7 @@ describe('declarative plugin manifest validation', () => {
       'templates',
       'tools',
       'script',
+      'workflow',
       'mindmap:read',
       'mindmap:write',
       'node:read',

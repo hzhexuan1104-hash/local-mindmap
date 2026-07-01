@@ -19,6 +19,12 @@ import {
   USER_DATA_PATHS,
   type PluginInstallAsset,
 } from '../storage/userDataStorage';
+import {
+  getWorkflowActionTypes,
+  WORKFLOW_ACTION_LIMIT,
+  workflowHasWriteActions,
+  type ActionWorkflowDefinition,
+} from '../plugins/pluginWorkflow';
 
 export type PluginCategory =
   | 'import-export'
@@ -35,7 +41,8 @@ export type PluginType =
   | 'theme-pack'
   | 'icon-pack'
   | 'tool'
-  | 'script';
+  | 'script'
+  | 'action-workflow';
 
 export type PluginCapability =
   | 'export'
@@ -45,6 +52,7 @@ export type PluginCapability =
   | 'icons'
   | 'tools'
   | 'script'
+  | 'workflow'
   | 'mindmap:read'
   | 'mindmap:write'
   | 'node:read'
@@ -120,6 +128,7 @@ export type PluginManifest = {
   enabled: boolean;
   installedAt: string;
   entry?: string;
+  workflow?: ActionWorkflowDefinition;
   permissions?: PluginPermission[];
   trusted?: boolean;
   builtIn?: boolean;
@@ -158,6 +167,7 @@ export type PluginValidationErrorCode =
   | 'invalid-plugin-id'
   | 'unsupported-plugin-type'
   | 'invalid-script-entry'
+  | 'invalid-workflow'
   | 'invalid-capabilities'
   | 'invalid-permissions'
   | 'unsupported-capability'
@@ -178,6 +188,7 @@ export const SUPPORTED_PLUGIN_TYPES: readonly PluginType[] = [
   'template-pack',
   'tool',
   'script',
+  'action-workflow',
 ] as const;
 
 export const SUPPORTED_CAPABILITIES: readonly PluginCapability[] = [
@@ -188,6 +199,7 @@ export const SUPPORTED_CAPABILITIES: readonly PluginCapability[] = [
   'templates',
   'tools',
   'script',
+  'workflow',
   'mindmap:read',
   'mindmap:write',
   'node:read',
@@ -406,6 +418,33 @@ function findForbiddenField(value: unknown): string | null {
   return null;
 }
 
+const WORKFLOW_EXECUTION_FIELDS = new Set([
+  'entry',
+  'runtime',
+  'commandline',
+  'script',
+  'code',
+]);
+
+function findWorkflowExecutionField(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const field = findWorkflowExecutionField(item);
+      if (field) return field;
+    }
+    return null;
+  }
+  if (!isRecord(value)) return null;
+  for (const [key, child] of Object.entries(value)) {
+    if (WORKFLOW_EXECUTION_FIELDS.has(key.toLowerCase())) {
+      return key;
+    }
+    const field = findWorkflowExecutionField(child);
+    if (field) return field;
+  }
+  return null;
+}
+
 function categoryForPluginType(pluginType: PluginType): PluginCategory {
   const categories: Record<PluginType, PluginCategory> = {
     'import-export': 'import-export',
@@ -415,6 +454,7 @@ function categoryForPluginType(pluginType: PluginType): PluginCategory {
     'icon-pack': 'icon-pack',
     tool: 'tool',
     script: 'tool',
+    'action-workflow': 'tool',
   };
   return categories[pluginType];
 }
@@ -840,6 +880,7 @@ function warnCapabilityContributionMismatch(
     templates: contributions?.templatePacks?.length ?? 0,
     tools: contributions?.tools?.length ?? 0,
     script: contributions?.menus?.length ?? 0,
+    workflow: 0,
     'mindmap:read': 0,
     'mindmap:write': 0,
     'node:read': 0,
@@ -851,7 +892,8 @@ function warnCapabilityContributionMismatch(
       capability === 'mindmap:read' ||
       capability === 'mindmap:write' ||
       capability === 'node:read' ||
-      capability === 'node:write'
+      capability === 'node:write' ||
+      capability === 'workflow'
     ) {
       continue;
     }
@@ -1037,8 +1079,85 @@ function validatePluginManifestInternal(
     } else {
       entry = asString(value.entry).trim().replace(/\\/g, '/');
     }
+  } else if (pluginType === 'action-workflow' && value.entry !== undefined) {
+    errors.push({
+      code: 'invalid-workflow',
+      field: 'entry',
+      value: value.entry,
+      message: 'action-workflow 插件不允许声明 entry。',
+    });
   } else if (value.entry !== undefined) {
     warnings.push('entry 仅在 pluginType=script 时生效。');
+  }
+
+  let workflow: ActionWorkflowDefinition | undefined;
+  if (pluginType === 'action-workflow') {
+    if (!isRecord(value.workflow)) {
+      errors.push({
+        code:
+          value.workflow === undefined
+            ? 'missing-required-field'
+            : 'invalid-workflow',
+        field: 'workflow',
+        value: value.workflow,
+        message:
+          value.workflow === undefined
+            ? 'pluginType=action-workflow 时 workflow 必填。'
+            : 'workflow 必须是对象。',
+      });
+    } else {
+      const executionField = findWorkflowExecutionField(value.workflow);
+      if (executionField) {
+        errors.push({
+          code: 'invalid-workflow',
+          field: `workflow.${executionField}`,
+          message: `workflow 不允许执行代码相关字段：${executionField}`,
+        });
+      }
+      if (!Array.isArray(value.workflow.actions)) {
+        errors.push({
+          code: 'invalid-workflow',
+          field: 'workflow.actions',
+          value: value.workflow.actions,
+          message: 'workflow.actions 必须是数组。',
+        });
+      } else if (value.workflow.actions.length === 0) {
+        errors.push({
+          code: 'invalid-workflow',
+          field: 'workflow.actions',
+          message: 'workflow.actions 不能为空。',
+        });
+      } else if (value.workflow.actions.length > WORKFLOW_ACTION_LIMIT) {
+        errors.push({
+          code: 'invalid-workflow',
+          field: 'workflow.actions',
+          value: value.workflow.actions.length,
+          message: `workflow.actions 最多 ${WORKFLOW_ACTION_LIMIT} 个 action。`,
+        });
+      } else {
+        workflow = {
+          name: asString(value.workflow.name).trim(),
+          description: asString(value.workflow.description).trim(),
+          actions: JSON.parse(
+            JSON.stringify(value.workflow.actions),
+          ) as unknown[],
+        };
+        const unsupportedTypes = getWorkflowActionTypes(workflow.actions).filter(
+          (type) =>
+            type === 'deleteNode' ||
+            type === 'applyTemplate' ||
+            type === 'addNode' ||
+            type === 'invalid',
+        );
+        if (unsupportedTypes.length > 0) {
+          warnings.push(
+            `workflow 包含当前不支持或无效的 action：${Array.from(new Set(unsupportedTypes)).join(', ')}；执行时将整批拒绝。`,
+          );
+        }
+      }
+    }
+  } else if (value.workflow !== undefined) {
+    warnings.push('workflow 仅在 pluginType=action-workflow 时生效。');
   }
 
   let permissions: PluginPermission[] | undefined;
@@ -1100,16 +1219,54 @@ function validatePluginManifestInternal(
         });
       }
     }
-  } else {
+  } else if (pluginType === 'action-workflow') {
+    if (!permissions || permissions.length === 0) {
+      warnings.push('action-workflow 插件未声明 permissions。');
+    }
+    if (
+      workflow &&
+      workflowHasWriteActions(workflow.actions) &&
+      !permissions?.some(
+        (permission) =>
+          permission === 'mindmap:write' || permission === 'node:write',
+      )
+    ) {
+      warnings.push(
+        'workflow 包含写入 action，但未声明 mindmap:write 或 node:write。',
+      );
+    }
     for (const menu of contributions?.menus ?? []) {
-      if (menu.command === 'plugin.runScript') {
+      if (menu.command !== 'plugin.runWorkflow') {
         menu.valid = false;
-        menu.invalidReason = '非 script 插件不能使用 plugin.runScript。';
+        menu.invalidReason =
+          'action-workflow 插件菜单 command 必须是 plugin.runWorkflow。';
         errors.push({
           code: 'invalid-contributions',
           field: 'contributions.menus.command',
           value: menu.command,
-          message: `非 script 插件菜单 ${menu.id} 不能使用 plugin.runScript。`,
+          message: `action-workflow 插件菜单 ${menu.id} 的 command 必须是 plugin.runWorkflow。`,
+        });
+      }
+    }
+  } else {
+    for (const menu of contributions?.menus ?? []) {
+      if (
+        menu.command === 'plugin.runScript' ||
+        menu.command === 'plugin.runWorkflow'
+      ) {
+        menu.valid = false;
+        menu.invalidReason =
+          menu.command === 'plugin.runScript'
+            ? '非 script 插件不能使用 plugin.runScript。'
+            : '非 action-workflow 插件不能使用 plugin.runWorkflow。';
+        errors.push({
+          code: 'invalid-contributions',
+          field: 'contributions.menus.command',
+          value: menu.command,
+          message:
+            menu.command === 'plugin.runScript'
+              ? `非 script 插件菜单 ${menu.id} 不能使用 plugin.runScript。`
+              : `非 action-workflow 插件菜单 ${menu.id} 不能使用 plugin.runWorkflow。`,
         });
       }
     }
@@ -1141,8 +1298,12 @@ function validatePluginManifestInternal(
     enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
     installedAt: normalizeInstalledAt(value.installedAt),
     entry,
+    workflow,
     permissions,
-    trusted: pluginType === 'script' ? false : undefined,
+    trusted:
+      pluginType === 'script' || pluginType === 'action-workflow'
+        ? false
+        : undefined,
     builtIn: Boolean(value.builtIn),
     config: isRecord(value.config) ? value.config : undefined,
     contributions,
@@ -1194,7 +1355,8 @@ export async function loadPluginRegistry(options?: {
         .map((plugin) => ({
           ...plugin,
           trusted:
-            plugin.pluginType === 'script'
+            plugin.pluginType === 'script' ||
+            plugin.pluginType === 'action-workflow'
               ? storedTrustById.get(plugin.pluginId) ?? false
               : undefined,
         }))
@@ -1403,7 +1565,9 @@ export function setPluginTrusted(
   trusted: boolean,
 ) {
   return plugins.map((plugin) =>
-    plugin.pluginId === pluginId && plugin.pluginType === 'script'
+    plugin.pluginId === pluginId &&
+    (plugin.pluginType === 'script' ||
+      plugin.pluginType === 'action-workflow')
       ? { ...plugin, trusted }
       : plugin,
   );
@@ -1416,11 +1580,21 @@ export function getScriptWritePermissions(plugin: PluginManifest) {
   );
 }
 
+export const getPluginWritePermissions = getScriptWritePermissions;
+
 export function shouldConfirmScriptPluginRun(plugin: PluginManifest) {
   return (
     plugin.pluginType === 'script' &&
     !plugin.trusted &&
     getScriptWritePermissions(plugin).length > 0
+  );
+}
+
+export function shouldConfirmWorkflowPluginRun(plugin: PluginManifest) {
+  return (
+    plugin.pluginType === 'action-workflow' &&
+    !plugin.trusted &&
+    Boolean(plugin.workflow && workflowHasWriteActions(plugin.workflow.actions))
   );
 }
 
@@ -1442,7 +1616,8 @@ export function installPluginManifest(
     builtIn: false,
     enabled: existingPlugin?.enabled ?? manifest.enabled,
     trusted:
-      manifest.pluginType === 'script'
+      manifest.pluginType === 'script' ||
+      manifest.pluginType === 'action-workflow'
         ? existingPlugin?.trusted ?? false
         : undefined,
     installedAt: new Date().toISOString(),

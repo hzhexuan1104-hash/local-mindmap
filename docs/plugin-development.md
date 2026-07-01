@@ -372,3 +372,136 @@ plugins/dev/sample-batch-script-plugin/
 必须经宿主整批校验。继续不支持 Shell、DLL、Python、外部命令、远程插件
 市场、任意文件系统访问、网络、DOM、Tauri API 或 React state。超时机制和
 runner 默认关闭策略保持不变。
+
+## JSON Action 插件 / 工作流插件
+
+`pluginType: "action-workflow"` 允许开发者直接在 manifest 中声明一组
+`workflow.actions`。宿主只读取 JSON、解析变量并执行 Action Protocol，
+不会加载或执行 JavaScript。
+
+### Manifest 与 workflow.actions
+
+```json
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.workflow.meeting-outline",
+  "name": "会议纪要结构生成器",
+  "version": "1.0.0",
+  "pluginType": "action-workflow",
+  "capabilities": ["workflow", "mindmap:read", "mindmap:write"],
+  "permissions": ["mindmap:read", "mindmap:write", "node:read", "node:write"],
+  "contributions": {
+    "menus": [
+      {
+        "id": "createMeetingOutline",
+        "label": "生成会议纪要结构",
+        "location": "plugins",
+        "command": "plugin.runWorkflow",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "createMeetingOutlineFromContext",
+        "label": "工作流：生成会议纪要结构",
+        "location": "node-context",
+        "command": "plugin.runWorkflow",
+        "when": "hasSelectedNode"
+      }
+    ]
+  },
+  "workflow": {
+    "name": "会议纪要结构",
+    "description": "给当前节点生成会议纪要子节点。",
+    "actions": [
+      {
+        "type": "addChildNodes",
+        "parentId": "$selectedNode.id",
+        "nodes": [
+          { "text": "会议背景", "remark": "" },
+          { "text": "关键议题", "remark": "" },
+          { "text": "讨论结论", "remark": "" },
+          { "text": "行动项", "remark": "生成时间：$date.now" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`workflow` 必须是对象，`workflow.actions` 必须包含 1–20 个 action。
+action-workflow 的菜单命令只能是 `plugin.runWorkflow`；script 插件仍只能
+使用 `plugin.runScript`。workflow 不能声明 `entry`、`runtime`、
+`commandLine`、`script` 或 `code` 等执行代码字段。
+
+安装期会检查 workflow 结构，并对缺失权限、写入 action 和当前不支持的 action
+给出诊断。节点是否存在、长度限制和最终 action 合法性在每次执行时使用当前
+导图重新校验。
+
+### 变量占位符
+
+本批支持：
+
+- `$selectedNode.id`
+- `$selectedNode.text`
+- `$selectedNode.remark`
+- `$mindmap.title`
+- `$date.today`（本地日期，`YYYY-MM-DD`）
+- `$date.now`（ISO 时间）
+
+`parentId` 和 `nodeId` 可直接使用 `$selectedNode.id`，`text`、`remark` 和
+`message` 可在普通字符串中嵌入变量。未知变量会使整批执行失败；没有选中节点
+却引用 `$selectedNode.*` 也会失败。工作流不支持复杂表达式、`eval` 或
+JavaScript `${...}` 模板表达式。
+
+节点右键菜单触发时，宿主使用右键菜单保存的 node ID 构建 context，因此变量
+绑定被右键点击的节点，而不是依赖异步 UI selection state。
+
+### Actions、权限与历史
+
+工作流与脚本插件复用同一套 Action Protocol，支持：
+
+- `showMessage`
+- `updateNode` / `updateNodes`
+- `setNodeRemark`
+- `addChildNode` / `addChildNodes`
+- `appendNodeText` / `prependNodeText`
+- `appendNodeRemark`
+
+`deleteNode`、`applyTemplate`、`addNode` 和未知 action 明确拒绝。变量解析后，
+所有 actions 整批校验；任一失败则完全不执行。
+
+action-workflow 默认 `trusted=false`。含写入 action 的未信任工作流运行时先
+允许用户取消或继续；继续后可选择“信任此插件”或“仅允许本次”。trusted 状态
+与脚本插件一样保存在 `plugins/plugin-registry.json`，覆盖安装保留，卸载清理，
+详情页可取消信任。只包含 `showMessage` 的只读工作流不显示写权限确认。
+
+工作流声明写入 action 却没有 `mindmap:write` 或 `node:write` 时，安装显示
+warning，执行时权限校验拒绝修改。manifest 缺失或损坏时，即使 trusted=true
+也不会运行。
+
+一次成功运行产生的全部修改 actions 只压入一个 undo 快照；Ctrl+Z 一次撤销
+整批，Ctrl+Y 一次恢复。纯 `showMessage`、变量失败、action 校验失败和权限失败
+都不产生历史步骤。
+
+### 示例、菜单与日志
+
+开发者模式中的“创建 JSON Action 工作流示例”生成：
+
+```text
+plugins/dev/sample-json-workflow-plugin/
+  manifest.json
+  README.md
+```
+
+仓库示例位于 `docs/examples/sample-json-workflow-plugin/`。导入 manifest 后，
+可从顶部插件菜单或节点右键菜单运行会议纪要结构生成器。
+
+详情页显示 workflow 名称、描述、action 数量、action 类型、完整 action 明细、
+是否包含写操作、trusted 和最近运行结果。日志记录 workflow 导入、执行开始、
+变量解析、batch 校验、action 应用、undo batch、成功/失败、trust 和右键调用，
+并可携带 `menuId`、`actionCount`、`durationMs`。
+
+### 安全边界
+
+JSON Action 工作流不执行 JS、Shell、DLL、Python 或外部命令，不访问文件系统、
+网络、DOM、Tauri API 或 React state。它只能执行宿主解析并校验通过的结构化
+actions；v1.7 声明式插件和 v1.8 script 插件沿用各自既有执行边界。
