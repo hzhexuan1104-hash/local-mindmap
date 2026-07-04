@@ -11,6 +11,7 @@ export const PLUGIN_COMMAND_IDS = [
   'builtin.applyTemplate',
   'plugin.runScript',
   'plugin.runWorkflow',
+  'plugin.runExternal',
 ] as const;
 
 export type PluginCommandId = (typeof PLUGIN_COMMAND_IDS)[number];

@@ -18,6 +18,7 @@ export const USER_DATA_COMMANDS = {
   createSampleScriptPlugin: 'create_sample_script_plugin',
   createSampleBatchScriptPlugin: 'create_sample_batch_script_plugin',
   createSampleWorkflowPlugin: 'create_sample_workflow_plugin',
+  createSamplePythonPlugin: 'create_sample_python_plugin',
   openSampleScriptPluginDir: 'open_sample_script_plugin_dir',
   openPluginManifestDir: 'open_plugin_manifest_dir',
   scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
@@ -395,7 +396,7 @@ export async function loadPluginRegistry() {
   );
 }
 
-export async function savePluginRegistry(plugins: PluginManifest[]) {
+export async function savePluginRegistry(plugins: unknown[]) {
   return writeUserJson(
     USER_DATA_PATHS.pluginRegistry,
     plugins,
@@ -544,6 +545,16 @@ export async function createSampleWorkflowPlugin() {
 
   return invokeUserDataCommand<SamplePluginCreationResult>(
     USER_DATA_COMMANDS.createSampleWorkflowPlugin,
+  );
+}
+
+export async function createSamplePythonPlugin() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+
+  return invokeUserDataCommand<SamplePluginCreationResult>(
+    USER_DATA_COMMANDS.createSamplePythonPlugin,
   );
 }
 

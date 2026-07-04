@@ -11,12 +11,14 @@ import {
 import { ensureDesktopConfigDir, getDesktopConfigDir } from '../desktopConfig';
 import samplePluginManifest from '../../../../docs/examples/sample-json-plugin/manifest.json';
 import sampleWorkflowManifest from '../../../../docs/examples/sample-json-workflow-plugin/manifest.json';
+import samplePythonManifest from '../../../../docs/examples/sample-python-plugin/manifest.json';
 import {
   FORBIDDEN_PLUGIN_FIELDS,
   createPluginOverwritePrompt,
   SUPPORTED_CAPABILITIES,
   SUPPORTED_PLUGIN_TYPES,
   getPluginNodeTypes,
+  getPersistablePluginRegistry,
   getPluginMenuGroups,
   getScriptWritePermissions,
   getPluginTemplates,
@@ -28,10 +30,174 @@ import {
   setPluginTrusted,
   shouldConfirmScriptPluginRun,
   shouldConfirmWorkflowPluginRun,
+  shouldConfirmExternalPluginRun,
   uninstallPlugin,
   validatePluginManifest,
   type PluginManifest,
 } from '../plugins';
+
+describe('external-command manifest validation', () => {
+  const manifest = {
+    ...samplePythonManifest,
+    installedAt: '2026-07-03T00:00:00.000Z',
+  };
+
+  it('accepts the bundled Python sample and defaults trust to false', () => {
+    expect(validatePluginManifest(manifest)).toMatchObject({
+      valid: true,
+      manifest: {
+        pluginType: 'external-command',
+        runtime: 'python',
+        entry: 'main.py',
+        trusted: false,
+      },
+    });
+  });
+
+  it.each([
+    ['missing runtime', { runtime: undefined }, 'runtime 必填'],
+    ['bad runtime', { runtime: 'shell' }, '仅允许 python 或 executable'],
+    ['missing entry', { entry: undefined }, 'entry 必填'],
+    ['absolute entry', { entry: 'C:\\plugin\\main.py' }, '相对路径'],
+    ['parent entry', { entry: '../main.py' }, '不允许包含'],
+    ['remote entry', { entry: 'https://example.com/main.py' }, '远程 URL'],
+    ['wrong python suffix', { entry: 'main.js' }, '必须是 .py'],
+  ])('rejects %s', (_name, patch, expectedMessage) => {
+    const result = validatePluginManifest({ ...manifest, ...patch });
+    expect(result.valid).toBe(false);
+    expect(result.errors.map((error) => error.message).join(' ')).toContain(
+      expectedMessage,
+    );
+  });
+
+  it('requires .exe for executable entries on Windows schema', () => {
+    const result = validatePluginManifest({
+      ...manifest,
+      runtime: 'executable',
+      entry: 'keyword-plugin.bin',
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors[0].message).toContain('必须是 .exe');
+  });
+
+  it.each(['commandLine', 'args', 'shell', 'script', 'code'])(
+    'rejects forbidden field %s',
+    (field) => {
+      const result = validatePluginManifest({
+        ...manifest,
+        [field]: field === 'args' ? [] : 'unsafe',
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ code: 'forbidden-field', field }),
+      );
+    },
+  );
+
+  it('enforces command ownership across executable plugin types', () => {
+    for (const command of ['plugin.runScript', 'plugin.runWorkflow']) {
+      const result = validatePluginManifest({
+        ...manifest,
+        contributions: {
+          menus: [
+            {
+              id: 'bad',
+              label: 'Bad',
+              location: 'plugins',
+              command,
+            },
+          ],
+        },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors[0].message).toContain('plugin.runExternal');
+    }
+
+    for (const pluginType of ['script', 'action-workflow'] as const) {
+      const result = validatePluginManifest(
+        pluginType === 'script'
+          ? {
+              ...manifest,
+              pluginType,
+              runtime: undefined,
+              entry: 'main.js',
+              capabilities: ['script'],
+              permissions: ['script'],
+              contributions: {
+                menus: [
+                  {
+                    id: 'bad',
+                    label: 'Bad',
+                    command: 'plugin.runExternal',
+                  },
+                ],
+              },
+            }
+          : {
+              ...manifest,
+              pluginType,
+              runtime: undefined,
+              entry: undefined,
+              capabilities: ['workflow'],
+              permissions: [],
+              workflow: {
+                name: 'test',
+                actions: [{ type: 'showMessage', message: 'ok' }],
+              },
+              contributions: {
+                menus: [
+                  {
+                    id: 'bad',
+                    label: 'Bad',
+                    command: 'plugin.runExternal',
+                  },
+                ],
+              },
+            },
+      );
+      expect(result.valid).toBe(false);
+    }
+  });
+
+  it('warns when external-command permission is missing', () => {
+    const result = validatePluginManifest({
+      ...manifest,
+      permissions: ['mindmap:read'],
+    });
+    expect(result.valid).toBe(true);
+    expect(result.warnings).toContain(
+      'external-command 插件 permissions 缺少 external-command。',
+    );
+  });
+
+  it('preserves external trust during overwrite', () => {
+    const parsed = validatePluginManifest(manifest).manifest!;
+    const trusted = setPluginTrusted([parsed], parsed.pluginId, true);
+    expect(shouldConfirmExternalPluginRun(trusted[0])).toBe(false);
+    const overwritten = installPluginManifest(trusted, {
+      ...parsed,
+      version: '2.0.0',
+      trusted: false,
+    });
+    expect(overwritten[0].trusted).toBe(true);
+  });
+
+  it('persists only lifecycle metadata in the registry', () => {
+    const parsed = validatePluginManifest(manifest).manifest!;
+    const [entry] = getPersistablePluginRegistry([parsed]);
+    expect(entry).toMatchObject({
+      pluginId: parsed.pluginId,
+      enabled: true,
+      trusted: false,
+      installedAt: parsed.installedAt,
+      updatedAt: expect.any(String),
+    });
+    expect(entry).not.toHaveProperty('runtime');
+    expect(entry).not.toHaveProperty('entry');
+    expect(entry).not.toHaveProperty('permissions');
+    expect(entry).not.toHaveProperty('contributions');
+  });
+});
 
 const validManifest = {
   pluginId: 'example-plugin',
@@ -323,6 +489,7 @@ describe('declarative plugin manifest validation', () => {
       'tool',
       'script',
       'action-workflow',
+      'external-command',
     ]);
     expect(SUPPORTED_CAPABILITIES).toEqual([
       'themes',
@@ -333,6 +500,7 @@ describe('declarative plugin manifest validation', () => {
       'tools',
       'script',
       'workflow',
+      'external-command',
       'mindmap:read',
       'mindmap:write',
       'node:read',

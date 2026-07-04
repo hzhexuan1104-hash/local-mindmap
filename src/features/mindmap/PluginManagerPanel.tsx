@@ -20,6 +20,9 @@ type PluginRunInfo = {
   appliedActionCount?: number;
   durationMs?: number;
   error?: string;
+  exitCode?: number | null;
+  stdoutSize?: number;
+  stderrPreview?: string;
 };
 
 type PluginManagerPanelProps = {
@@ -39,11 +42,18 @@ type PluginManagerPanelProps = {
   onCreateSampleScriptPlugin?: () => void;
   onCreateSampleBatchScriptPlugin?: () => void;
   onCreateSampleWorkflowPlugin?: () => void;
+  onCreateSamplePythonPlugin?: () => void;
   onOpenSampleScriptPluginDir?: () => void;
   isScriptRunnerEnabled?: boolean;
   onScriptRunnerEnabledChange?: (enabled: boolean) => void;
   scriptRunResults?: Record<string, PluginRunInfo>;
   workflowRunResults?: Record<string, PluginRunInfo>;
+  isExternalRunnerEnabled?: boolean;
+  onExternalRunnerEnabledChange?: (enabled: boolean) => void;
+  pythonPath?: string;
+  onSavePythonPath?: (pythonPath: string) => void;
+  onTestPython?: (pythonPath: string) => void;
+  externalRunResults?: Record<string, PluginRunInfo>;
   onSetPluginTrusted?: (pluginId: string, trusted: boolean) => void;
   onCopyPluginId: (pluginId: string) => void;
   onCopyPath: (relativePath: string, label: string) => void;
@@ -240,11 +250,18 @@ export function PluginManagerPanel({
   onCreateSampleScriptPlugin,
   onCreateSampleBatchScriptPlugin,
   onCreateSampleWorkflowPlugin,
+  onCreateSamplePythonPlugin,
   onOpenSampleScriptPluginDir,
   isScriptRunnerEnabled = false,
   onScriptRunnerEnabledChange,
   scriptRunResults = {},
   workflowRunResults = {},
+  isExternalRunnerEnabled = false,
+  onExternalRunnerEnabledChange,
+  pythonPath = 'python',
+  onSavePythonPath,
+  onTestPython,
+  externalRunResults = {},
   onSetPluginTrusted,
   onCopyPluginId,
   onCopyPath,
@@ -259,6 +276,7 @@ export function PluginManagerPanel({
   const [category, setCategory] = useState<'' | PluginCategory>('');
   const [showApiDocs, setShowApiDocs] = useState(false);
   const [showPluginLogs, setShowPluginLogs] = useState(false);
+  const [pythonPathDraft, setPythonPathDraft] = useState(pythonPath);
 
   const visiblePlugins = useMemo(() => {
     const query = keyword.trim().toLowerCase();
@@ -362,6 +380,46 @@ export function PluginManagerPanel({
               <p className="plugin-safety-note">
                 脚本插件是实验能力，默认关闭。脚本只能返回 actions，由宿主校验后执行；本批不支持 Shell、DLL、文件系统或网络访问。
               </p>
+              <label className="stacked-control">
+                <span>启用外部命令插件运行器</span>
+                <input
+                  type="checkbox"
+                  checked={isExternalRunnerEnabled}
+                  onChange={(event) =>
+                    onExternalRunnerEnabledChange?.(event.target.checked)
+                  }
+                />
+              </label>
+              <p className="plugin-safety-note">
+                外部命令插件是高风险实验功能，默认关闭。宿主不使用 Shell，
+                仅以固定参数启动 Python 或直接启动本地可执行文件；外部进程在
+                操作系统层面仍可能访问本机资源，请只运行可信插件。
+              </p>
+              <label className="stacked-control">
+                <span>Python 运行时路径</span>
+                <input
+                  type="text"
+                  value={pythonPathDraft}
+                  placeholder="python 或 Python 可执行文件绝对路径"
+                  onChange={(event) => setPythonPathDraft(event.target.value)}
+                />
+              </label>
+              <div className="plugin-manager-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => onSavePythonPath?.(pythonPathDraft)}
+                >
+                  保存 Python 路径
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => onTestPython?.(pythonPathDraft)}
+                >
+                  测试 Python
+                </button>
+              </div>
               {!isDesktopApp ? (
                 <p className="plugin-web-warning">
                   不支持在 Web 端打开本地目录。
@@ -411,6 +469,14 @@ export function PluginManagerPanel({
                   disabled={!onCreateSampleWorkflowPlugin}
                 >
                   创建 JSON Action 工作流示例
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onCreateSamplePythonPlugin}
+                  disabled={!onCreateSamplePythonPlugin}
+                >
+                  创建 Python 插件示例
                 </button>
                 <button
                   type="button"
@@ -584,12 +650,20 @@ export function PluginManagerPanel({
                           <dd>{plugin.pluginType}</dd>
                         </div>
                         {plugin.pluginType === 'script' ||
-                        plugin.pluginType === 'action-workflow' ? (
+                        plugin.pluginType === 'action-workflow' ||
+                        plugin.pluginType === 'external-command' ? (
                           <>
-                            {plugin.pluginType === 'script' ? (
+                            {plugin.pluginType === 'script' ||
+                            plugin.pluginType === 'external-command' ? (
                               <div>
                                 <dt>entry</dt>
                                 <dd>{plugin.entry ?? '未声明'}</dd>
+                              </div>
+                            ) : null}
+                            {plugin.pluginType === 'external-command' ? (
+                              <div>
+                                <dt>runtime</dt>
+                                <dd>{plugin.runtime ?? '未声明'}</dd>
                               </div>
                             ) : null}
                             <div>
@@ -611,6 +685,24 @@ export function PluginManagerPanel({
                                   {isScriptRunnerEnabled ? 'enabled' : 'disabled'}
                                 </dd>
                               </div>
+                            ) : null}
+                            {plugin.pluginType === 'external-command' ? (
+                              <>
+                                <div>
+                                  <dt>external runner</dt>
+                                  <dd>
+                                    {isExternalRunnerEnabled
+                                      ? 'enabled'
+                                      : 'disabled'}
+                                  </dd>
+                                </div>
+                                {plugin.runtime === 'python' ? (
+                                  <div>
+                                    <dt>Python path</dt>
+                                    <dd>{pythonPath}</dd>
+                                  </div>
+                                ) : null}
+                              </>
                             ) : null}
                           </>
                         ) : null}
@@ -729,7 +821,8 @@ export function PluginManagerPanel({
                         </div>
                       ) : null}
                       {plugin.pluginType === 'script' ||
-                      plugin.pluginType === 'action-workflow' ? (
+                      plugin.pluginType === 'action-workflow' ||
+                      plugin.pluginType === 'external-command' ? (
                         <div className="plugin-validation-report">
                           <strong>权限分组</strong>
                           <p>
@@ -751,7 +844,11 @@ export function PluginManagerPanel({
                           <p>
                             实验权限：
                             {(plugin.permissions ?? [])
-                              .filter((permission) => permission === 'script')
+                              .filter((permission) =>
+                                ['script', 'external-command'].includes(
+                                  permission,
+                                ),
+                              )
                               .join(', ') || '无'}
                           </p>
                           <p>
@@ -765,6 +862,7 @@ export function PluginManagerPanel({
                                     'mindmap:write',
                                     'node:write',
                                     'script',
+                                    'external-command',
                                   ].includes(permission),
                               )
                               .join(', ') || '无'}
@@ -798,6 +896,63 @@ export function PluginManagerPanel({
                               {JSON.stringify(action, null, 2)}
                             </pre>
                           ))}
+                        </div>
+                      ) : null}
+                      {plugin.pluginType === 'external-command' &&
+                      externalRunResults[plugin.pluginId] ? (
+                        <div
+                          className={
+                            externalRunResults[plugin.pluginId].status ===
+                            'success'
+                              ? 'plugin-validation-report'
+                              : 'plugin-validation-report is-error'
+                          }
+                        >
+                          <strong>最近一次外部命令运行</strong>
+                          <p>
+                            lastRunAt:{' '}
+                            {new Date(
+                              externalRunResults[plugin.pluginId].lastRunAt,
+                            ).toLocaleString()}
+                          </p>
+                          <p>
+                            status: {externalRunResults[plugin.pluginId].status}
+                          </p>
+                          <p>
+                            durationMs:{' '}
+                            {externalRunResults[plugin.pluginId].durationMs ?? 0}
+                          </p>
+                          <p>
+                            exitCode:{' '}
+                            {String(
+                              externalRunResults[plugin.pluginId].exitCode ??
+                                'null',
+                            )}
+                          </p>
+                          <p>
+                            stdoutSize:{' '}
+                            {externalRunResults[plugin.pluginId].stdoutSize ?? 0}
+                          </p>
+                          <p>
+                            actionCount:{' '}
+                            {externalRunResults[plugin.pluginId].actionCount ?? 0}
+                          </p>
+                          <p>
+                            appliedActionCount:{' '}
+                            {externalRunResults[plugin.pluginId]
+                              .appliedActionCount ?? 0}
+                          </p>
+                          {externalRunResults[plugin.pluginId].stderrPreview ? (
+                            <p>
+                              stderr preview:{' '}
+                              {externalRunResults[plugin.pluginId].stderrPreview}
+                            </p>
+                          ) : null}
+                          {externalRunResults[plugin.pluginId].error ? (
+                            <p>
+                              error: {externalRunResults[plugin.pluginId].error}
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
                       {plugin.pluginType === 'script' &&
@@ -894,7 +1049,8 @@ export function PluginManagerPanel({
                     </div>
                     <div className="plugin-item-actions">
                       {plugin.pluginType === 'script' ||
-                      plugin.pluginType === 'action-workflow' ? (
+                      plugin.pluginType === 'action-workflow' ||
+                      plugin.pluginType === 'external-command' ? (
                         <button
                           type="button"
                           className="secondary-action"

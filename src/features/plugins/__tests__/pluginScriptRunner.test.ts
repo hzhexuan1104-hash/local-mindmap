@@ -3,6 +3,7 @@ import { runScriptPlugin } from '../pluginScriptRunner';
 import type { ScriptPluginContext } from '../pluginScriptActions';
 
 const context: ScriptPluginContext = {
+  contextVersion: 1,
   app: { version: '1.8.0', platform: 'desktop' },
   mindmap: {
     title: 'Root',

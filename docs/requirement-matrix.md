@@ -129,3 +129,16 @@
 | TBD-006 | “大篇幅备注”的文本规模、图片数量、代码块数量等测试边界需要明确。 | PERF-003、REMARK-001 到 REMARK-005 |
 | TBD-007 | 可扩展性要求提到插件化解耦，但插件管理系统为 P2；第一版是否只需预留架构接口，还是需要可运行插件底座？ | EXT-001、PLUGIN-001 到 PLUGIN-007 |
 | TBD-008 | “对齐主流思维导图工具习惯”的具体对标产品和交互细节需要明确。 | UX-003 |
+
+## v1.9.0 外部命令插件增量矩阵
+
+| 编号 | 优先级 | 需求 | 状态 |
+|---|---|---|---|
+| PLUGIN-EXT-001 | P2 | `pluginType=external-command` 支持 python/executable 且严格校验 entry | 已实现 |
+| PLUGIN-EXT-002 | P2 | stdin context / stdout actions 协议，复用 Action Protocol | 已实现 |
+| PLUGIN-EXT-003 | P2 | 无 Shell 启动、5 秒超时、1MB stdout、stderr/exitCode 处理 | 已实现 |
+| PLUGIN-EXT-004 | P2 | runner 默认关闭并持久化，Python 路径保存与测试 | 已实现 |
+| PLUGIN-EXT-005 | P2 | trusted、权限确认、覆盖安装保留信任 | 已实现 |
+| PLUGIN-EXT-006 | P2 | 顶部菜单、node-context、undo/redo batch | 已实现 |
+| PLUGIN-EXT-007 | P2 | Python 示例、详情、日志和开发文档 | 已实现 |
+| PLUGIN-EXT-008 | P2 | Shell、DLL、远程 URL、市场、自动依赖安装 | 明确不支持 |

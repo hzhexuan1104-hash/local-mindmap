@@ -58,7 +58,8 @@ describe('Script Plugin Action validation', () => {
   it('creates a JSON-safe context snapshot', () => {
     const context = createScriptPluginContext(rootNode, 'node-1');
     expect(context).toEqual({
-      app: { version: '1.8.0', platform: 'desktop' },
+      contextVersion: 1,
+      app: { version: '1.9.0', platform: 'desktop' },
       mindmap: {
         title: 'Root',
         nodeCount: 2,

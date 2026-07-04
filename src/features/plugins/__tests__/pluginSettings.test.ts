@@ -38,10 +38,18 @@ describe('plugin runner settings', () => {
   it('keeps the runner setting after a reload', async () => {
     await expect(loadPluginSettings()).resolves.toEqual({
       scriptRunnerEnabled: false,
+      externalRunnerEnabled: false,
+      pythonPath: 'python',
     });
-    await savePluginSettings({ scriptRunnerEnabled: true });
+    await savePluginSettings({
+      scriptRunnerEnabled: true,
+      externalRunnerEnabled: true,
+      pythonPath: 'python3',
+    });
     await expect(loadPluginSettings()).resolves.toEqual({
       scriptRunnerEnabled: true,
+      externalRunnerEnabled: true,
+      pythonPath: 'python3',
     });
   });
 });
