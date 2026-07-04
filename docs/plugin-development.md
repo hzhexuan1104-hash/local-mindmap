@@ -899,3 +899,146 @@ catalog 字段：
 - `riskLevel`：`low`、`medium` 或 `high`。
 
 示例库结构与维护细则见 `docs/examples/plugin-gallery/README.md`。
+
+## v1.11 插件开发者工作台 / 打包向导
+
+### 入口与本地目录
+
+打开“插件管理”，展开“开发者模式”，即可看到“插件开发者工作台”卡片。工作台
+只读写本机用户数据目录，不联网、不访问远程市场，也不会执行尚未安装的项目代码。
+
+开发项目根目录：
+
+```text
+<用户数据目录>/plugins/dev/
+```
+
+每个项目使用安全的 pluginId 作为目录名：
+
+```text
+plugins/dev/localmindmap.user.my-plugin/
+  manifest.json
+  README.md
+  main.js / main.py / plugin.exe
+  icons/
+  assets/
+```
+
+pluginId 建议由插件名称自动生成：转为小写、空格转短横线、移除非法字符并添加
+`localmindmap.user.` 前缀。pluginId 只允许 ASCII 字母、数字、点、下划线和短横线；
+拒绝绝对路径、路径分隔符、`..`、Windows ADS、首尾点号和 Windows 保留设备名。
+已有项目默认不覆盖；只有用户在二次确认后才使用临时目录原子替换。
+
+创建成功后卡片显示完整目录，并提供“打开项目目录”和“复制项目路径”。“打开插件
+开发目录”打开 `plugins/dev/`；“查看示例插件目录”打开随应用内置并物化到本地的
+官方示例；“查看插件开发文档”打开本文档的本地副本。
+
+### 新建项目与模板选择
+
+点击“新建插件项目”，填写名称、pluginId、version、author、description，选择模板、
+菜单位置和是否生成 README / 示例 entry。当前模板：
+
+1. `import-export`：生成 `builtin.exportText` 的 `exporters` 和 `menus`，不生成代码。
+2. `action-workflow`：在 manifest 内生成 `showMessage`、`addChildNodes`、
+   `setNodeRemark`，并演示 `$selectedNode.text`、`$mindmap.title`、
+   `$date.today`；不生成代码。
+3. `script`：生成 `entry: "main.js"` 与 Web Worker `run(context)` 示例，返回三个
+   子节点，不访问 DOM、window 或 fetch。
+4. `external-command / python`：生成 `entry: "main.py"`，从 UTF-8 stdin 读取
+   context，并以 `ensure_ascii=False` 向 stdout 返回 actions JSON。
+5. `external-command / executable`：生成 `entry: "plugin.exe"` 的 manifest 和
+   README 提示，不生成真实 EXE。开发者必须自行编译并放入项目目录。
+6. `theme-pack`：生成纯声明式主题贡献，不执行代码。
+
+菜单位置支持顶部 `plugins` 和节点右键 `node-context`。运行型模板分别固定使用
+`plugin.runScript`、`plugin.runWorkflow` 或 `plugin.runExternal`。
+
+### 校验 manifest 与项目
+
+在“当前开发项目 pluginId”中选择项目，点击“校验插件项目”。校验结果显示
+Valid / Invalid、errors、warnings、pluginId、pluginType、runtime、entry、
+permissions、contributions 摘要和“是否可打包”。
+
+校验覆盖：
+
+- `manifest.json` 存在、UTF-8 JSON 有效，并兼容 UTF-8 BOM。
+- manifest schema、必填字段、pluginId 与目录名一致。
+- pluginId 安全，不能形成绝对路径、遍历、ADS 或保留设备名。
+- entry 必须是项目内安全相对路径；拒绝 `..`、绝对路径、URL、ADS 和空路径段。
+- entry 文件必须存在；工作台 script 固定 `main.js`，Python 固定 `main.py`，
+  executable 固定 `.exe`。
+- `shell`、`commandLine`、`args`、`eval`、`code` 等执行字段拒绝。
+- contributions 的 command / handler 必须来自宿主白名单。
+- permissions 必须与 pluginType 匹配；external-command 必须声明
+  `external-command`。
+- README 缺失只产生 warning，不阻止打包。
+- 声明式、Workflow、script、Python/executable 分别显示低、中或高风险提示。
+
+executable 项目在 `plugin.exe` 尚未放入目录时会显示“待补充 entry 文件”，结果为
+Invalid，`canPackage=false`。
+
+### 打包 `.lmplugin`
+
+点击“打包为 .lmplugin”，选择输出位置；文件名默认为 `<pluginId>.lmplugin`，
+文件对话框优先打开桌面。打包前会重新运行完整校验，Invalid 项目禁止打包。
+
+开发项目打包包含：
+
+- 清理安装元数据后的根目录 `manifest.json`。
+- manifest 声明的 entry（如有）。
+- `README.md`（如有）。
+- 项目内其他普通资源，例如 `icons/`、`assets/`。
+
+打包明确排除：
+
+- `plugin-registry.json`、`desktop-plugin-registry.json`。
+- manifest 中的 `trusted`、`enabled`、`installedAt`、`updatedAt` 和诊断字段。
+- `node_modules/`、`.git/`、`logs/`。
+- `.tmp`、`.temp`、`.log`、备份文件和项目内已有 `.lmplugin`。
+- 绝对路径、符号链接/重解析点、ZIP Slip 路径和越界资源。
+
+宿主先写同目录临时包，完成后使用现有 `.lmplugin` 检查器重新验证
+manifest、entry、路径、重复项和解压体积，成功后才提交目标文件。失败会清理临时包。
+卡片显示完整输出路径、包内文件列表，并提供复制路径和打开所在目录。
+
+### 导入打包结果
+
+点击“导入本地打包插件”，选择刚生成的 `.lmplugin`。此入口复用现有导入和事务
+安装流程：安装成功后刷新插件列表，显示 `plugins/installed/<pluginId>/` 和
+warnings。新安装始终 `trusted=false`；覆盖安装保留原 `enabled`、`trusted` 和
+首次安装时间。
+
+安装不等于信任。`trusted` 只保存在 `plugins/plugin-registry.json`，用于运行时
+授权，不属于可分发 manifest，因此工作台打包永远不包含 trusted。script 和
+external runner 仍默认关闭；包被校验或安装不会自动启用 runner，也不会执行代码。
+
+### Python UTF-8 最小示例
+
+```python
+import json
+import sys
+
+try:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+context = json.load(sys.stdin)
+print(json.dumps({"actions": []}, ensure_ascii=False))
+```
+
+### 常见错误
+
+- `manifest JSON 无效`：检查 JSON 逗号、引号和 UTF-8 编码；UTF-8 BOM 可接受。
+- `entry 文件不存在`：把 `main.js`、`main.py` 或 `.exe` 放到 manifest 指定位置。
+- `entry 不允许包含 ..`：entry 只能指向项目目录内的普通相对路径。
+- `runtime=executable 时 entry 必须是 .exe`：Windows executable 不接受
+  `.dll`、`.bin` 或脚本文件。
+- `command 不在白名单`：使用对应模板固定的宿主 command。
+- `shell / commandLine / args 不允许`：外部命令入口和启动参数由宿主固定，
+  插件不能请求 Shell 或自定义命令行。
+
+工作台操作会写入开发者日志：项目创建、manifest 校验、校验失败、包构建、
+构建失败和打包结果导入验证。

@@ -18,6 +18,13 @@ import {
   getWorkflowActionTypes,
   workflowHasWriteActions,
 } from '../plugins/pluginWorkflow';
+import { PluginDevWorkbench } from '../plugins/PluginDevWorkbenchPanel';
+import type {
+  DevPluginPackageResult,
+  DevPluginProjectRequest,
+  DevPluginProjectResult,
+  DevPluginValidationResult,
+} from '../plugins/pluginDevWorkbench';
 
 type PluginRunInfo = {
   status:
@@ -54,6 +61,21 @@ type PluginManagerPanelProps = {
   onOpenUserDataDir: () => void;
   onOpenPluginDir: () => void;
   onOpenPluginDevDir: () => void;
+  onCreateDevProject?: (
+    request: DevPluginProjectRequest,
+  ) => Promise<DevPluginProjectResult | null>;
+  onValidateDevProject?: (
+    pluginId: string,
+  ) => Promise<DevPluginValidationResult | null>;
+  onBuildDevPackage?: (
+    pluginId: string,
+  ) => Promise<DevPluginPackageResult | null>;
+  onOpenDevProjectDir?: (pluginId: string) => void;
+  onOpenPluginExamplesDir?: () => void;
+  onImportDevPackage?: () => void;
+  recentDevProject?: DevPluginProjectResult | null;
+  recentDevValidation?: DevPluginValidationResult | null;
+  recentDevPackage?: DevPluginPackageResult | null;
   onCreateSamplePlugin: () => void;
   onCreateSampleScriptPlugin?: () => void;
   onCreateSampleBatchScriptPlugin?: () => void;
@@ -270,6 +292,15 @@ export function PluginManagerPanel({
   onOpenUserDataDir,
   onOpenPluginDir,
   onOpenPluginDevDir,
+  onCreateDevProject,
+  onValidateDevProject,
+  onBuildDevPackage,
+  onOpenDevProjectDir,
+  onOpenPluginExamplesDir,
+  onImportDevPackage,
+  recentDevProject = null,
+  recentDevValidation = null,
+  recentDevPackage = null,
   onCreateSamplePlugin,
   onCreateSampleScriptPlugin,
   onCreateSampleBatchScriptPlugin,
@@ -419,18 +450,47 @@ export function PluginManagerPanel({
             <summary>
               <span>
                 <strong>开发者模式</strong>
-                <small>声明式插件工具与 API 草案</small>
+                <small>插件开发者工作台与本地运行器设置</small>
               </span>
             </summary>
             <div className="plugin-developer-content">
               <p>
-                当前版本支持声明式 JSON 插件。插件可以贡献菜单、导出项、主题、
-                图标、节点类型和模板等声明式能力。
+                当前版本支持声明式、JSON Action Workflow、受控 script 和
+                external-command 插件；工作台覆盖模板创建、校验、打包与本地导入验证。
               </p>
               <p className="plugin-safety-note">
                 仅在显式启用后通过 Web Worker 执行本地脚本插件。脚本只接收
                 JSON context snapshot，只能返回由宿主校验的 actions。
               </p>
+              <PluginDevWorkbench
+                isDesktopApp={isDesktopApp}
+                devRootPath={resolveUserDataPath(userDataDir, 'plugins/dev')}
+                recentProject={recentDevProject}
+                recentValidation={recentDevValidation}
+                recentPackage={recentDevPackage}
+                onCreateProject={
+                  onCreateDevProject ?? (async () => null)
+                }
+                onValidateProject={
+                  onValidateDevProject ?? (async () => null)
+                }
+                onBuildPackage={
+                  onBuildDevPackage ?? (async () => null)
+                }
+                onImportPackage={onImportDevPackage ?? onInstall}
+                onOpenDevDir={onOpenPluginDevDir}
+                onOpenProjectDir={onOpenDevProjectDir ?? (() => undefined)}
+                onOpenExamplesDir={
+                  onOpenPluginExamplesDir ?? (() => undefined)
+                }
+                onOpenDocs={
+                  onOpenPluginDevelopmentDocs ?? (() => undefined)
+                }
+                onCopyPath={onCopyPath}
+                onOpenPackageLocation={
+                  onOpenExportLocation ?? (() => undefined)
+                }
+              />
               <label className="stacked-control">
                 <span>启用实验性脚本插件运行器</span>
                 <input

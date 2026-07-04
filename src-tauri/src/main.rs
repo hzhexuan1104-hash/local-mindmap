@@ -117,6 +117,28 @@ const EXTERNAL_MAX_TIMEOUT_MS: u64 = 30_000;
 const PLUGIN_PACKAGE_MAX_ENTRIES: usize = 1_000;
 const PLUGIN_PACKAGE_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024;
 const PLUGIN_PACKAGE_MAX_TOTAL_SIZE: u64 = 128 * 1024 * 1024;
+const DEV_PLUGIN_TEMPLATE_TYPES: &[&str] = &[
+    "import-export",
+    "action-workflow",
+    "script",
+    "external-command-python",
+    "external-command-executable",
+    "theme-pack",
+];
+const DEV_PLUGIN_MENU_LOCATIONS: &[&str] = &["plugins", "node-context"];
+const PLUGIN_COMMAND_WHITELIST: &[&str] = &[
+    "builtin.openPluginManager",
+    "builtin.reloadPlugins",
+    "builtin.openPluginDirectory",
+    "builtin.exportText",
+    "builtin.exportJson",
+    "builtin.applyTheme",
+    "builtin.insertNodeType",
+    "builtin.applyTemplate",
+    "plugin.runScript",
+    "plugin.runWorkflow",
+    "plugin.runExternal",
+];
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -1956,6 +1978,1308 @@ fn plugin_dev_dir_at(root: &Path) -> Result<PathBuf, String> {
     resolve_user_relative_path(root, USER_PLUGIN_DEV_DIR)
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevPluginProjectRequest {
+    name: String,
+    plugin_id: String,
+    version: String,
+    author: String,
+    description: String,
+    template_type: String,
+    menu_location: String,
+    generate_readme: bool,
+    generate_entry: bool,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevPluginProjectResult {
+    created: bool,
+    overwritten: bool,
+    plugin_id: String,
+    plugin_type: String,
+    runtime: Option<String>,
+    directory_path: String,
+    manifest_path: String,
+    readme_path: Option<String>,
+    entry_path: Option<String>,
+    files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DevPluginValidationIssue {
+    code: String,
+    field: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevPluginValidationResult {
+    valid: bool,
+    errors: Vec<DevPluginValidationIssue>,
+    warnings: Vec<DevPluginValidationIssue>,
+    plugin_id: Option<String>,
+    plugin_type: Option<String>,
+    runtime: Option<String>,
+    entry: Option<String>,
+    permissions: Vec<String>,
+    contribution_summary: BTreeMap<String, usize>,
+    can_package: bool,
+    project_dir: String,
+    manifest_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevPluginPackageResult {
+    plugin_id: String,
+    package_path: String,
+    file_count: usize,
+    files: Vec<String>,
+    validation: DevPluginValidationResult,
+}
+
+struct DevPluginTemplate {
+    manifest: Value,
+    entry_name: Option<&'static str>,
+    entry_content: Option<String>,
+    readme: String,
+}
+
+fn validate_dev_plugin_id(plugin_id: &str) -> Result<(), String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("pluginId 不能为空。".to_string());
+    }
+    if plugin_id.len() > 128 {
+        return Err("pluginId 不能超过 128 个字符。".to_string());
+    }
+    if !is_safe_plugin_id(plugin_id)
+        || plugin_id == "."
+        || plugin_id == ".."
+        || plugin_id.contains("..")
+        || plugin_id.starts_with('.')
+        || plugin_id.ends_with('.')
+    {
+        return Err(
+            "pluginId 只能包含字母、数字、点、下划线和短横线，且不能包含路径、`..`、Windows ADS 或首尾点号。"
+                .to_string(),
+        );
+    }
+    let upper = plugin_id.to_ascii_uppercase();
+    let base = upper.split('.').next().unwrap_or_default();
+    let reserved = matches!(
+        base,
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
+    if reserved {
+        return Err("pluginId 不能使用 Windows 保留设备名。".to_string());
+    }
+    Ok(())
+}
+
+fn dev_menu(id: &str, label: &str, location: &str, command: &str, when: &str) -> Value {
+    json!({
+        "id": id,
+        "label": label,
+        "location": location,
+        "command": command,
+        "when": when,
+    })
+}
+
+fn create_dev_plugin_template(
+    request: &DevPluginProjectRequest,
+) -> Result<DevPluginTemplate, String> {
+    validate_dev_plugin_id(&request.plugin_id)?;
+    if request.name.trim().is_empty() {
+        return Err("插件名称不能为空。".to_string());
+    }
+    if request.version.trim().is_empty() {
+        return Err("version 不能为空。".to_string());
+    }
+    if request.author.trim().is_empty() {
+        return Err("author 不能为空。".to_string());
+    }
+    if !DEV_PLUGIN_TEMPLATE_TYPES.contains(&request.template_type.as_str()) {
+        return Err(format!(
+            "不支持的插件模板：{}。支持：{}",
+            request.template_type,
+            DEV_PLUGIN_TEMPLATE_TYPES.join(", ")
+        ));
+    }
+    if !DEV_PLUGIN_MENU_LOCATIONS.contains(&request.menu_location.as_str()) {
+        return Err("菜单位置仅允许 plugins 或 node-context。".to_string());
+    }
+
+    let name = request.name.trim();
+    let plugin_id = request.plugin_id.trim();
+    let version = request.version.trim();
+    let author = request.author.trim();
+    let description = request.description.trim();
+    let location = request.menu_location.as_str();
+    let when = if location == "node-context" {
+        "hasSelectedNode"
+    } else {
+        "hasMindmap"
+    };
+    let base = json!({
+        "manifestVersion": 1,
+        "pluginId": plugin_id,
+        "name": name,
+        "version": version,
+        "author": author,
+        "description": description,
+    });
+    let mut object = base
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "无法生成 manifest。".to_string())?;
+
+    let (
+        plugin_type,
+        runtime,
+        entry_name,
+        entry_content,
+        capabilities,
+        permissions,
+        contributions,
+        workflow,
+    ) = match request.template_type.as_str() {
+        "import-export" => (
+            "import-export",
+            None,
+            None,
+            None,
+            json!(["export"]),
+            None,
+            json!({
+                "exporters": [{
+                    "id": "exportText",
+                    "label": format!("{name}：导出 TXT"),
+                    "fileName": "mindmap.txt",
+                    "handler": "builtin.exportText"
+                }],
+                "menus": [dev_menu(
+                    "exportText",
+                    &format!("{name}：导出 TXT"),
+                    location,
+                    "builtin.exportText",
+                    when,
+                )]
+            }),
+            None,
+        ),
+        "action-workflow" => (
+            "action-workflow",
+            None,
+            None,
+            None,
+            json!([
+                "workflow",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ]),
+            Some(json!([
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ])),
+            json!({
+                "menus": [dev_menu(
+                    "runWorkflow",
+                    &format!("运行 {name}"),
+                    location,
+                    "plugin.runWorkflow",
+                    "hasSelectedNode",
+                )]
+            }),
+            Some(json!({
+                "name": format!("{name} Workflow"),
+                "description": "展示受控 actions 与变量占位符。",
+                "actions": [
+                    {
+                        "type": "showMessage",
+                        "level": "info",
+                        "message": "正在处理 $mindmap.title / $selectedNode.text（$date.today）"
+                    },
+                    {
+                        "type": "addChildNodes",
+                        "parentId": "$selectedNode.id",
+                        "nodes": [
+                            {"text": "$selectedNode.text - 子节点 1", "remark": "来自 $mindmap.title"},
+                            {"text": "$selectedNode.text - 子节点 2", "remark": "创建日期：$date.today"},
+                            {"text": "$selectedNode.text - 子节点 3", "remark": "本地 Workflow 生成"}
+                        ]
+                    },
+                    {
+                        "type": "setNodeRemark",
+                        "nodeId": "$selectedNode.id",
+                        "remark": "已由 Workflow 更新：$date.today"
+                    }
+                ]
+            })),
+        ),
+        "script" => (
+            "script",
+            None,
+            Some("main.js"),
+            request.generate_entry.then(|| {
+                r#"async function run(context) {
+  const node = context.selectedNode;
+  if (!node) {
+    return [{
+      type: "showMessage",
+      level: "warning",
+      message: "请先选择一个节点。"
+    }];
+  }
+
+  return [
+    {
+      type: "addChildNodes",
+      parentId: node.id,
+      nodes: [
+        { text: "示例子节点 1", remark: "由本地 Web Worker 插件生成" },
+        { text: "示例子节点 2", remark: "不访问 DOM / window / fetch" },
+        { text: "示例子节点 3", remark: "宿主会校验全部 actions" }
+      ]
+    },
+    {
+      type: "showMessage",
+      level: "info",
+      message: "已生成 3 个子节点。"
+    }
+  ];
+}
+"#
+                .to_string()
+            }),
+            json!([
+                "script",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ]),
+            Some(json!([
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ])),
+            json!({
+                "menus": [dev_menu(
+                    "runScript",
+                    &format!("运行 {name}"),
+                    location,
+                    "plugin.runScript",
+                    "hasSelectedNode",
+                )]
+            }),
+            None,
+        ),
+        "external-command-python" => (
+            "external-command",
+            Some("python"),
+            Some("main.py"),
+            request.generate_entry.then(|| {
+                r#"import json
+import sys
+
+try:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+
+def main():
+    context = json.load(sys.stdin)
+    node = context.get("selectedNode")
+    if not node:
+        result = {"actions": [{
+            "type": "showMessage",
+            "level": "warning",
+            "message": "请先选择一个节点。"
+        }]}
+    else:
+        result = {"actions": [
+            {
+                "type": "addChildNodes",
+                "parentId": node["id"],
+                "nodes": [
+                    {"text": "Python 子节点 1", "remark": "UTF-8 示例"},
+                    {"text": "Python 子节点 2", "remark": "纯本地处理"},
+                    {"text": "Python 子节点 3", "remark": "actions JSON"}
+                ]
+            },
+            {
+                "type": "showMessage",
+                "level": "info",
+                "message": "Python 插件执行完成。"
+            }
+        ]}
+    print(json.dumps(result, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
+"#
+                .to_string()
+            }),
+            json!([
+                "external-command",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ]),
+            Some(json!([
+                "external-command",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ])),
+            json!({
+                "menus": [dev_menu(
+                    "runExternal",
+                    &format!("运行 {name}"),
+                    location,
+                    "plugin.runExternal",
+                    "hasSelectedNode",
+                )]
+            }),
+            None,
+        ),
+        "external-command-executable" => (
+            "external-command",
+            Some("executable"),
+            Some("plugin.exe"),
+            None,
+            json!([
+                "external-command",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ]),
+            Some(json!([
+                "external-command",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ])),
+            json!({
+                "menus": [dev_menu(
+                    "runExternal",
+                    &format!("运行 {name}"),
+                    location,
+                    "plugin.runExternal",
+                    "hasSelectedNode",
+                )]
+            }),
+            None,
+        ),
+        "theme-pack" => (
+            "theme-pack",
+            None,
+            None,
+            None,
+            json!(["themes"]),
+            None,
+            json!({
+                "themes": [{
+                    "id": format!("{}.theme", plugin_id),
+                    "name": format!("{name} 主题"),
+                    "canvasBackground": "#f7f9fc",
+                    "gridColor": "#d8e1ee",
+                    "nodeBackground": "#eef5ff",
+                    "nodeBorder": "#3973c6",
+                    "nodeText": "#17365d",
+                    "lineColor": "#7ca5d8"
+                }]
+            }),
+            None,
+        ),
+        _ => unreachable!(),
+    };
+
+    object.insert("pluginType".to_string(), json!(plugin_type));
+    if let Some(runtime) = runtime {
+        object.insert("runtime".to_string(), json!(runtime));
+    }
+    if let Some(entry_name) = entry_name {
+        object.insert("entry".to_string(), json!(entry_name));
+    }
+    object.insert("capabilities".to_string(), capabilities);
+    if let Some(permissions) = permissions {
+        object.insert("permissions".to_string(), permissions);
+    }
+    object.insert("contributions".to_string(), contributions);
+    if let Some(workflow) = workflow {
+        object.insert("workflow".to_string(), workflow);
+    }
+    let manifest = Value::Object(object);
+    validate_declarative_manifest(plugin_id, &manifest)
+        .map_err(|error| format!("生成的模板未通过 schema 校验：{error}"))?;
+
+    let executable_note = if request.template_type == "external-command-executable" {
+        "\n## executable 准备\n\n本向导不会生成真实 EXE。请自行编译 `plugin.exe` 并放在本目录后再校验和打包。宿主不会通过 Shell 启动程序。\n"
+    } else {
+        ""
+    };
+    let readme = format!(
+        "# {name}\n\n{description}\n\n- pluginId: `{plugin_id}`\n- pluginType: `{plugin_type}`\n{}\n## 本地安全边界\n\n项目位于本机用户数据目录；打包和安装均不联网。运行型插件只有在安装后、用户显式开启对应 runner 并授予信任时才能执行。\n{executable_note}",
+        runtime
+            .map(|value| format!("- runtime: `{value}`"))
+            .unwrap_or_default()
+    );
+
+    Ok(DevPluginTemplate {
+        manifest,
+        entry_name,
+        entry_content,
+        readme,
+    })
+}
+
+fn dev_project_dir_at(root: &Path, plugin_id: &str) -> Result<PathBuf, String> {
+    validate_dev_plugin_id(plugin_id)?;
+    resolve_user_relative_path(root, &format!("{USER_PLUGIN_DEV_DIR}/{plugin_id}"))
+}
+
+fn create_dev_plugin_project_at(
+    root: &Path,
+    request: &DevPluginProjectRequest,
+) -> Result<DevPluginProjectResult, String> {
+    let template = create_dev_plugin_template(request)?;
+    let plugin_id = request.plugin_id.trim();
+    let dev_dir = plugin_dev_dir_at(root)?;
+    fs::create_dir_all(&dev_dir).map_err(|error| format!("创建插件开发目录失败：{error}"))?;
+    let target_dir = dev_project_dir_at(root, plugin_id)?;
+    let existed = target_dir.exists();
+    if existed && !request.overwrite {
+        return Err(format!(
+            "插件项目已存在：{}。未覆盖任何文件；确认覆盖后才能继续。",
+            target_dir.display()
+        ));
+    }
+
+    let staging_dir = dev_dir.join(format!(".{plugin_id}.creating"));
+    let backup_dir = dev_dir.join(format!(".{plugin_id}.backup"));
+    remove_path_if_exists(&staging_dir)?;
+    remove_path_if_exists(&backup_dir)?;
+    fs::create_dir(&staging_dir).map_err(|error| format!("创建插件项目临时目录失败：{error}"))?;
+
+    let write_result = (|| -> Result<Vec<String>, String> {
+        let manifest_text = serde_json::to_string_pretty(&template.manifest)
+            .map_err(|error| format!("manifest 序列化失败：{error}"))?;
+        fs::write(staging_dir.join(MANIFEST_FILE_NAME), manifest_text)
+            .map_err(|error| format!("写入 manifest.json 失败：{error}"))?;
+        let mut files = vec![MANIFEST_FILE_NAME.to_string()];
+
+        if request.generate_readme {
+            fs::write(staging_dir.join("README.md"), &template.readme)
+                .map_err(|error| format!("写入 README.md 失败：{error}"))?;
+            files.push("README.md".to_string());
+        }
+        if let (Some(entry_name), Some(entry_content)) =
+            (template.entry_name, template.entry_content.as_deref())
+        {
+            fs::write(staging_dir.join(entry_name), entry_content)
+                .map_err(|error| format!("写入示例 entry `{entry_name}` 失败：{error}"))?;
+            files.push(entry_name.to_string());
+        }
+
+        if existed {
+            fs::rename(&target_dir, &backup_dir)
+                .map_err(|error| format!("备份已有插件项目失败：{error}"))?;
+        }
+        if let Err(error) = fs::rename(&staging_dir, &target_dir) {
+            if existed && backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, &target_dir);
+            }
+            return Err(format!("提交插件项目失败：{error}"));
+        }
+        if backup_dir.exists() {
+            remove_path_if_exists(&backup_dir)
+                .map_err(|error| format!("清理旧插件项目备份失败：{error}"))?;
+        }
+        files.sort();
+        Ok(files)
+    })();
+
+    let files = match write_result {
+        Ok(files) => files,
+        Err(error) => {
+            let _ = remove_path_if_exists(&staging_dir);
+            if existed && backup_dir.exists() && !target_dir.exists() {
+                let _ = fs::rename(&backup_dir, &target_dir);
+            }
+            return Err(error);
+        }
+    };
+    let plugin_type = template
+        .manifest
+        .get("pluginType")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let runtime = template
+        .manifest
+        .get("runtime")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let entry_path = template.entry_name.and_then(|entry_name| {
+        target_dir
+            .join(entry_name)
+            .is_file()
+            .then(|| target_dir.join(entry_name).to_string_lossy().to_string())
+    });
+
+    Ok(DevPluginProjectResult {
+        created: true,
+        overwritten: existed,
+        plugin_id: plugin_id.to_string(),
+        plugin_type,
+        runtime,
+        directory_path: target_dir.to_string_lossy().to_string(),
+        manifest_path: target_dir
+            .join(MANIFEST_FILE_NAME)
+            .to_string_lossy()
+            .to_string(),
+        readme_path: target_dir
+            .join("README.md")
+            .is_file()
+            .then(|| target_dir.join("README.md").to_string_lossy().to_string()),
+        entry_path,
+        files,
+    })
+}
+
+fn validation_issue(
+    code: &str,
+    field: Option<&str>,
+    message: impl Into<String>,
+) -> DevPluginValidationIssue {
+    DevPluginValidationIssue {
+        code: code.to_string(),
+        field: field.map(str::to_string),
+        message: message.into(),
+    }
+}
+
+fn push_unique_issue(issues: &mut Vec<DevPluginValidationIssue>, issue: DevPluginValidationIssue) {
+    if !issues
+        .iter()
+        .any(|current| current.message == issue.message)
+    {
+        issues.push(issue);
+    }
+}
+
+fn manifest_string_array(manifest: &Value, field: &str) -> Vec<String> {
+    manifest
+        .get(field)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn contribution_summary(manifest: &Value) -> BTreeMap<String, usize> {
+    let mut summary = BTreeMap::new();
+    let contributions = manifest.get("contributions").and_then(Value::as_object);
+    for key in [
+        "exporters",
+        "exportFormats",
+        "menus",
+        "themes",
+        "icons",
+        "nodeTypes",
+        "nodeTypePacks",
+        "templatePacks",
+        "tools",
+    ] {
+        let count = contributions
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        summary.insert(key.to_string(), count);
+    }
+    summary
+}
+
+fn validate_dev_contribution_commands(
+    manifest: &Value,
+    errors: &mut Vec<DevPluginValidationIssue>,
+) {
+    let Some(contributions) = manifest.get("contributions").and_then(Value::as_object) else {
+        return;
+    };
+    for group in ["menus", "tools"] {
+        let Some(items) = contributions.get(group).and_then(Value::as_array) else {
+            continue;
+        };
+        for (index, item) in items.iter().enumerate() {
+            for field in ["command", "handler"] {
+                let Some(command) = item.get(field).and_then(Value::as_str) else {
+                    continue;
+                };
+                if !PLUGIN_COMMAND_WHITELIST.contains(&command) {
+                    push_unique_issue(
+                        errors,
+                        validation_issue(
+                            "command-not-allowed",
+                            Some(&format!("contributions.{group}[{index}].{field}")),
+                            format!("command 不在白名单：{command}"),
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(exporters) = contributions.get("exporters").and_then(Value::as_array) {
+        for (index, exporter) in exporters.iter().enumerate() {
+            let handler = exporter
+                .get("handler")
+                .or_else(|| exporter.get("handlerId"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if handler != "builtin.exportText" {
+                push_unique_issue(
+                    errors,
+                    validation_issue(
+                        "command-not-allowed",
+                        Some(&format!("contributions.exporters[{index}].handler")),
+                        format!("导出 handler 不在白名单：{handler}"),
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn validate_dev_permissions(
+    plugin_type: &str,
+    permissions: &[String],
+    errors: &mut Vec<DevPluginValidationIssue>,
+    warnings: &mut Vec<DevPluginValidationIssue>,
+) {
+    let has = |permission: &str| permissions.iter().any(|value| value == permission);
+    match plugin_type {
+        "script" => {
+            if has("external-command") {
+                errors.push(validation_issue(
+                    "permission-type-mismatch",
+                    Some("permissions"),
+                    "script 插件不能声明 external-command 权限。",
+                ));
+            }
+            for permission in ["mindmap:read", "mindmap:write", "node:read", "node:write"] {
+                if !has(permission) {
+                    warnings.push(validation_issue(
+                        "permission-missing",
+                        Some("permissions"),
+                        format!("script 模板建议声明 {permission}。"),
+                    ));
+                }
+            }
+        }
+        "action-workflow" => {
+            for permission in ["script", "external-command"] {
+                if has(permission) {
+                    errors.push(validation_issue(
+                        "permission-type-mismatch",
+                        Some("permissions"),
+                        format!("action-workflow 插件不能声明 {permission} 权限。"),
+                    ));
+                }
+            }
+        }
+        "external-command" => {
+            if !has("external-command") {
+                errors.push(validation_issue(
+                    "permission-missing",
+                    Some("permissions"),
+                    "external-command 插件必须声明 external-command 权限。",
+                ));
+            }
+            if has("script") {
+                errors.push(validation_issue(
+                    "permission-type-mismatch",
+                    Some("permissions"),
+                    "external-command 插件不能声明 script 权限。",
+                ));
+            }
+        }
+        _ => {
+            if !permissions.is_empty() {
+                errors.push(validation_issue(
+                    "permission-type-mismatch",
+                    Some("permissions"),
+                    format!("{plugin_type} 声明式插件不应请求运行型权限。"),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_dev_plugin_project_at(root: &Path, plugin_id: &str) -> DevPluginValidationResult {
+    let project_dir = root.join(USER_PLUGIN_DEV_DIR).join(plugin_id);
+    let manifest_path = project_dir.join(MANIFEST_FILE_NAME);
+    let mut result = DevPluginValidationResult {
+        valid: false,
+        errors: vec![],
+        warnings: vec![],
+        plugin_id: None,
+        plugin_type: None,
+        runtime: None,
+        entry: None,
+        permissions: vec![],
+        contribution_summary: BTreeMap::new(),
+        can_package: false,
+        project_dir: project_dir.to_string_lossy().to_string(),
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+    };
+
+    if let Err(error) = validate_dev_plugin_id(plugin_id) {
+        result.errors.push(validation_issue(
+            "invalid-plugin-id",
+            Some("pluginId"),
+            error,
+        ));
+        return result;
+    }
+    let project_dir = match dev_project_dir_at(root, plugin_id) {
+        Ok(path) => path,
+        Err(error) => {
+            result
+                .errors
+                .push(validation_issue("invalid-project-path", None, error));
+            return result;
+        }
+    };
+    if !project_dir.is_dir() {
+        result.errors.push(validation_issue(
+            "project-missing",
+            None,
+            format!("插件项目目录不存在：{}", project_dir.display()),
+        ));
+        return result;
+    }
+    if !manifest_path.is_file() {
+        result.errors.push(validation_issue(
+            "manifest-missing",
+            Some("manifest.json"),
+            "manifest.json 不存在。",
+        ));
+        return result;
+    }
+
+    let manifest_text = match fs::read_to_string(&manifest_path) {
+        Ok(text) => text,
+        Err(error) => {
+            result.errors.push(validation_issue(
+                "manifest-read-failed",
+                Some("manifest.json"),
+                format!("manifest.json 不是有效 UTF-8 或无法读取：{error}"),
+            ));
+            return result;
+        }
+    };
+    let manifest: Value = match parse_json_without_bom(&manifest_text) {
+        Ok(value) => value,
+        Err(error) => {
+            result.errors.push(validation_issue(
+                "manifest-json-invalid",
+                Some("manifest.json"),
+                format!("manifest JSON 无效：{error}"),
+            ));
+            return result;
+        }
+    };
+    let Some(object) = manifest.as_object() else {
+        result.errors.push(validation_issue(
+            "manifest-schema-invalid",
+            Some("manifest.json"),
+            "manifest 必须是 JSON 对象。",
+        ));
+        return result;
+    };
+
+    result.plugin_id = object
+        .get("pluginId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    result.plugin_type = object
+        .get("pluginType")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    result.runtime = object
+        .get("runtime")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    result.entry = object
+        .get("entry")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    result.permissions = manifest_string_array(&manifest, "permissions");
+    result.contribution_summary = contribution_summary(&manifest);
+
+    if result.plugin_id.as_deref() != Some(plugin_id) {
+        result.errors.push(validation_issue(
+            "plugin-id-mismatch",
+            Some("pluginId"),
+            format!(
+                "manifest pluginId 必须与项目目录一致：期望 {plugin_id}，实际 {}。",
+                result.plugin_id.as_deref().unwrap_or("未声明")
+            ),
+        ));
+    }
+    if let Some(manifest_plugin_id) = result.plugin_id.as_deref() {
+        if let Err(error) = validate_dev_plugin_id(manifest_plugin_id) {
+            result.errors.push(validation_issue(
+                "invalid-plugin-id",
+                Some("pluginId"),
+                error,
+            ));
+        }
+    }
+    if let Err(error) = validate_declarative_manifest(plugin_id, &manifest) {
+        result.errors.push(validation_issue(
+            "manifest-schema-invalid",
+            Some("manifest.json"),
+            error,
+        ));
+    }
+    validate_dev_contribution_commands(&manifest, &mut result.errors);
+
+    let plugin_type = result.plugin_type.as_deref().unwrap_or_default();
+    validate_dev_permissions(
+        plugin_type,
+        &result.permissions,
+        &mut result.errors,
+        &mut result.warnings,
+    );
+    if let Some(entry) = result.entry.as_deref() {
+        match validate_safe_entry_path(entry) {
+            Ok(normalized_entry) => {
+                if plugin_type == "script" && normalized_entry != "main.js" {
+                    result.errors.push(validation_issue(
+                        "script-entry-invalid",
+                        Some("entry"),
+                        "开发者工作台的 script 模板 entry 必须是 main.js。",
+                    ));
+                }
+                if plugin_type == "external-command"
+                    && result.runtime.as_deref() == Some("python")
+                    && normalized_entry != "main.py"
+                {
+                    result.errors.push(validation_issue(
+                        "python-entry-invalid",
+                        Some("entry"),
+                        "开发者工作台的 Python 模板 entry 必须是 main.py。",
+                    ));
+                }
+                if plugin_type == "external-command"
+                    && result.runtime.as_deref() == Some("executable")
+                    && !normalized_entry.to_ascii_lowercase().ends_with(".exe")
+                {
+                    result.errors.push(validation_issue(
+                        "executable-entry-invalid",
+                        Some("entry"),
+                        "runtime=executable 时 entry 必须是 .exe 文件。",
+                    ));
+                }
+                let entry_path = project_dir.join(Path::new(&normalized_entry));
+                if !entry_path.is_file() {
+                    result.errors.push(validation_issue(
+                        "entry-missing",
+                        Some("entry"),
+                        format!("待补充 entry 文件：{normalized_entry}。entry 缺失时不可打包。"),
+                    ));
+                }
+            }
+            Err(error) => {
+                result
+                    .errors
+                    .push(validation_issue("entry-path-invalid", Some("entry"), error))
+            }
+        }
+    } else if plugin_type == "script" || plugin_type == "external-command" {
+        result.errors.push(validation_issue(
+            "entry-missing",
+            Some("entry"),
+            "运行型插件必须声明 entry。",
+        ));
+    }
+
+    if !project_dir.join("README.md").is_file() {
+        result.warnings.push(validation_issue(
+            "readme-missing",
+            Some("README.md"),
+            "README.md 不存在；这不会阻止打包。",
+        ));
+    }
+    for field in ["trusted", "installedAt", "updatedAt", "enabled"] {
+        if object.contains_key(field) {
+            result.warnings.push(validation_issue(
+                "registry-metadata-present",
+                Some(field),
+                format!("{field} 属于安装/registry 元数据，打包时会移除。"),
+            ));
+        }
+    }
+    let (risk, risk_message) = match (plugin_type, result.runtime.as_deref()) {
+        ("external-command", Some("executable")) => (
+            "high",
+            "风险等级：高。executable 在安装并启用 runner 后可能访问本机资源。",
+        ),
+        ("external-command", _) => (
+            "high",
+            "风险等级：高。Python 外部进程在安装并启用 runner 后可能访问本机资源。",
+        ),
+        ("script", _) => (
+            "medium",
+            "风险等级：中。script 仅在 Web Worker 中运行并返回受控 actions。",
+        ),
+        ("action-workflow", _) => (
+            "medium",
+            "风险等级：中。Workflow 不执行代码，但可返回写入 actions。",
+        ),
+        _ => ("low", "风险等级：低。该模板不执行插件代码。"),
+    };
+    result.warnings.push(validation_issue(
+        &format!("plugin-risk-{risk}"),
+        Some("pluginType"),
+        risk_message,
+    ));
+
+    result.valid = result.errors.is_empty();
+    result.can_package = result.valid;
+    result
+}
+
+fn should_exclude_dev_package_path(relative_path: &str, is_dir: bool) -> bool {
+    let lower = relative_path.to_ascii_lowercase();
+    let segments = lower.split('/').collect::<Vec<_>>();
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "node_modules" | ".git" | "logs"))
+    {
+        return true;
+    }
+    if is_dir {
+        return false;
+    }
+    let file_name = segments.last().copied().unwrap_or_default();
+    matches!(
+        file_name,
+        "plugin-registry.json"
+            | "desktop-plugin-registry.json"
+            | ".ds_store"
+            | "thumbs.db"
+            | "trusted"
+    ) || file_name.ends_with(".tmp")
+        || file_name.ends_with(".temp")
+        || file_name.ends_with(".log")
+        || file_name.ends_with(".lmplugin")
+        || file_name.ends_with('~')
+}
+
+fn collect_dev_package_files(
+    project_dir: &Path,
+    current_dir: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+    total_size: &mut u64,
+) -> Result<(), String> {
+    let mut entries = fs::read_dir(current_dir)
+        .map_err(|error| format!("打包失败：读取项目目录失败：{error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("打包失败：读取项目目录项失败：{error}"))?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("打包失败：读取资源元数据失败：{error}"))?;
+        if metadata_is_link_like(&metadata) {
+            return Err(format!(
+                "打包失败：项目内不允许符号链接或重解析点：{}",
+                path.display()
+            ));
+        }
+        let relative = path
+            .strip_prefix(project_dir)
+            .map_err(|_| "打包失败：项目资源越过项目目录。".to_string())?;
+        let relative_name = relative
+            .components()
+            .map(|component| match component {
+                Component::Normal(value) => Ok(value.to_string_lossy().to_string()),
+                _ => Err("打包失败：资源路径包含非法组件。".to_string()),
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("/");
+        validate_plugin_package_entry_name(&relative_name, metadata.is_dir())
+            .map_err(|error| format!("打包失败：{error}"))?;
+        if should_exclude_dev_package_path(&relative_name, metadata.is_dir()) {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_dev_package_files(project_dir, &path, files, total_size)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(format!("打包失败：不支持的资源类型：{relative_name}"));
+        }
+        if relative_name == MANIFEST_FILE_NAME {
+            continue;
+        }
+        if metadata.len() > PLUGIN_PACKAGE_MAX_FILE_SIZE {
+            return Err(format!("打包失败：文件过大：{relative_name}"));
+        }
+        *total_size = total_size.saturating_add(metadata.len());
+        if *total_size > PLUGIN_PACKAGE_MAX_TOTAL_SIZE {
+            return Err("打包失败：项目文件总大小超过 128MB。".to_string());
+        }
+        files.push((relative_name, path));
+        if files.len() + 1 > PLUGIN_PACKAGE_MAX_ENTRIES {
+            return Err(format!(
+                "打包失败：文件数量超过 {} 个限制。",
+                PLUGIN_PACKAGE_MAX_ENTRIES
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_dev_plugin_package_at(
+    root: &Path,
+    plugin_id: &str,
+    output_path: &Path,
+) -> Result<DevPluginPackageResult, String> {
+    let validation = validate_dev_plugin_project_at(root, plugin_id);
+    if !validation.can_package {
+        let details = validation
+            .errors
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect::<Vec<_>>()
+            .join("；");
+        return Err(format!("项目校验未通过，禁止打包：{details}"));
+    }
+    let project_dir = dev_project_dir_at(root, plugin_id)?;
+    let manifest_text = fs::read_to_string(project_dir.join(MANIFEST_FILE_NAME))
+        .map_err(|error| format!("打包失败：manifest.json 读取失败：{error}"))?;
+    let manifest: Value = parse_json_without_bom(&manifest_text)
+        .map_err(|error| format!("打包失败：manifest JSON 无效：{error}"))?;
+    let package_manifest = manifest_without_registry_metadata(&manifest);
+
+    let mut project_files = vec![];
+    let mut total_size = 0u64;
+    collect_dev_package_files(
+        &project_dir,
+        &project_dir,
+        &mut project_files,
+        &mut total_size,
+    )?;
+    project_files.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let temporary_path = output_path.with_extension("lmplugin.tmp");
+    let backup_path = output_path.with_extension("lmplugin.backup");
+    if backup_path.exists() {
+        if output_path.exists() {
+            remove_path_if_exists(&backup_path)?;
+        } else {
+            fs::rename(&backup_path, output_path)
+                .map_err(|error| format!("打包失败：恢复上次输出备份失败：{error}"))?;
+        }
+    }
+    remove_path_if_exists(&temporary_path)?;
+    let write_result = (|| -> Result<(), String> {
+        let file = fs::File::create(&temporary_path)
+            .map_err(|error| format!("打包失败：无法创建临时插件包：{error}"))?;
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file(MANIFEST_FILE_NAME, options)
+            .map_err(|error| format!("打包失败：无法写入 manifest.json：{error}"))?;
+        writer
+            .write_all(
+                serde_json::to_string_pretty(&package_manifest)
+                    .map_err(|error| format!("打包失败：manifest 序列化失败：{error}"))?
+                    .as_bytes(),
+            )
+            .map_err(|error| format!("打包失败：manifest 写入失败：{error}"))?;
+
+        for (relative_name, source_path) in &project_files {
+            writer
+                .start_file(relative_name, options)
+                .map_err(|error| format!("打包失败：资源 `{relative_name}` 写入失败：{error}"))?;
+            let mut source = fs::File::open(source_path)
+                .map_err(|error| format!("打包失败：资源 `{relative_name}` 读取失败：{error}"))?;
+            std::io::copy(&mut source, &mut writer)
+                .map_err(|error| format!("打包失败：资源 `{relative_name}` 写入失败：{error}"))?;
+        }
+        writer
+            .finish()
+            .map_err(|error| format!("打包失败：插件包收尾失败：{error}"))?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = remove_path_if_exists(&temporary_path);
+        return Err(error);
+    }
+
+    if let Err(error) = inspect_plugin_package(&temporary_path) {
+        let _ = remove_path_if_exists(&temporary_path);
+        return Err(format!("打包结果无法通过现有导入校验：{error}"));
+    }
+    let output_existed = output_path.exists();
+    if output_existed {
+        fs::rename(output_path, &backup_path)
+            .map_err(|error| format!("打包失败：无法备份已有目标文件：{error}"))?;
+    }
+    if let Err(error) = fs::rename(&temporary_path, output_path) {
+        let _ = remove_path_if_exists(&temporary_path);
+        if output_existed && backup_path.exists() {
+            let _ = fs::rename(&backup_path, output_path);
+        }
+        return Err(format!("打包失败：无法提交插件包：{error}"));
+    }
+    if backup_path.exists() {
+        let _ = remove_path_if_exists(&backup_path);
+    }
+    let mut files = vec![MANIFEST_FILE_NAME.to_string()];
+    files.extend(project_files.into_iter().map(|(name, _)| name));
+
+    Ok(DevPluginPackageResult {
+        plugin_id: plugin_id.to_string(),
+        package_path: output_path.to_string_lossy().to_string(),
+        file_count: files.len(),
+        files,
+        validation,
+    })
+}
+
+fn desktop_directory() -> Option<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)?;
+    let desktop = home.join("Desktop");
+    desktop.is_dir().then_some(desktop)
+}
+
+#[tauri::command]
+fn create_dev_plugin_project(
+    app: AppHandle,
+    request: DevPluginProjectRequest,
+) -> Result<DevPluginProjectResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    create_dev_plugin_project_at(&root, &request)
+}
+
+#[tauri::command]
+fn validate_dev_plugin_project(
+    app: AppHandle,
+    plugin_id: String,
+) -> Result<DevPluginValidationResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    Ok(validate_dev_plugin_project_at(&root, plugin_id.trim()))
+}
+
+#[tauri::command]
+fn build_dev_plugin_package(
+    app: AppHandle,
+    plugin_id: String,
+) -> Result<Option<DevPluginPackageResult>, String> {
+    validate_dev_plugin_id(&plugin_id)?;
+    let mut dialog = FileDialog::new()
+        .set_title("打包开发插件")
+        .set_file_name(format!("{plugin_id}.lmplugin"))
+        .add_filter("Local Mindmap plugin", &["lmplugin"]);
+    if let Some(desktop) = desktop_directory() {
+        dialog = dialog.set_directory(desktop);
+    }
+    let Some(mut path) = dialog.save_file() else {
+        return Ok(None);
+    };
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("lmplugin"))
+    {
+        path.set_extension("lmplugin");
+    }
+    let root = ensure_user_data_root(&app)?;
+    build_dev_plugin_package_at(&root, &plugin_id, &path).map(Some)
+}
+
+#[tauri::command]
+fn open_dev_plugin_project_dir(app: AppHandle, plugin_id: String) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let project_dir = dev_project_dir_at(&root, &plugin_id)?;
+    if !project_dir.is_dir() {
+        return Err(format!("插件项目目录不存在：{}", project_dir.display()));
+    }
+    open_directory_path(&project_dir)
+}
+
+#[tauri::command]
+fn open_plugin_examples_dir(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let catalog = load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG);
+    if let Some(error) = catalog.error {
+        return Err(format!("示例插件 catalog 无效：{error}"));
+    }
+    for item in catalog.items {
+        materialize_gallery_plugin_at(&root, PLUGIN_GALLERY_CATALOG, &item.catalog.id)?;
+    }
+    let gallery_dir = resolve_user_relative_path(&root, PLUGIN_GALLERY_CACHE_DIR)?;
+    open_directory_path(&gallery_dir)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SamplePluginCreationResult {
@@ -3714,6 +5038,11 @@ fn main() {
             open_user_data_dir,
             open_plugin_dir,
             open_plugin_dev_dir,
+            create_dev_plugin_project,
+            validate_dev_plugin_project,
+            build_dev_plugin_package,
+            open_dev_plugin_project_dir,
+            open_plugin_examples_dir,
             create_sample_plugin,
             create_sample_script_plugin,
             create_sample_batch_script_plugin,
@@ -5711,6 +7040,379 @@ fn main() {
             ))
             .exists());
         fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    fn dev_project_request(plugin_id: &str, template_type: &str) -> DevPluginProjectRequest {
+        DevPluginProjectRequest {
+            name: format!("Test {template_type}"),
+            plugin_id: plugin_id.to_string(),
+            version: "1.0.0".to_string(),
+            author: "Local Mindmap Test".to_string(),
+            description: "Developer workbench test project.".to_string(),
+            template_type: template_type.to_string(),
+            menu_location: "plugins".to_string(),
+            generate_readme: true,
+            generate_entry: true,
+            overwrite: false,
+        }
+    }
+
+    fn write_dev_test_project(
+        root: &Path,
+        plugin_id: &str,
+        manifest: &Value,
+        assets: &[(&str, &[u8])],
+    ) {
+        let directory = root.join(USER_PLUGIN_DEV_DIR).join(plugin_id);
+        fs::create_dir_all(&directory).expect("dev project directory should exist");
+        fs::write(
+            directory.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        for (relative_path, bytes) in assets {
+            let path = directory.join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("asset parent should exist");
+            }
+            fs::write(path, bytes).expect("asset should be written");
+        }
+    }
+
+    #[test]
+    fn dev_workbench_creates_all_templates_without_overwriting() {
+        let root = test_root("dev-create-templates");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let templates = [
+            ("localmindmap.user.export", "import-export", None),
+            ("localmindmap.user.workflow", "action-workflow", None),
+            ("localmindmap.user.script", "script", Some("main.js")),
+            (
+                "localmindmap.user.python",
+                "external-command-python",
+                Some("main.py"),
+            ),
+            (
+                "localmindmap.user.executable",
+                "external-command-executable",
+                None,
+            ),
+            ("localmindmap.user.theme", "theme-pack", None),
+        ];
+
+        for (plugin_id, template_type, expected_entry) in templates {
+            let request = dev_project_request(plugin_id, template_type);
+            let created = create_dev_plugin_project_at(&root, &request)
+                .expect("dev template should be created");
+            assert!(created.created);
+            assert!(!created.overwritten);
+            assert!(Path::new(&created.manifest_path).is_file());
+            assert!(Path::new(created.readme_path.as_deref().unwrap_or_default()).is_file());
+            if let Some(entry) = expected_entry {
+                assert!(
+                    root.join(USER_PLUGIN_DEV_DIR)
+                        .join(plugin_id)
+                        .join(entry)
+                        .is_file(),
+                    "{template_type} should create {entry}"
+                );
+            }
+        }
+        let script = root
+            .join(USER_PLUGIN_DEV_DIR)
+            .join("localmindmap.user.script")
+            .join("main.js");
+        let script_text = fs::read_to_string(script).expect("script entry should be readable");
+        assert!(script_text.contains("async function run(context)"));
+        assert!(script_text.contains("示例子节点 3"));
+        let python = root
+            .join(USER_PLUGIN_DEV_DIR)
+            .join("localmindmap.user.python")
+            .join("main.py");
+        let python_text = fs::read_to_string(python).expect("Python entry should be readable");
+        assert!(python_text.contains("sys.stdin.reconfigure(encoding=\"utf-8\")"));
+        assert!(python_text.contains("ensure_ascii=False"));
+
+        let duplicate_request = dev_project_request("localmindmap.user.script", "script");
+        let original_manifest = fs::read(
+            root.join(USER_PLUGIN_DEV_DIR)
+                .join("localmindmap.user.script")
+                .join(MANIFEST_FILE_NAME),
+        )
+        .expect("original manifest should be readable");
+        assert!(create_dev_plugin_project_at(&root, &duplicate_request)
+            .expect_err("duplicate project should not be overwritten")
+            .contains("已存在"));
+        assert_eq!(
+            fs::read(
+                root.join(USER_PLUGIN_DEV_DIR)
+                    .join("localmindmap.user.script")
+                    .join(MANIFEST_FILE_NAME)
+            )
+            .expect("manifest should remain readable"),
+            original_manifest
+        );
+        let mut overwrite_request = duplicate_request;
+        overwrite_request.overwrite = true;
+        overwrite_request.description = "Overwritten safely.".to_string();
+        let overwritten = create_dev_plugin_project_at(&root, &overwrite_request)
+            .expect("confirmed overwrite should succeed");
+        assert!(overwritten.overwritten);
+
+        for plugin_id in [
+            "../escape",
+            "C:ads",
+            "localmindmap..escape",
+            ".hidden",
+            "CON",
+        ] {
+            let request = dev_project_request(plugin_id, "script");
+            assert!(
+                create_dev_plugin_project_at(&root, &request).is_err(),
+                "{plugin_id} should be rejected"
+            );
+        }
+        let failed_id = "localmindmap.user.failed";
+        let failed_request = dev_project_request(failed_id, "unsupported");
+        assert!(create_dev_plugin_project_at(&root, &failed_request).is_err());
+        assert!(!root.join(USER_PLUGIN_DEV_DIR).join(failed_id).exists());
+        assert!(!root
+            .join(USER_PLUGIN_DEV_DIR)
+            .join(format!(".{failed_id}.creating"))
+            .exists());
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn dev_validation_covers_manifest_entry_permissions_and_risk() {
+        let root = test_root("dev-validation");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+
+        let script_id = "localmindmap.user.valid-script";
+        create_dev_plugin_project_at(&root, &dev_project_request(script_id, "script"))
+            .expect("valid script project should be created");
+        let valid_script = validate_dev_plugin_project_at(&root, script_id);
+        assert!(valid_script.valid);
+        assert!(valid_script.can_package);
+        assert_eq!(valid_script.entry.as_deref(), Some("main.js"));
+        assert!(valid_script
+            .warnings
+            .iter()
+            .any(|issue| issue.code == "plugin-risk-medium"));
+
+        let script_dir = root.join(USER_PLUGIN_DEV_DIR).join(script_id);
+        fs::remove_file(script_dir.join("README.md")).expect("README should be removed");
+        let no_readme = validate_dev_plugin_project_at(&root, script_id);
+        assert!(no_readme.valid);
+        assert!(no_readme
+            .warnings
+            .iter()
+            .any(|issue| issue.code == "readme-missing"));
+
+        let manifest_bytes =
+            fs::read(script_dir.join(MANIFEST_FILE_NAME)).expect("manifest should be readable");
+        let mut bom_manifest = vec![0xef, 0xbb, 0xbf];
+        bom_manifest.extend_from_slice(&manifest_bytes);
+        fs::write(script_dir.join(MANIFEST_FILE_NAME), bom_manifest)
+            .expect("BOM manifest should be written");
+        assert!(validate_dev_plugin_project_at(&root, script_id).valid);
+
+        let missing_manifest_id = "localmindmap.user.missing-manifest";
+        fs::create_dir_all(root.join(USER_PLUGIN_DEV_DIR).join(missing_manifest_id))
+            .expect("project directory should exist");
+        assert!(validate_dev_plugin_project_at(&root, missing_manifest_id)
+            .errors
+            .iter()
+            .any(|issue| issue.code == "manifest-missing"));
+
+        let damaged_id = "localmindmap.user.damaged";
+        let damaged_dir = root.join(USER_PLUGIN_DEV_DIR).join(damaged_id);
+        fs::create_dir_all(&damaged_dir).expect("damaged project should exist");
+        fs::write(damaged_dir.join(MANIFEST_FILE_NAME), "{broken")
+            .expect("damaged manifest should be written");
+        assert!(validate_dev_plugin_project_at(&root, damaged_id)
+            .errors
+            .iter()
+            .any(|issue| issue.code == "manifest-json-invalid"));
+
+        for (suffix, entry) in [
+            ("missing-entry", "main.js"),
+            ("parent-entry", "../main.js"),
+            ("absolute-entry", "C:/plugins/main.js"),
+            ("url-entry", "https://example.com/main.js"),
+            ("ads-entry", "main.js:stream"),
+            ("wrong-script-entry", "plugin.js"),
+        ] {
+            let plugin_id = format!("localmindmap.user.{suffix}");
+            let mut manifest = test_script_plugin(&plugin_id);
+            manifest["entry"] = json!(entry);
+            write_dev_test_project(&root, &plugin_id, &manifest, &[]);
+            let validation = validate_dev_plugin_project_at(&root, &plugin_id);
+            assert!(!validation.valid, "{entry} should be invalid");
+            assert!(!validation.can_package);
+        }
+
+        let forbidden_id = "localmindmap.user.forbidden-fields";
+        let mut forbidden = test_script_plugin(forbidden_id);
+        forbidden["shell"] = json!("cmd.exe");
+        forbidden["commandLine"] = json!("cmd /c echo");
+        forbidden["args"] = json!(["/c"]);
+        write_dev_test_project(&root, forbidden_id, &forbidden, &[("main.js", b"")]);
+        assert!(!validate_dev_plugin_project_at(&root, forbidden_id).valid);
+
+        let bad_command_id = "localmindmap.user.bad-command";
+        let mut bad_command = test_script_plugin(bad_command_id);
+        bad_command["contributions"]["menus"][0]["command"] = json!("builtin.notAllowed");
+        write_dev_test_project(&root, bad_command_id, &bad_command, &[("main.js", b"")]);
+        assert!(validate_dev_plugin_project_at(&root, bad_command_id)
+            .errors
+            .iter()
+            .any(|issue| issue.code == "command-not-allowed"));
+
+        let wrong_exe_id = "localmindmap.user.wrong-executable";
+        let wrong_exe = test_external_executable_plugin(wrong_exe_id, "plugin.bin");
+        write_dev_test_project(
+            &root,
+            wrong_exe_id,
+            &wrong_exe,
+            &[("plugin.bin", b"binary")],
+        );
+        assert!(validate_dev_plugin_project_at(&root, wrong_exe_id)
+            .errors
+            .iter()
+            .any(|issue| issue.code == "executable-entry-invalid"));
+
+        let python_id = "localmindmap.user.valid-python";
+        create_dev_plugin_project_at(
+            &root,
+            &dev_project_request(python_id, "external-command-python"),
+        )
+        .expect("valid Python project should be created");
+        assert!(validate_dev_plugin_project_at(&root, python_id).valid);
+
+        let workflow_id = "localmindmap.user.valid-workflow";
+        create_dev_plugin_project_at(&root, &dev_project_request(workflow_id, "action-workflow"))
+            .expect("valid workflow project should be created");
+        assert!(validate_dev_plugin_project_at(&root, workflow_id).valid);
+
+        let executable_id = "localmindmap.user.pending-executable";
+        create_dev_plugin_project_at(
+            &root,
+            &dev_project_request(executable_id, "external-command-executable"),
+        )
+        .expect("executable placeholder project should be created");
+        let executable_validation = validate_dev_plugin_project_at(&root, executable_id);
+        assert!(!executable_validation.valid);
+        assert!(executable_validation
+            .errors
+            .iter()
+            .any(|issue| issue.message.contains("待补充 entry 文件")));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn dev_package_is_filtered_atomic_and_reimportable() {
+        let root = test_root("dev-package");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "localmindmap.user.package-script";
+        create_dev_plugin_project_at(&root, &dev_project_request(plugin_id, "script"))
+            .expect("script project should be created");
+        let project_dir = root.join(USER_PLUGIN_DEV_DIR).join(plugin_id);
+        fs::create_dir_all(project_dir.join("assets")).expect("assets directory should exist");
+        fs::write(project_dir.join("assets/icon.txt"), "icon").expect("asset should be written");
+        for excluded_dir in ["node_modules", ".git", "logs"] {
+            fs::create_dir_all(project_dir.join(excluded_dir))
+                .expect("excluded directory should exist");
+            fs::write(
+                project_dir.join(excluded_dir).join("private.txt"),
+                "private",
+            )
+            .expect("excluded file should be written");
+        }
+        fs::write(project_dir.join("plugin-registry.json"), "{}")
+            .expect("registry metadata should be written");
+        fs::write(project_dir.join("trusted"), "true").expect("trusted marker should be written");
+        let manifest_path = project_dir.join(MANIFEST_FILE_NAME);
+        let mut manifest: Value = parse_json_without_bom(
+            &fs::read_to_string(&manifest_path).expect("manifest should be readable"),
+        )
+        .expect("manifest should parse");
+        manifest["trusted"] = json!(true);
+        manifest["installedAt"] = json!("2026-07-04T00:00:00.000Z");
+        manifest["updatedAt"] = json!("2026-07-04T00:00:00.000Z");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should update");
+
+        let output = root.join("package-script.lmplugin");
+        let packaged = build_dev_plugin_package_at(&root, plugin_id, &output)
+            .expect("valid project should package");
+        assert_eq!(packaged.package_path, output.to_string_lossy());
+        assert_eq!(
+            packaged.files,
+            vec![
+                "manifest.json".to_string(),
+                "README.md".to_string(),
+                "assets/icon.txt".to_string(),
+                "main.js".to_string(),
+            ]
+        );
+        let inspected = inspect_plugin_package(&output).expect("package should be importable");
+        assert!(inspected.manifest.get("trusted").is_none());
+        assert!(inspected.manifest.get("installedAt").is_none());
+        assert!(inspected.manifest.get("updatedAt").is_none());
+        assert!(!inspected.files.iter().any(|path| {
+            path.contains("node_modules")
+                || path.contains(".git")
+                || path.contains("logs")
+                || path.contains("registry")
+                || path == "trusted"
+        }));
+        assert!(inspected.files.iter().all(|path| {
+            !Path::new(path).is_absolute() && !path.contains("..") && !path.contains(':')
+        }));
+
+        let install_root = test_root("dev-package-reimport");
+        ensure_user_data_dirs_at(&install_root).expect("install root should exist");
+        install_test_plugin_package(&install_root, &output, &inspected.manifest, false)
+            .expect("built package should re-import");
+        let registry = read_user_json_at(&install_root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        assert_eq!(registry[0]["trusted"], false);
+
+        let executable_id = "localmindmap.user.unpackageable-executable";
+        create_dev_plugin_project_at(
+            &root,
+            &dev_project_request(executable_id, "external-command-executable"),
+        )
+        .expect("executable project should be created");
+        let invalid_output = root.join("invalid-executable.lmplugin");
+        fs::write(&invalid_output, b"previous package")
+            .expect("previous package should be written");
+        assert!(
+            build_dev_plugin_package_at(&root, executable_id, &invalid_output)
+                .expect_err("missing executable must block packaging")
+                .contains("禁止打包")
+        );
+        assert_eq!(
+            fs::read(&invalid_output).expect("previous output should remain"),
+            b"previous package"
+        );
+
+        let rollback_parent = root.join("missing-parent");
+        let rollback_output = rollback_parent.join("rollback.lmplugin");
+        assert!(build_dev_plugin_package_at(&root, plugin_id, &rollback_output).is_err());
+        assert!(!rollback_output.exists());
+        assert!(!rollback_parent.join("rollback.lmplugin.tmp").exists());
+        assert!(validate_plugin_package_entry_name("../escape.txt", false).is_err());
+        assert!(validate_plugin_package_entry_name("safe/../../escape.txt", false).is_err());
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+        fs::remove_dir_all(install_root).expect("install root should be removable");
     }
 
     #[test]

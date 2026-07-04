@@ -138,6 +138,17 @@ import {
   type PluginGalleryItem,
 } from '../features/plugins/pluginGallery';
 import {
+  buildDevPluginPackage,
+  createDevPluginProject,
+  openDevPluginProjectDir,
+  openPluginExamplesDir,
+  validateDevPluginProject,
+  type DevPluginPackageResult,
+  type DevPluginProjectRequest,
+  type DevPluginProjectResult,
+  type DevPluginValidationResult,
+} from '../features/plugins/pluginDevWorkbench';
+import {
   applyScriptPluginActions,
   createScriptPluginContext,
   validateScriptActionPermissions,
@@ -622,6 +633,12 @@ export function App() {
     pluginId: string;
     path: string;
   } | null>(null);
+  const [recentDevProject, setRecentDevProject] =
+    useState<DevPluginProjectResult | null>(null);
+  const [recentDevValidation, setRecentDevValidation] =
+    useState<DevPluginValidationResult | null>(null);
+  const [recentDevPackage, setRecentDevPackage] =
+    useState<DevPluginPackageResult | null>(null);
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
   const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
   const [isExternalRunnerEnabled, setIsExternalRunnerEnabled] = useState(false);
@@ -1484,7 +1501,9 @@ export function App() {
       filterName: 'Text',
     });
 
-  const handleInstallPlugin = async () => {
+  const handleInstallPlugin = async (
+    source: 'manager' | 'dev-workbench' = 'manager',
+  ) => {
     try {
       const pluginPackage = await readLocalPluginPackage();
 
@@ -1588,6 +1607,16 @@ export function App() {
         `${exists ? '覆盖安装' : '导入'}成功：${installedManifest.name}`,
         installedManifest.pluginId,
       );
+      if (source === 'dev-workbench') {
+        recordPluginLog(
+          'info',
+          'dev-package-import-verified',
+          `dev package import verified；安装目录：plugins/installed/${installedManifest.pluginId}；trusted=${String(
+            installedManifest.trusted,
+          )}`,
+          installedManifest.pluginId,
+        );
+      }
       for (const diagnostic of createPluginDiagnosticLogs([
         installedManifest,
       ])) {
@@ -1968,6 +1997,154 @@ export function App() {
     } catch (error) {
       showMessage(
         `打开插件开发目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleCreateDevPluginProject = async (
+    request: DevPluginProjectRequest,
+  ) => {
+    if (!isDesktopApp) {
+      throw new Error('插件开发者工作台仅在桌面端可用。');
+    }
+    try {
+      let result: DevPluginProjectResult;
+      try {
+        result = await createDevPluginProject({
+          ...request,
+          overwrite: false,
+        });
+      } catch (error) {
+        const message = getErrorMessage(error, '创建插件项目失败。');
+        if (
+          message.includes('插件项目已存在') &&
+          window.confirm(`${message}\n\n是否覆盖已有项目？`)
+        ) {
+          result = await createDevPluginProject({
+            ...request,
+            overwrite: true,
+          });
+        } else {
+          throw error;
+        }
+      }
+      setRecentDevProject(result);
+      setRecentDevValidation(null);
+      setRecentDevPackage(null);
+      recordPluginLog(
+        'info',
+        'dev-project-created',
+        `dev project created：${result.directoryPath}`,
+        result.pluginId,
+      );
+      showMessage(
+        `${result.overwritten ? '已覆盖并重新创建' : '插件项目已创建'}：${result.directoryPath}`,
+      );
+      return result;
+    } catch (error) {
+      const message = `创建插件项目失败：${getErrorMessage(
+        error,
+        '未知错误',
+      )}`;
+      showMessage(message);
+      throw new Error(message);
+    }
+  };
+
+  const handleValidateDevPluginProject = async (pluginId: string) => {
+    if (!isDesktopApp) {
+      throw new Error('插件开发者工作台仅在桌面端可用。');
+    }
+    try {
+      const result = await validateDevPluginProject(pluginId);
+      setRecentDevValidation(result);
+      recordPluginLog(
+        result.valid ? 'info' : 'error',
+        result.valid
+          ? 'dev-manifest-validated'
+          : 'dev-project-validation-failed',
+        result.valid
+          ? `dev manifest validated：${result.pluginId}`
+          : `dev project validation failed：${result.errors
+              .map((issue) => issue.message)
+              .join('；')}`,
+        result.pluginId ?? pluginId,
+      );
+      showMessage(
+        result.valid
+          ? `插件项目校验通过，可打包。warnings=${result.warnings.length}`
+          : `插件项目校验失败：${result.errors.length} 个 errors，${result.warnings.length} 个 warnings。`,
+      );
+      return result;
+    } catch (error) {
+      const message = `校验插件项目失败：${getErrorMessage(
+        error,
+        '未知错误',
+      )}`;
+      recordPluginLog(
+        'error',
+        'dev-project-validation-failed',
+        message,
+        pluginId,
+      );
+      showMessage(message);
+      throw new Error(message);
+    }
+  };
+
+  const handleBuildDevPluginPackage = async (pluginId: string) => {
+    if (!isDesktopApp) {
+      throw new Error('插件开发者工作台仅在桌面端可用。');
+    }
+    try {
+      const result = await buildDevPluginPackage(pluginId);
+      if (!result) {
+        return null;
+      }
+      setRecentDevValidation(result.validation);
+      setRecentDevPackage(result);
+      recordPluginLog(
+        'info',
+        'dev-package-built',
+        `dev package built：${result.packagePath}`,
+        result.pluginId,
+      );
+      showMessage(`插件包打包成功：${result.packagePath}`);
+      return result;
+    } catch (error) {
+      const message = `插件包打包失败：${getErrorMessage(
+        error,
+        '未知错误',
+      )}`;
+      recordPluginLog(
+        'error',
+        'dev-package-build-failed',
+        message,
+        pluginId,
+      );
+      showMessage(message);
+      throw new Error(message);
+    }
+  };
+
+  const handleOpenDevPluginProjectDir = async (pluginId: string) => {
+    try {
+      await openDevPluginProjectDir(pluginId);
+      showMessage('已打开插件项目目录。');
+    } catch (error) {
+      showMessage(
+        `打开插件项目目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleOpenPluginExamplesDir = async () => {
+    try {
+      await openPluginExamplesDir();
+      showMessage('已打开示例插件目录。');
+    } catch (error) {
+      showMessage(
+        `打开示例插件目录失败：${getErrorMessage(error, '未知错误')}`,
       );
     }
   };
@@ -5030,7 +5207,7 @@ export function App() {
           userDataDir={userDataDir}
           isDesktopApp={isDesktopApp}
           onClose={() => setIsPluginManagerVisible(false)}
-          onInstall={handleInstallPlugin}
+          onInstall={() => void handleInstallPlugin()}
           onInstallGallery={(item) => void handleInstallGalleryPlugin(item)}
           onOpenGalleryPluginDir={(catalogId) =>
             void handleOpenGalleryPluginDir(catalogId)
@@ -5046,6 +5223,21 @@ export function App() {
           onOpenUserDataDir={() => void handleOpenUserDataDir()}
           onOpenPluginDir={() => void handleOpenPluginDir()}
           onOpenPluginDevDir={() => void handleOpenPluginDevDir()}
+          onCreateDevProject={handleCreateDevPluginProject}
+          onValidateDevProject={handleValidateDevPluginProject}
+          onBuildDevPackage={handleBuildDevPluginPackage}
+          onOpenDevProjectDir={(pluginId) =>
+            void handleOpenDevPluginProjectDir(pluginId)
+          }
+          onOpenPluginExamplesDir={() =>
+            void handleOpenPluginExamplesDir()
+          }
+          onImportDevPackage={() =>
+            void handleInstallPlugin('dev-workbench')
+          }
+          recentDevProject={recentDevProject}
+          recentDevValidation={recentDevValidation}
+          recentDevPackage={recentDevPackage}
           onCreateSamplePlugin={() => void handleCreateSamplePlugin()}
           onCreateSampleScriptPlugin={() =>
             void handleCreateSampleScriptPlugin()
