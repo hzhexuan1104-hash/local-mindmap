@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.external.exe.echo-demo",
+  "name": "示例 EXE 外部程序插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "通过本地 exe 读取 stdin context 并输出 actions JSON。",
+  "pluginType": "external-command",
+  "runtime": "executable",
+  "entry": "keyword-plugin.exe",
+  "capabilities": [
+    "external-command",
+    "mindmap:read",
+    "mindmap:write"
+  ],
+  "enabled": true,
+  "permissions": [
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write",
+    "external-command"
+  ],
+  "contributions": {
+    "menus": [
+      {
+        "id": "runExeKeywordDemo",
+        "label": "EXE：生成关键词子节点",
+        "location": "plugins",
+        "command": "plugin.runExternal",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}

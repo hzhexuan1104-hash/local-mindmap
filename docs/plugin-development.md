@@ -7,7 +7,8 @@ Local Mindmap 保留 v1.7 纯本地声明式 JSON 插件，并在 v1.8 增加默
 
 ## 2. manifest 格式
 
-插件入口是 `manifest.json` 或 `.lmplugin` JSON 文件。核心字段包括：
+插件入口是单独的 `manifest.json`，也可以是以 ZIP 为容器的 `.lmplugin`
+插件包。`.lmplugin` 不是 JSON 文件；其根目录必须包含 `manifest.json`。
 
 | 字段 | 说明 |
 |---|---|
@@ -610,7 +611,7 @@ snapshot，新增显式 `contextVersion: 1`：
 ```json
 {
   "contextVersion": 1,
-  "app": { "version": "1.9.0", "platform": "desktop" },
+  "app": { "version": "1.9.1", "platform": "desktop" },
   "mindmap": {
     "title": "中心主题",
     "nodeCount": 10,
@@ -699,3 +700,126 @@ Local Mindmap 不提供 Shell、DLL、远程 URL、远程插件市场、网络 A
 或网络。因此此功能默认关闭并标记为高风险实验能力，只应运行用户信任的本地程序。
 无论外部程序做什么，Local Mindmap 仅接受 stdout 中通过 Action Protocol 校验的
 actions 来修改当前内存中的导图；插件不能要求宿主直接写 `.lmind` 文件。
+
+## v1.9.1 `.lmplugin` 打包与 executable 插件
+
+### 插件包格式
+
+`.lmplugin` 是普通 ZIP 文件，推荐结构如下：
+
+```text
+sample-python-plugin.lmplugin
+  manifest.json
+  main.py
+  README.md
+```
+
+```text
+sample-exe-plugin.lmplugin
+  manifest.json
+  keyword-plugin.exe
+  README.md
+```
+
+`manifest.json` 必须位于压缩包根目录并通过 manifest schema 校验。`entry`
+必须是插件包内的相对路径；不允许绝对路径、盘符、URL、反斜杠、`.`、`..`
+或空路径片段，且对应文件必须真实存在。安装器在写盘前检查压缩包内的每个路径，
+拒绝 ZIP Slip、重复路径、过量文件和异常解压体积。所有文件只会解压到
+`plugins/installed/<pluginId>/` 的临时目录，完整成功后才原子提交；失败会删除
+临时目录，覆盖失败会恢复旧版本。
+
+覆盖安装保留 registry 中的 `enabled`、`trusted` 和首次安装时间。新安装的
+script、action-workflow、Python 或 executable 插件一律从 `trusted=false`
+开始。运行时仍重新读取 installed manifest，registry 只保存生命周期状态。
+
+### 打包与导出
+
+Python 插件至少把以下文件放在 ZIP 根目录，然后把扩展名改为 `.lmplugin`：
+
+```text
+manifest.json
+main.py
+README.md          # 可选
+```
+
+executable 插件的打包方式相同，只需把 `entry` 改为实际可执行文件：
+
+```text
+manifest.json
+keyword-plugin.exe
+README.md          # 可选
+```
+
+也可在插件详情点击“导出插件包”。宿主导出的包只包含：
+
+- 根目录 `manifest.json`
+- manifest 声明的 `entry` 文件（如有）
+- 根目录 `README.md`（如已安装且存在）
+
+包中不包含 `plugins/plugin-registry.json`、`trusted`、安装时间、诊断字段或用户
+隐私配置。内置插件没有独立安装目录，因此不可导出。导出完成后详情页提供完整
+路径、复制路径和打开所在目录入口。
+
+### executable manifest 示例
+
+```json
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.external.exe.echo-demo",
+  "name": "示例 EXE 外部程序插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "通过本地 exe 读取 stdin context 并输出 actions JSON。",
+  "pluginType": "external-command",
+  "runtime": "executable",
+  "entry": "keyword-plugin.exe",
+  "capabilities": ["external-command", "mindmap:read", "mindmap:write"],
+  "enabled": true,
+  "permissions": [
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write",
+    "external-command"
+  ],
+  "contributions": {
+    "menus": [{
+      "id": "runExeKeywordDemo",
+      "label": "EXE：生成关键词子节点",
+      "location": "plugins",
+      "command": "plugin.runExternal",
+      "when": "hasSelectedNode"
+    }]
+  }
+}
+```
+
+Windows 下 `runtime=executable` 的 entry 只允许 `.exe`。宿主直接启动 installed
+entry，不使用 Shell，不传入插件自定义参数。程序从 stdin 读取一个 UTF-8
+context JSON，并向 stdout 写出且只写出一个 UTF-8 JSON 对象：
+
+```json
+{
+  "actions": [
+    { "type": "showMessage", "level": "info", "message": "完成" }
+  ]
+}
+```
+
+调试信息必须写入 stderr；stderr 不参与协议解析。stdout 非 UTF-8、JSON 无效、
+exit code 非 0 或执行超时都会使本次运行失败，超时进程会被 kill。成功返回的
+actions 仍由宿主执行与 v1.8/v1.9 相同的整批 schema、权限和节点校验，并继续
+使用单个 undo/redo batch。
+
+完整示例说明位于 `docs/examples/sample-exe-plugin/`。仓库不附带预编译 EXE；
+开发者应使用自己的本地工具链生成 `keyword-plugin.exe` 后再打包。
+
+### 明确不支持
+
+- Shell、批处理命令或插件自定义命令行参数
+- DLL
+- 远程 URL、远程插件市场或联网下载
+- 自动安装 Python、运行时或第三方依赖
+
+v1.9.1 不改变 v1.9 的 stdin/stdout 协议，也不改变 Python、script、
+action-workflow 和 v1.7 声明式插件的运行方式。

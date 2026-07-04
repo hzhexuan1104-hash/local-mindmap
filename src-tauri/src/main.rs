@@ -6,7 +6,7 @@ use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -68,6 +68,9 @@ const EXTERNAL_STDOUT_LIMIT: usize = 1024 * 1024;
 const EXTERNAL_STDERR_LIMIT: usize = 64 * 1024;
 const EXTERNAL_DEFAULT_TIMEOUT_MS: u64 = 5000;
 const EXTERNAL_MAX_TIMEOUT_MS: u64 = 30_000;
+const PLUGIN_PACKAGE_MAX_ENTRIES: usize = 1_000;
+const PLUGIN_PACKAGE_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024;
+const PLUGIN_PACKAGE_MAX_TOTAL_SIZE: u64 = 128 * 1024 * 1024;
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -340,6 +343,17 @@ fn resolve_user_relative_path(root: &Path, relative_path: &str) -> Result<PathBu
     Ok(root.join(relative_path_buf))
 }
 
+fn strip_utf8_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
+fn parse_json_without_bom<T>(text: &str) -> Result<T, serde_json::Error>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(strip_utf8_bom(text))
+}
+
 fn read_user_json_at(
     root: &Path,
     relative_path: &str,
@@ -354,7 +368,7 @@ fn read_user_json_at(
     let raw_text = fs::read_to_string(&target)
         .map_err(|error| format!("Failed to read user JSON `{relative_path}`: {error}"))?;
 
-    serde_json::from_str(&raw_text)
+    parse_json_without_bom(&raw_text)
         .map_err(|error| format!("User JSON `{relative_path}` is invalid: {error}"))
 }
 
@@ -597,10 +611,14 @@ fn validate_script_entry_path(entry: &str) -> Result<(), String> {
     {
         return Err("entry 只能是相对路径，不能是绝对路径。".to_string());
     }
-    if normalized
-        .split('/')
-        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
+    if normalized.split('/').any(|segment| {
+        segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains(':')
+            || segment.ends_with('.')
+            || segment.ends_with(' ')
+    }) {
         return Err("entry 不允许包含 ..、. 或空路径片段。".to_string());
     }
     if !normalized.to_ascii_lowercase().ends_with(".js") {
@@ -622,10 +640,14 @@ fn validate_safe_entry_path(entry: &str) -> Result<String, String> {
     {
         return Err("entry 只能是插件目录内相对路径，不能是绝对路径或远程 URL。".to_string());
     }
-    if normalized
-        .split('/')
-        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
+    if normalized.split('/').any(|segment| {
+        segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains(':')
+            || segment.ends_with('.')
+            || segment.ends_with(' ')
+    }) {
         return Err("entry 不允许包含 ..、. 或空路径片段。".to_string());
     }
     Ok(normalized)
@@ -645,6 +667,171 @@ fn validate_external_entry_path(entry: &str, runtime: &str) -> Result<(), String
         if !lower.ends_with(".exe") {
             return Err("Windows 下 runtime=executable 时 entry 必须是 .exe 文件。".to_string());
         }
+    }
+    Ok(())
+}
+
+fn validate_plugin_package_entry_name(name: &str, is_dir: bool) -> Result<Option<String>, String> {
+    if name.is_empty() || name.contains('\0') || name.contains('\\') {
+        return Err(format!("插件包包含非法路径：{name}"));
+    }
+    let normalized = if is_dir {
+        name.trim_end_matches('/')
+    } else {
+        name
+    };
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if normalized.starts_with('/')
+        || normalized.starts_with("//")
+        || normalized.as_bytes().get(1) == Some(&b':')
+        || normalized.contains("://")
+        || normalized.split('/').any(|segment| {
+            segment.is_empty()
+                || segment == "."
+                || segment == ".."
+                || segment.contains(':')
+                || segment.ends_with('.')
+                || segment.ends_with(' ')
+        })
+        || Path::new(normalized)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("插件包包含非法路径：{name}"));
+    }
+    Ok(Some(normalized.to_string()))
+}
+
+#[derive(Debug)]
+struct InspectedPluginPackage {
+    manifest: Value,
+    files: HashSet<String>,
+}
+
+fn inspect_plugin_package(path: &Path) -> Result<InspectedPluginPackage, String> {
+    let file =
+        fs::File::open(path).map_err(|error| format!("插件包解压失败：无法读取文件：{error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("插件包解压失败：不是有效的 zip：{error}"))?;
+    if archive.len() > PLUGIN_PACKAGE_MAX_ENTRIES {
+        return Err(format!(
+            "插件包解压失败：文件数量超过 {} 个限制。",
+            PLUGIN_PACKAGE_MAX_ENTRIES
+        ));
+    }
+
+    let mut files = HashSet::new();
+    let mut manifest_text = None;
+    let mut total_size = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("插件包解压失败：无法读取压缩项：{error}"))?;
+        let Some(name) = validate_plugin_package_entry_name(entry.name(), entry.is_dir())? else {
+            continue;
+        };
+        if entry.is_dir() {
+            continue;
+        }
+        if entry.size() > PLUGIN_PACKAGE_MAX_FILE_SIZE {
+            return Err(format!("插件包解压失败：文件过大：{name}"));
+        }
+        total_size = total_size.saturating_add(entry.size());
+        if total_size > PLUGIN_PACKAGE_MAX_TOTAL_SIZE {
+            return Err("插件包解压失败：解压后总大小超过 128MB。".to_string());
+        }
+        if !files.insert(name.clone()) {
+            return Err(format!("插件包包含重复路径：{name}"));
+        }
+        if name == MANIFEST_FILE_NAME {
+            let mut text = String::new();
+            entry
+                .read_to_string(&mut text)
+                .map_err(|error| format!("manifest JSON 无效：必须是 UTF-8 JSON：{error}"))?;
+            manifest_text = Some(text);
+        }
+    }
+
+    let manifest_text = manifest_text
+        .ok_or_else(|| "缺少 manifest.json：插件包根目录必须包含 manifest.json。".to_string())?;
+    let manifest: Value = parse_json_without_bom(&manifest_text)
+        .map_err(|error| format!("manifest JSON 无效：{error}"))?;
+    let plugin_id = manifest
+        .get("pluginId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let normalized_entry = manifest
+        .get("entry")
+        .and_then(Value::as_str)
+        .map(|entry| {
+            validate_safe_entry_path(entry).map_err(|error| format!("entry 路径非法：{error}"))
+        })
+        .transpose()?;
+    validate_declarative_manifest(plugin_id, &manifest)
+        .map_err(|error| format!("schema 校验失败：{error}"))?;
+
+    if let Some(entry) = normalized_entry {
+        if !files.contains(&entry) {
+            return Err(format!("entry 文件不存在：{entry}"));
+        }
+    }
+
+    Ok(InspectedPluginPackage { manifest, files })
+}
+
+fn extract_plugin_package(path: &Path, staging_dir: &Path) -> Result<(), String> {
+    let inspected = inspect_plugin_package(path)?;
+    let file =
+        fs::File::open(path).map_err(|error| format!("插件包解压失败：无法读取文件：{error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("插件包解压失败：不是有效的 zip：{error}"))?;
+    if archive.len() > PLUGIN_PACKAGE_MAX_ENTRIES {
+        return Err(format!(
+            "插件包解压失败：文件数量超过 {} 个限制。",
+            PLUGIN_PACKAGE_MAX_ENTRIES
+        ));
+    }
+
+    let mut total_size = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("插件包解压失败：无法读取压缩项：{error}"))?;
+        let Some(name) = validate_plugin_package_entry_name(entry.name(), entry.is_dir())? else {
+            continue;
+        };
+        let target = staging_dir.join(Path::new(&name));
+        if !target.starts_with(staging_dir) {
+            return Err(format!("插件包包含非法路径：{name}"));
+        }
+        if entry.is_dir() {
+            fs::create_dir_all(&target)
+                .map_err(|error| format!("插件包解压失败：目录创建失败：{error}"))?;
+            continue;
+        }
+        if entry.size() > PLUGIN_PACKAGE_MAX_FILE_SIZE {
+            return Err(format!("插件包解压失败：文件过大：{name}"));
+        }
+        total_size = total_size.saturating_add(entry.size());
+        if total_size > PLUGIN_PACKAGE_MAX_TOTAL_SIZE {
+            return Err("插件包解压失败：解压后总大小超过 128MB。".to_string());
+        }
+        if name == MANIFEST_FILE_NAME {
+            continue;
+        }
+        if !inspected.files.contains(&name) {
+            return Err(format!("插件包解压失败：压缩项校验状态异常：{name}"));
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("插件包解压失败：目录创建失败：{error}"))?;
+        }
+        let mut output = fs::File::create(&target)
+            .map_err(|error| format!("插件包解压失败：文件创建失败：{error}"))?;
+        std::io::copy(&mut entry, &mut output)
+            .map_err(|error| format!("插件包解压失败：文件写入失败：{error}"))?;
     }
     Ok(())
 }
@@ -825,6 +1012,35 @@ fn upsert_plugin_registry(
     Ok(Value::Array(plugins))
 }
 
+fn manifest_with_install_lifecycle(
+    manifest: &Value,
+    registry: &Value,
+    plugin_id: &str,
+    overwrite: bool,
+) -> Value {
+    let mut installed = manifest.clone();
+    let Some(object) = installed.as_object_mut() else {
+        return installed;
+    };
+    let existing = registry.as_array().and_then(|plugins| {
+        plugins
+            .iter()
+            .find(|plugin| plugin.get("pluginId").and_then(Value::as_str) == Some(plugin_id))
+    });
+    if overwrite {
+        if let Some(existing) = existing {
+            for field in ["enabled", "trusted", "installedAt"] {
+                if let Some(value) = existing.get(field) {
+                    object.insert(field.to_string(), value.clone());
+                }
+            }
+            return installed;
+        }
+    }
+    object.insert("trusted".to_string(), Value::Bool(false));
+    installed
+}
+
 fn remove_path_if_exists(path: &Path) -> Result<(), String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -878,6 +1094,8 @@ struct PluginInstallAsset {
     relative_path: String,
     source_path: Option<String>,
     text: Option<String>,
+    #[serde(default)]
+    optional: bool,
 }
 
 fn copy_plugin_install_assets(
@@ -903,12 +1121,20 @@ fn copy_plugin_install_assets(
             continue;
         }
 
-        let source_path = asset
-            .source_path
-            .as_deref()
-            .ok_or_else(|| format!("导入失败：脚本入口文件不存在：{}。", asset.relative_path))?;
+        let Some(source_path) = asset.source_path.as_deref() else {
+            if asset.optional {
+                continue;
+            }
+            return Err(format!(
+                "导入失败：脚本入口文件不存在：{}。",
+                asset.relative_path
+            ));
+        };
         let source_path = Path::new(source_path);
         if !source_path.is_file() {
+            if asset.optional {
+                continue;
+            }
             return Err(format!(
                 "导入失败：脚本入口文件不存在：{}。",
                 asset.relative_path
@@ -927,37 +1153,20 @@ fn copy_plugin_install_assets(
     Ok(())
 }
 
-fn install_plugin_to_user_dir_at_with_writer<F>(
+fn install_plugin_to_user_dir_at_with_stager<F, W>(
     root: &Path,
     plugin_id: &str,
     manifest: &Value,
     overwrite: bool,
-    manifest_source_path: Option<&str>,
-    assets: &[PluginInstallAsset],
-    mut write_json: F,
+    stage_assets: F,
+    mut write_json: W,
 ) -> Result<(), String>
 where
-    F: FnMut(&Path, &str, &Value) -> Result<(), String>,
+    F: FnOnce(&Path) -> Result<(), String>,
+    W: FnMut(&Path, &str, &Value) -> Result<(), String>,
 {
     validate_declarative_manifest(plugin_id, manifest)
         .map_err(|error| format!("插件 manifest 校验失败：{error}"))?;
-    let plugin_type = manifest
-        .get("pluginType")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if plugin_type == "script" || plugin_type == "external-command" {
-        let entry = manifest
-            .get("entry")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .replace('\\', "/");
-        if !assets
-            .iter()
-            .any(|asset| asset.relative_path.replace('\\', "/") == entry)
-        {
-            return Err(format!("导入失败：插件入口文件不存在：{entry}。"));
-        }
-    }
 
     let relative_plugin_dir = format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}");
     let relative_manifest_path = format!("{relative_plugin_dir}/{MANIFEST_FILE_NAME}");
@@ -974,6 +1183,8 @@ where
     let original_registry =
         read_user_json_at(root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))
             .map_err(|error| format!("插件 registry 读取失败：{error}"))?;
+    let installed_manifest =
+        manifest_with_install_lifecycle(manifest, &original_registry, plugin_id, overwrite);
     let registry_has_plugin = plugin_registry_contains(&original_registry, plugin_id)?;
     let manifest_exists = target_manifest.is_file();
 
@@ -992,7 +1203,7 @@ where
         .map_err(|error| format!("插件安装备份目录清理失败：{error}"))?;
     fs::create_dir_all(&staging_dir).map_err(|error| format!("插件安装目录创建失败：{error}"))?;
 
-    if let Err(error) = write_json(root, &relative_staging_manifest, manifest) {
+    if let Err(error) = write_json(root, &relative_staging_manifest, &installed_manifest) {
         let cleanup_error = remove_path_if_exists(&staging_dir).err();
         return Err(format!(
             "插件 manifest 写入失败：{error}{}",
@@ -1001,7 +1212,7 @@ where
                 .unwrap_or_default()
         ));
     }
-    if let Err(error) = copy_plugin_install_assets(&staging_dir, manifest_source_path, assets) {
+    if let Err(error) = stage_assets(&staging_dir) {
         let cleanup_error = remove_path_if_exists(&staging_dir).err();
         return Err(format!(
             "{error}{}",
@@ -1009,6 +1220,18 @@ where
                 .map(|cleanup| format!("；临时目录回滚失败：{cleanup}"))
                 .unwrap_or_default()
         ));
+    }
+    if let Some(entry) = installed_manifest.get("entry").and_then(Value::as_str) {
+        let entry = validate_safe_entry_path(entry)?;
+        if !staging_dir.join(Path::new(&entry)).is_file() {
+            let cleanup_error = remove_path_if_exists(&staging_dir).err();
+            return Err(format!(
+                "导入失败：插件入口文件不存在：{entry}。{}",
+                cleanup_error
+                    .map(|cleanup| format!("临时目录回滚失败：{cleanup}"))
+                    .unwrap_or_default()
+            ));
+        }
     }
 
     let had_previous_install = target_dir.exists();
@@ -1025,7 +1248,7 @@ where
         return Err(format!("插件安装目录提交失败：{error}"));
     }
 
-    let next_registry = upsert_plugin_registry(&original_registry, plugin_id, manifest)?;
+    let next_registry = upsert_plugin_registry(&original_registry, plugin_id, &installed_manifest)?;
     if let Err(error) = write_json(root, USER_PLUGIN_REGISTRY_PATH, &next_registry) {
         let mut rollback_errors = Vec::new();
         if let Err(rollback_error) = remove_path_if_exists(&target_dir) {
@@ -1059,6 +1282,28 @@ where
     }
 
     Ok(())
+}
+
+fn install_plugin_to_user_dir_at_with_writer<W>(
+    root: &Path,
+    plugin_id: &str,
+    manifest: &Value,
+    overwrite: bool,
+    manifest_source_path: Option<&str>,
+    assets: &[PluginInstallAsset],
+    write_json: W,
+) -> Result<(), String>
+where
+    W: FnMut(&Path, &str, &Value) -> Result<(), String>,
+{
+    install_plugin_to_user_dir_at_with_stager(
+        root,
+        plugin_id,
+        manifest,
+        overwrite,
+        |staging_dir| copy_plugin_install_assets(staging_dir, manifest_source_path, assets),
+        write_json,
+    )
 }
 
 #[cfg(test)]
@@ -1685,7 +1930,7 @@ fn scan_installed_plugin_manifests_at(
                 continue;
             }
         };
-        match serde_json::from_str::<Value>(&raw_manifest) {
+        match parse_json_without_bom::<Value>(&raw_manifest) {
             Ok(manifest) => results.push(InstalledPluginScanEntry {
                 plugin_id_hint,
                 manifest_path: relative_manifest_path,
@@ -1802,6 +2047,313 @@ struct OpenedLocalFile {
     path: String,
     file_name: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedPluginImport {
+    path: String,
+    file_name: String,
+    kind: String,
+    manifest: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PluginImportKind {
+    Manifest,
+    Package,
+}
+
+fn normalized_picker_value(value: &str) -> String {
+    let trimmed = value.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(trimmed)
+        .trim();
+    unquoted
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(unquoted)
+        .trim()
+        .trim_matches(['"', '\''])
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn classify_plugin_import(path: &str, file_name: &str) -> Result<PluginImportKind, String> {
+    let candidates = [
+        normalized_picker_value(path),
+        normalized_picker_value(file_name),
+    ];
+    if candidates
+        .iter()
+        .any(|candidate| candidate.ends_with(".lmplugin"))
+    {
+        return Ok(PluginImportKind::Package);
+    }
+    if candidates
+        .iter()
+        .any(|candidate| candidate.ends_with(".json"))
+    {
+        return Ok(PluginImportKind::Manifest);
+    }
+    Err("不支持的插件文件类型：请选择 .json 或 .lmplugin 文件。".to_string())
+}
+
+fn usable_picker_path(path: &Path) -> PathBuf {
+    if path.is_file() {
+        return path.to_path_buf();
+    }
+    let raw = path.to_string_lossy();
+    let trimmed = raw.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(trimmed)
+        .trim();
+    PathBuf::from(
+        unquoted
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(unquoted)
+            .trim()
+            .trim_matches(['"', '\''])
+            .trim(),
+    )
+}
+
+fn read_plugin_import_at(path: &Path, file_name: &str) -> Result<OpenedPluginImport, String> {
+    let usable_path = usable_picker_path(path);
+    let kind = classify_plugin_import(&path.to_string_lossy(), file_name)?;
+    let manifest = match kind {
+        PluginImportKind::Package => {
+            inspect_plugin_package(&usable_path)
+                .map_err(|error| {
+                    if error.contains("缺少 manifest.json") {
+                        error
+                    } else {
+                        format!("插件包无效 / 无法解压：{error}")
+                    }
+                })?
+                .manifest
+        }
+        PluginImportKind::Manifest => {
+            let text = fs::read_to_string(&usable_path)
+                .map_err(|error| format!("manifest JSON 无效：无法读取 UTF-8 JSON：{error}"))?;
+            parse_json_without_bom(&text).map_err(|error| format!("manifest JSON 无效：{error}"))?
+        }
+    };
+    Ok(OpenedPluginImport {
+        path: usable_path.to_string_lossy().to_string(),
+        file_name: file_name.to_string(),
+        kind: match kind {
+            PluginImportKind::Package => "lmplugin",
+            PluginImportKind::Manifest => "manifest",
+        }
+        .to_string(),
+        manifest,
+    })
+}
+
+#[tauri::command]
+fn open_plugin_import_with_dialog() -> Result<Option<OpenedPluginImport>, String> {
+    let Some(path) = FileDialog::new()
+        .set_title("导入本地插件")
+        .add_filter("Local Mindmap plugin", &["json", "lmplugin"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    read_plugin_import_at(&path, &file_name).map(Some)
+}
+
+#[tauri::command]
+fn install_plugin_package(
+    app: AppHandle,
+    package_path: String,
+    manifest: Value,
+    overwrite: bool,
+) -> Result<(), String> {
+    let package_path = PathBuf::from(&package_path);
+    let inspected = inspect_plugin_package(&package_path)?;
+    let package_plugin_id = inspected
+        .manifest
+        .get("pluginId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let plugin_id = manifest
+        .get("pluginId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if package_plugin_id != plugin_id {
+        return Err(
+            "schema 校验失败：插件包 manifest 与待安装 manifest 的 pluginId 不一致。".to_string(),
+        );
+    }
+    validate_declarative_manifest(plugin_id, &manifest)
+        .map_err(|error| format!("schema 校验失败：{error}"))?;
+    let mut package_manifest = inspected.manifest;
+    if let (Some(object), Some(installed_at)) = (
+        package_manifest.as_object_mut(),
+        manifest.get("installedAt"),
+    ) {
+        object.insert("installedAt".to_string(), installed_at.clone());
+    }
+    let root = ensure_user_data_root(&app)?;
+    install_plugin_to_user_dir_at_with_stager(
+        &root,
+        plugin_id,
+        &package_manifest,
+        overwrite,
+        |staging_dir| extract_plugin_package(&package_path, staging_dir),
+        write_user_json_at,
+    )
+}
+
+fn exportable_plugin_manifest(manifest: &Value) -> Value {
+    let mut exported = manifest.clone();
+    if let Some(object) = exported.as_object_mut() {
+        for field in [
+            "trusted",
+            "installedAt",
+            "updatedAt",
+            "builtIn",
+            "category",
+            "source",
+            "manifestValid",
+            "manifestError",
+            "validationErrors",
+            "validationWarnings",
+            "manifestPath",
+            "installedDirPath",
+            "config",
+        ] {
+            object.remove(field);
+        }
+    }
+    exported
+}
+
+fn export_plugin_package_at(
+    root: &Path,
+    plugin_id: &str,
+    output_path: &Path,
+) -> Result<(), String> {
+    if !is_safe_plugin_id(plugin_id) {
+        return Err("Invalid pluginId.".to_string());
+    }
+    let registry = read_user_json_at(root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))?;
+    if !plugin_registry_contains(&registry, plugin_id)? {
+        return Err(format!("插件未安装或为不可导出的内置插件：{plugin_id}"));
+    }
+    let plugin_dir =
+        resolve_user_relative_path(root, &format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}"))?;
+    let manifest_path = plugin_dir.join(MANIFEST_FILE_NAME);
+    let manifest_text = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("导出失败：manifest.json 读取失败：{error}"))?;
+    let manifest: Value = parse_json_without_bom(&manifest_text)
+        .map_err(|error| format!("导出失败：manifest JSON 无效：{error}"))?;
+    validate_declarative_manifest(plugin_id, &manifest)
+        .map_err(|error| format!("导出失败：schema 校验失败：{error}"))?;
+    let exported_manifest = exportable_plugin_manifest(&manifest);
+
+    let temporary_path = output_path.with_extension("lmplugin.tmp");
+    remove_path_if_exists(&temporary_path)?;
+    let result = (|| {
+        let file = fs::File::create(&temporary_path)
+            .map_err(|error| format!("导出失败：无法创建插件包：{error}"))?;
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file(MANIFEST_FILE_NAME, options)
+            .map_err(|error| format!("导出失败：无法写入 manifest.json：{error}"))?;
+        writer
+            .write_all(
+                serde_json::to_string_pretty(&exported_manifest)
+                    .map_err(|error| format!("导出失败：manifest 序列化失败：{error}"))?
+                    .as_bytes(),
+            )
+            .map_err(|error| format!("导出失败：manifest 写入失败：{error}"))?;
+
+        if let Some(entry) = manifest.get("entry").and_then(Value::as_str) {
+            let entry = validate_safe_entry_path(entry)
+                .map_err(|error| format!("导出失败：entry 路径非法：{error}"))?;
+            let entry_path = plugin_dir.join(Path::new(&entry));
+            if !entry_path.is_file() {
+                return Err(format!("导出失败：entry 文件不存在：{entry}"));
+            }
+            writer
+                .start_file(&entry, options)
+                .map_err(|error| format!("导出失败：entry 写入失败：{error}"))?;
+            let mut source = fs::File::open(&entry_path)
+                .map_err(|error| format!("导出失败：entry 读取失败：{error}"))?;
+            std::io::copy(&mut source, &mut writer)
+                .map_err(|error| format!("导出失败：entry 写入失败：{error}"))?;
+        }
+
+        let readme_path = plugin_dir.join("README.md");
+        if readme_path.is_file() {
+            writer
+                .start_file("README.md", options)
+                .map_err(|error| format!("导出失败：README.md 写入失败：{error}"))?;
+            let mut source = fs::File::open(&readme_path)
+                .map_err(|error| format!("导出失败：README.md 读取失败：{error}"))?;
+            std::io::copy(&mut source, &mut writer)
+                .map_err(|error| format!("导出失败：README.md 写入失败：{error}"))?;
+        }
+        writer
+            .finish()
+            .map_err(|error| format!("导出失败：插件包收尾失败：{error}"))?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = remove_path_if_exists(&temporary_path);
+        return Err(error);
+    }
+    if output_path.exists() {
+        fs::remove_file(output_path)
+            .map_err(|error| format!("导出失败：无法覆盖目标文件：{error}"))?;
+    }
+    fs::rename(&temporary_path, output_path)
+        .map_err(|error| format!("导出失败：无法提交插件包：{error}"))
+}
+
+#[tauri::command]
+fn export_plugin_package(app: AppHandle, plugin_id: String) -> Result<Option<String>, String> {
+    let Some(mut path) = FileDialog::new()
+        .set_title("导出插件包")
+        .set_file_name(format!("{plugin_id}.lmplugin"))
+        .add_filter("Local Mindmap plugin", &["lmplugin"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("lmplugin"))
+    {
+        path.set_extension("lmplugin");
+    }
+    let root = ensure_user_data_root(&app)?;
+    export_plugin_package_at(&root, &plugin_id, &path)?;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -1980,7 +2532,7 @@ fn load_registry(plugin_dir: &Path) -> DesktopPluginRegistry {
         return DesktopPluginRegistry::default();
     };
 
-    serde_json::from_str(&raw_text).unwrap_or_default()
+    parse_json_without_bom(&raw_text).unwrap_or_default()
 }
 
 fn save_registry(plugin_dir: &Path, registry: &DesktopPluginRegistry) -> Result<(), String> {
@@ -2008,7 +2560,7 @@ fn is_safe_plugin_id(plugin_id: &str) -> bool {
 }
 
 fn validate_native_manifest(raw_manifest: &str) -> Result<NativePluginManifest, String> {
-    let value: Value = serde_json::from_str(raw_manifest)
+    let value: Value = parse_json_without_bom(raw_manifest)
         .map_err(|error| format!("Manifest is not valid JSON: {error}"))?;
     let object = value
         .as_object()
@@ -2704,6 +3256,9 @@ fn main() {
             open_plugin_manifest_dir,
             scan_installed_plugin_manifests,
             reload_plugins_from_disk,
+            open_plugin_import_with_dialog,
+            install_plugin_package,
+            export_plugin_package,
             save_local_file_with_dialog,
             write_local_file,
             read_local_file,
@@ -2734,6 +3289,45 @@ mod tests {
             .expect("system clock should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("local-mindmap-{name}-{suffix}"))
+    }
+
+    fn write_test_plugin_package(path: &Path, entries: &[(&str, &[u8])]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("package parent should be created");
+        }
+        let file = fs::File::create(path).expect("package should be created");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            writer
+                .start_file(*name, options)
+                .expect("test package entry should start");
+            writer
+                .write_all(bytes)
+                .expect("test package entry should be written");
+        }
+        writer.finish().expect("test package should finish");
+    }
+
+    fn install_test_plugin_package(
+        root: &Path,
+        package_path: &Path,
+        manifest: &Value,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        let plugin_id = manifest
+            .get("pluginId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        install_plugin_to_user_dir_at_with_stager(
+            root,
+            plugin_id,
+            manifest,
+            overwrite,
+            |staging_dir| extract_plugin_package(package_path, staging_dir),
+            write_user_json_at,
+        )
     }
 
     fn test_declarative_plugin(plugin_id: &str) -> Value {
@@ -2850,6 +3444,7 @@ mod tests {
             relative_path: "main.py".to_string(),
             source_path: Some(entry_path.to_string_lossy().to_string()),
             text: None,
+            optional: false,
         }];
         install_plugin_to_user_dir_at_with_writer(
             root,
@@ -2874,7 +3469,7 @@ mod tests {
     fn external_test_context() -> Value {
         json!({
             "contextVersion": 1,
-            "app": { "version": "1.9.0", "platform": "desktop" },
+            "app": { "version": "1.9.1", "platform": "desktop" },
             "mindmap": {
                 "title": "中心主题",
                 "nodeCount": 1,
@@ -3075,6 +3670,7 @@ mod tests {
             relative_path: "plugin.exe".to_string(),
             source_path: Some(source_exe.to_string_lossy().to_string()),
             text: None,
+            optional: false,
         }];
         install_plugin_to_user_dir_at_with_writer(
             &root,
@@ -3101,6 +3697,95 @@ mod tests {
         assert_eq!(result.status, "success");
         assert_eq!(result.exit_code, Some(0));
         assert!(!result.stdout.trim().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn external_executable_runner_handles_actions_exit_and_timeout() {
+        let root = test_root("external-executable-protocol");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let source_dir = root.join("source-executable-protocol");
+        fs::create_dir_all(&source_dir).expect("source directory should exist");
+        let source = source_dir.join("plugin.rs");
+        fs::write(
+            &source,
+            r#"
+use std::{io::{self, Read}, process, thread, time::Duration};
+fn main() {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).unwrap();
+    if input.contains("\"text\":\"exit\"") { process::exit(7); }
+    if input.contains("\"text\":\"timeout\"") { thread::sleep(Duration::from_secs(2)); }
+    println!("{{\"actions\":[{{\"type\":\"showMessage\",\"level\":\"info\",\"message\":\"exe ok\"}}]}}");
+}
+"#,
+        )
+        .expect("helper source should be written");
+        let source_exe = source_dir.join("plugin.exe");
+        let compile = Command::new("rustc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&source_exe)
+            .output()
+            .expect("rustc should compile executable test helper");
+        assert!(
+            compile.status.success(),
+            "helper compile failed: {}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        let manifest_path = source_dir.join(MANIFEST_FILE_NAME);
+        fs::write(&manifest_path, "{}").expect("source manifest should exist");
+        let plugin_id = "localmindmap.test.external.executable.protocol";
+        let manifest = test_external_executable_plugin(plugin_id, "plugin.exe");
+        let assets = vec![PluginInstallAsset {
+            relative_path: "plugin.exe".to_string(),
+            source_path: Some(source_exe.to_string_lossy().to_string()),
+            text: None,
+            optional: false,
+        }];
+        install_plugin_to_user_dir_at_with_writer(
+            &root,
+            plugin_id,
+            &manifest,
+            false,
+            Some(&manifest_path.to_string_lossy()),
+            &assets,
+            write_user_json_at,
+        )
+        .expect("executable plugin should install");
+        write_user_json_at(
+            &root,
+            USER_PLUGIN_SETTINGS_PATH,
+            &json!({ "externalRunnerEnabled": true, "pythonPath": "python" }),
+        )
+        .expect("settings should be written");
+
+        let success =
+            run_external_command_at(&root, plugin_id, &external_test_context(), "python", 2000)
+                .expect("executable should run");
+        assert_eq!(success.status, "success");
+        assert_eq!(
+            serde_json::from_str::<Value>(&success.stdout).expect("stdout should be JSON")
+                ["actions"][0]["message"],
+            "exe ok"
+        );
+
+        let mut exit_context = external_test_context();
+        exit_context["selectedNode"]["text"] = json!("exit");
+        let failed = run_external_command_at(&root, plugin_id, &exit_context, "python", 2000)
+            .expect("non-zero exit should return process result");
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.exit_code, Some(7));
+
+        let mut timeout_context = external_test_context();
+        timeout_context["selectedNode"]["text"] = json!("timeout");
+        let timed_out = run_external_command_at(&root, plugin_id, &timeout_context, "python", 100)
+            .expect("timeout should return process result");
+        assert_eq!(timed_out.status, "timeout");
+        assert!(timed_out.duration_ms < 1500);
+
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3749,10 +4434,10 @@ mod tests {
             .expect("updated registry should be readable");
         assert_eq!(manifest["version"], "1.0.1");
         assert_eq!(manifest["name"], "Updated plugin");
-        assert_eq!(manifest["enabled"], false);
+        assert_eq!(manifest["enabled"], true);
         assert_eq!(registry[0]["pluginId"], plugin_id);
         assert!(registry[0].get("version").is_none());
-        assert_eq!(registry[0]["enabled"], false);
+        assert_eq!(registry[0]["enabled"], true);
         let scanned = scan_installed_plugin_manifests_at(&root, &[])
             .expect("installed plugin scan should succeed");
         let installed = scanned
@@ -4004,6 +4689,7 @@ mod tests {
             relative_path: "main.js".to_string(),
             source_path: Some(source_dir.join("main.js").to_string_lossy().to_string()),
             text: None,
+            optional: false,
         };
         let error = install_plugin_to_user_dir_at_with_writer(
             &root,
@@ -4026,6 +4712,7 @@ mod tests {
             relative_path: "main.js".to_string(),
             source_path: Some(source_dir.join("main.js").to_string_lossy().to_string()),
             text: None,
+            optional: false,
         };
         install_plugin_to_user_dir_at_with_writer(
             &root,
@@ -4044,6 +4731,365 @@ mod tests {
             fs::read_to_string(installed_entry).expect("installed entry should be readable"),
             "async function run(){ return []; }"
         );
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_package_rejects_missing_invalid_and_unsafe_manifest_cases() {
+        let root = test_root("package-invalid");
+        fs::create_dir_all(&root).expect("test root should exist");
+
+        let missing = root.join("missing.lmplugin");
+        write_test_plugin_package(&missing, &[("main.py", b"print('{}')")]);
+        assert!(inspect_plugin_package(&missing)
+            .expect_err("missing manifest should fail")
+            .contains("缺少 manifest.json"));
+
+        let invalid = root.join("invalid-json.lmplugin");
+        write_test_plugin_package(&invalid, &[("manifest.json", b"{ broken")]);
+        assert!(inspect_plugin_package(&invalid)
+            .expect_err("invalid manifest JSON should fail")
+            .contains("manifest JSON 无效"));
+
+        let plugin_id = "localmindmap.test.package.invalid";
+        let manifest = test_external_python_plugin(plugin_id);
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest should serialize");
+        let missing_entry = root.join("missing-entry.lmplugin");
+        write_test_plugin_package(&missing_entry, &[("manifest.json", &manifest_bytes)]);
+        assert!(inspect_plugin_package(&missing_entry)
+            .expect_err("missing entry should fail")
+            .contains("entry 文件不存在"));
+
+        let mut unsafe_manifest = manifest;
+        unsafe_manifest["entry"] = json!("../bad.py");
+        let unsafe_bytes =
+            serde_json::to_vec(&unsafe_manifest).expect("unsafe manifest should serialize");
+        let unsafe_entry = root.join("unsafe-entry.lmplugin");
+        write_test_plugin_package(
+            &unsafe_entry,
+            &[("manifest.json", &unsafe_bytes), ("bad.py", b"")],
+        );
+        assert!(inspect_plugin_package(&unsafe_entry)
+            .expect_err("unsafe entry should fail")
+            .contains("entry 路径非法"));
+
+        let zip_slip = root.join("zip-slip.lmplugin");
+        write_test_plugin_package(
+            &zip_slip,
+            &[
+                ("manifest.json", &manifest_bytes),
+                ("main.py", b"print('{}')"),
+                ("../outside.txt", b"bad"),
+            ],
+        );
+        assert!(inspect_plugin_package(&zip_slip)
+            .expect_err("zip slip should fail")
+            .contains("插件包包含非法路径"));
+        assert!(!root.join("outside.txt").exists());
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_import_dispatch_is_case_insensitive_and_never_parses_package_bytes_as_json() {
+        assert_eq!(
+            classify_plugin_import(
+                r#"  "C:\plugins\valid-python.LMPLUGIN?download=1"  "#,
+                "valid-python.LMPLUGIN?download=1"
+            ),
+            Ok(PluginImportKind::Package)
+        );
+        assert_eq!(
+            classify_plugin_import("C:/plugins/manifest.JSON#selected", r#"' manifest.JSON '"#),
+            Ok(PluginImportKind::Manifest)
+        );
+
+        let root = test_root("package-dispatch");
+        fs::create_dir_all(&root).expect("test root should exist");
+        let plugin_id = "localmindmap.test.package.dispatch";
+        let manifest = test_external_python_plugin(plugin_id);
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest should serialize");
+        let package_without_extension = root.join("selected-plugin");
+        write_test_plugin_package(
+            &package_without_extension,
+            &[
+                ("manifest.json", &manifest_bytes),
+                ("main.py", b"print('{\"actions\": []}')"),
+                ("README.md", b"# Dispatch"),
+            ],
+        );
+        let opened = read_plugin_import_at(
+            &package_without_extension,
+            r#"" valid-python-keyword-plugin.LMPLUGIN?source=test ""#,
+        )
+        .expect("package should be dispatched by its display name");
+        assert_eq!(opened.kind, "lmplugin");
+        assert_eq!(opened.manifest["pluginId"], plugin_id);
+
+        let broken_package = root.join("broken.lmplugin");
+        fs::write(&broken_package, b"PK not a zip").expect("broken package should be written");
+        let error = read_plugin_import_at(&broken_package, "broken.lmplugin")
+            .expect_err("broken package should fail as a package");
+        assert!(error.contains("插件包无效 / 无法解压"));
+        assert!(!error.contains("manifest JSON 无效"));
+
+        let json_path = root.join("manifest.JSON");
+        fs::write(&json_path, &manifest_bytes).expect("JSON manifest should be written");
+        let opened_json = read_plugin_import_at(&json_path, "manifest.JSON")
+            .expect("JSON manifest should use manifest flow");
+        assert_eq!(opened_json.kind, "manifest");
+        assert_eq!(opened_json.manifest["pluginId"], plugin_id);
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn utf8_bom_manifest_is_supported_for_json_packages_and_installed_scans() {
+        assert_eq!(strip_utf8_bom("\u{feff}{\"ok\":true}"), "{\"ok\":true}");
+        assert_eq!(
+            strip_utf8_bom("{\"value\":\"\u{feff}kept\"}"),
+            "{\"value\":\"\u{feff}kept\"}"
+        );
+
+        let root = test_root("manifest-bom");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "localmindmap.test.package.bom";
+        let manifest = test_external_python_plugin(plugin_id);
+        let manifest_json = serde_json::to_vec(&manifest).expect("manifest should serialize");
+        let mut bom_manifest = vec![0xef, 0xbb, 0xbf];
+        bom_manifest.extend_from_slice(&manifest_json);
+
+        let json_path = root.join("bom-manifest.json");
+        fs::write(&json_path, &bom_manifest).expect("BOM JSON manifest should be written");
+        let opened_json = read_plugin_import_at(&json_path, "bom-manifest.json")
+            .expect("ordinary BOM JSON manifest should import");
+        assert_eq!(opened_json.kind, "manifest");
+        assert_eq!(opened_json.manifest["pluginId"], plugin_id);
+
+        let package_path = root.join("bom-plugin.lmplugin");
+        write_test_plugin_package(
+            &package_path,
+            &[
+                ("manifest.json", &bom_manifest),
+                ("main.py", b"print('{\"actions\": []}')"),
+                ("README.md", b"# BOM package"),
+            ],
+        );
+        let opened_package = read_plugin_import_at(&package_path, "bom-plugin.lmplugin")
+            .expect("BOM package manifest should import");
+        assert_eq!(opened_package.kind, "lmplugin");
+        assert_eq!(opened_package.manifest["pluginId"], plugin_id);
+        install_test_plugin_package(&root, &package_path, &opened_package.manifest, false)
+            .expect("BOM package should install");
+        let installed_dir = root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}"));
+        assert!(installed_dir.join(MANIFEST_FILE_NAME).is_file());
+        assert!(installed_dir.join("main.py").is_file());
+        assert!(installed_dir.join("README.md").is_file());
+
+        let scanned_plugin_id = "localmindmap.test.installed.bom";
+        let scanned_dir = root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{scanned_plugin_id}"));
+        fs::create_dir_all(&scanned_dir).expect("installed scan directory should exist");
+        let scanned_manifest = test_declarative_plugin(scanned_plugin_id);
+        let mut scanned_bom = vec![0xef, 0xbb, 0xbf];
+        scanned_bom.extend_from_slice(
+            &serde_json::to_vec(&scanned_manifest).expect("scan manifest should serialize"),
+        );
+        fs::write(scanned_dir.join(MANIFEST_FILE_NAME), scanned_bom)
+            .expect("installed BOM manifest should be written");
+        let scanned = scan_installed_plugin_manifests_at(&root, &[])
+            .expect("installed manifests should scan");
+        assert!(scanned.iter().any(|entry| {
+            entry.plugin_id_hint == scanned_plugin_id
+                && entry
+                    .manifest
+                    .as_ref()
+                    .and_then(|value| value.get("pluginId"))
+                    == Some(&json!(scanned_plugin_id))
+                && entry.error.is_none()
+        }));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_package_install_is_atomic_and_preserves_lifecycle_state() {
+        let root = test_root("package-install");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "localmindmap.test.package.python";
+        let manifest = test_external_python_plugin(plugin_id);
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest should serialize");
+
+        let broken_package = root.join("broken-extraction.lmplugin");
+        write_test_plugin_package(
+            &broken_package,
+            &[
+                ("manifest.json", &manifest_bytes),
+                ("main.py", b"print('{}')"),
+                ("conflict", b"file"),
+                ("conflict/nested.txt", b"cannot be created"),
+            ],
+        );
+        install_test_plugin_package(&root, &broken_package, &manifest, false)
+            .expect_err("extraction failure should abort installation");
+        assert!(!root
+            .join(format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}"))
+            .exists());
+        assert!(!root
+            .join(format!(
+                "{USER_PLUGIN_INSTALLED_DIR}/.{plugin_id}.installing"
+            ))
+            .exists());
+        let failed_registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should remain readable");
+        assert!(!plugin_registry_contains(&failed_registry, plugin_id)
+            .expect("registry should stay valid"));
+
+        let package = root.join("valid.lmplugin");
+        write_test_plugin_package(
+            &package,
+            &[
+                ("manifest.json", &manifest_bytes),
+                ("main.py", b"print('{\"actions\": []}')"),
+                ("README.md", b"# Test"),
+            ],
+        );
+        install_test_plugin_package(&root, &package, &manifest, false)
+            .expect("package should install");
+        let installed_dir = root.join(format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}"));
+        assert!(installed_dir.join(MANIFEST_FILE_NAME).is_file());
+        assert_eq!(
+            fs::read(installed_dir.join("main.py")).expect("entry should be readable"),
+            b"print('{\"actions\": []}')"
+        );
+        assert_eq!(
+            fs::read(installed_dir.join("README.md")).expect("README should be copied"),
+            b"# Test"
+        );
+        let initial_registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        let lifecycle_keys = initial_registry[0]
+            .as_object()
+            .expect("registry entry should be an object")
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            lifecycle_keys,
+            HashSet::from([
+                "pluginId".to_string(),
+                "enabled".to_string(),
+                "trusted".to_string(),
+                "installedAt".to_string(),
+                "updatedAt".to_string(),
+            ])
+        );
+        assert_eq!(initial_registry[0]["trusted"], false);
+
+        let mut registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        registry[0]["enabled"] = json!(false);
+        registry[0]["trusted"] = json!(true);
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &registry)
+            .expect("registry should update");
+
+        let mut update = manifest.clone();
+        update["version"] = json!("2.0.0");
+        let update_bytes = serde_json::to_vec(&update).expect("update should serialize");
+        let update_package = root.join("update.lmplugin");
+        write_test_plugin_package(
+            &update_package,
+            &[
+                ("manifest.json", &update_bytes),
+                ("main.py", b"print('{\"actions\": []}')"),
+            ],
+        );
+        install_test_plugin_package(&root, &update_package, &update, true)
+            .expect("package overwrite should succeed");
+        let updated_registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("updated registry should be readable");
+        assert_eq!(updated_registry[0]["enabled"], false);
+        assert_eq!(updated_registry[0]["trusted"], true);
+        let installed_manifest: Value = serde_json::from_str(
+            &fs::read_to_string(installed_dir.join(MANIFEST_FILE_NAME))
+                .expect("installed manifest should be readable"),
+        )
+        .expect("installed manifest should parse");
+        assert_eq!(installed_manifest["version"], "2.0.0");
+        assert_eq!(installed_manifest["enabled"], false);
+        assert_eq!(installed_manifest["trusted"], true);
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn exported_plugin_package_excludes_private_state_and_can_be_reimported() {
+        let root = test_root("package-export");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "localmindmap.test.package.export";
+        let manifest = test_external_python_plugin(plugin_id);
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest should serialize");
+        let package = root.join("source.lmplugin");
+        write_test_plugin_package(
+            &package,
+            &[
+                ("manifest.json", &manifest_bytes),
+                ("main.py", b"print('{\"actions\": []}')"),
+                ("README.md", b"# Export test"),
+            ],
+        );
+        install_test_plugin_package(&root, &package, &manifest, false)
+            .expect("source package should install");
+
+        let exported = root.join("exported.lmplugin");
+        export_plugin_package_at(&root, plugin_id, &exported)
+            .expect("plugin package should export");
+        let inspected = inspect_plugin_package(&exported).expect("export should be importable");
+        assert_eq!(
+            inspected.files,
+            HashSet::from([
+                "manifest.json".to_string(),
+                "main.py".to_string(),
+                "README.md".to_string()
+            ])
+        );
+        assert!(inspected.manifest.get("trusted").is_none());
+        assert!(inspected.manifest.get("installedAt").is_none());
+        assert!(!inspected.files.iter().any(|path| path.contains("registry")));
+
+        let second_root = test_root("package-reimport");
+        ensure_user_data_dirs_at(&second_root).expect("second user root should exist");
+        install_test_plugin_package(&second_root, &exported, &inspected.manifest, false)
+            .expect("exported package should re-import");
+        let registry = read_user_json_at(&second_root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("new registry should be readable");
+        assert_eq!(registry[0]["trusted"], false);
+        assert!(second_root
+            .join(format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/main.py"))
+            .is_file());
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+        fs::remove_dir_all(second_root).expect("second test directory should be removable");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn executable_package_requires_exe_entry() {
+        let root = test_root("package-executable-extension");
+        fs::create_dir_all(&root).expect("test root should exist");
+        let plugin_id = "localmindmap.test.package.bad-executable";
+        let manifest = test_external_executable_plugin(plugin_id, "plugin.bin");
+        let manifest_bytes = serde_json::to_vec(&manifest).expect("manifest should serialize");
+        let package = root.join("bad-executable.lmplugin");
+        write_test_plugin_package(
+            &package,
+            &[
+                ("manifest.json", &manifest_bytes),
+                ("plugin.bin", b"binary"),
+            ],
+        );
+        assert!(inspect_plugin_package(&package)
+            .expect_err("non-exe executable should fail")
+            .contains("entry 必须是 .exe"));
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
 }

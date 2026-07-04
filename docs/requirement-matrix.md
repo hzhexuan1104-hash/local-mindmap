@@ -142,3 +142,21 @@
 | PLUGIN-EXT-006 | P2 | 顶部菜单、node-context、undo/redo batch | 已实现 |
 | PLUGIN-EXT-007 | P2 | Python 示例、详情、日志和开发文档 | 已实现 |
 | PLUGIN-EXT-008 | P2 | Shell、DLL、远程 URL、市场、自动依赖安装 | 明确不支持 |
+
+## v1.9.1 外部命令插件包增量矩阵
+
+| 编号 | 优先级 | 需求 | 状态 |
+|---|---|---|---|
+| PLUGIN-PKG-001 | P2 | `.lmplugin` 按 ZIP 解析，根目录必须包含有效 `manifest.json` | 已实现 |
+| PLUGIN-PKG-002 | P2 | entry 仅允许安全相对路径且文件必须存在 | 已实现 |
+| PLUGIN-PKG-003 | P2 | 拒绝 ZIP Slip、重复路径和越界解压 | 已实现 |
+| PLUGIN-PKG-004 | P2 | 安装失败清理临时目录，覆盖失败恢复旧版本 | 已实现 |
+| PLUGIN-PKG-005 | P2 | 覆盖安装保留 enabled / trusted | 已实现 |
+| PLUGIN-PKG-006 | P2 | 外部插件导出为 `.lmplugin`，包含 manifest、entry、可选 README | 已实现 |
+| PLUGIN-PKG-007 | P2 | 导出排除 trusted、registry、诊断和用户隐私配置 | 已实现 |
+| PLUGIN-PKG-008 | P2 | 详情页显示包信息、导出路径、复制路径和打开目录 | 已实现 |
+| PLUGIN-EXE-001 | P2 | Windows executable entry 只允许 `.exe`，直接启动且不使用 Shell | 已实现 |
+| PLUGIN-EXE-002 | P2 | executable UTF-8 stdin/stdout、stderr、exit code、超时 kill | 已实现 |
+| PLUGIN-EXE-003 | P2 | executable 示例 manifest 与开发说明 | 已实现 |
+| PLUGIN-COMPAT-001 | P2 | Python、script、action-workflow、v1.7 声明式插件无回退 | 已实现并纳入回归测试 |
+| BUG-1.9.1-002 | P0 | `.json` 与 `.lmplugin` 包内 manifest 支持 UTF-8 BOM，损坏 JSON 仍失败 | 已修复并纳入回归测试 |

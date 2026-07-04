@@ -473,6 +473,20 @@ const validDeclarativeManifest = {
 };
 
 describe('declarative plugin manifest validation', () => {
+  it('accepts a UTF-8 BOM only at the beginning of manifest JSON', () => {
+    const withBom = `\uFEFF${JSON.stringify({
+      ...samplePythonManifest,
+      description: '正文中的 BOM \uFEFF 保留',
+    })}`;
+    expect(parsePluginManifestText(withBom)).toMatchObject({
+      pluginId: samplePythonManifest.pluginId,
+      pluginType: 'external-command',
+      runtime: 'python',
+      entry: 'main.py',
+      description: '正文中的 BOM \uFEFF 保留',
+    });
+  });
+
   it('reports a concrete JSON parsing error', () => {
     expect(() => parsePluginManifestText('{\n  "pluginId":')).toThrow(
       /导入失败：JSON 格式错误。第 2 行第 \d+ 列附近存在语法问题。/,

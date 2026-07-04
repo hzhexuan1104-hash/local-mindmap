@@ -14,7 +14,7 @@ import type { MindmapNode } from '../../mindmap/types';
 
 const context: ScriptPluginContext = {
   contextVersion: 1,
-  app: { version: '1.9.0', platform: 'desktop' },
+  app: { version: '1.9.1', platform: 'desktop' },
   mindmap: {
     title: 'Root',
     nodeCount: 1,

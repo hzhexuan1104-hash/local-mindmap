@@ -10,6 +10,9 @@ export const USER_DATA_COMMANDS = {
   readUserText: 'read_user_text',
   listUserFiles: 'list_user_files',
   installPluginToUserDir: 'install_plugin_to_user_dir',
+  installPluginPackage: 'install_plugin_package',
+  openPluginImportWithDialog: 'open_plugin_import_with_dialog',
+  exportPluginPackage: 'export_plugin_package',
   uninstallPluginFromUserDir: 'uninstall_plugin_from_user_dir',
   openUserDataDir: 'open_user_data_dir',
   openPluginDir: 'open_plugin_dir',
@@ -65,6 +68,14 @@ export type PluginInstallAsset = {
   relativePath: string;
   sourcePath?: string | null;
   text?: string;
+  optional?: boolean;
+};
+
+export type OpenedPluginImport = {
+  path: string;
+  fileName: string;
+  kind: 'manifest' | 'lmplugin';
+  manifest: unknown;
 };
 
 const LEGACY_MIGRATION_FLAG_PATH = 'config/migration-v1.6.json';
@@ -463,6 +474,40 @@ export async function installPluginToUserDir(
           : String(error);
     throw new Error(`插件写入用户目录失败：${detail}`);
   }
+}
+
+export async function openPluginImportWithDialog() {
+  if (!isDesktopRuntime()) {
+    return null;
+  }
+  return invokeUserDataCommand<OpenedPluginImport | null>(
+    USER_DATA_COMMANDS.openPluginImportWithDialog,
+  );
+}
+
+export async function installPluginPackageToUserDir(
+  packagePath: string,
+  manifest: PluginManifest,
+  overwrite = false,
+) {
+  if (!isDesktopRuntime()) {
+    throw new Error('.lmplugin 插件包仅支持桌面端导入。');
+  }
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.installPluginPackage, {
+    packagePath,
+    manifest,
+    overwrite,
+  });
+}
+
+export async function exportPluginPackage(pluginId: string) {
+  if (!isDesktopRuntime()) {
+    throw new Error('插件包导出仅支持桌面端。');
+  }
+  return invokeUserDataCommand<string | null>(
+    USER_DATA_COMMANDS.exportPluginPackage,
+    { pluginId },
+  );
 }
 
 export async function uninstallPluginFromUserDir(pluginId: string) {

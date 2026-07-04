@@ -187,7 +187,7 @@ export function createScriptPluginContext(
   const snapshot: ScriptPluginContext = {
     contextVersion: 1,
     app: {
-      version: '1.9.0',
+      version: '1.9.1',
       platform: 'desktop',
     },
     mindmap: {

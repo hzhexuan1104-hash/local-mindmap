@@ -12,7 +12,9 @@ import {
 } from '../plugins/pluginCommands';
 import {
   installPluginToUserDir,
+  installPluginPackageToUserDir,
   isDesktopRuntime,
+  openPluginImportWithDialog,
   reloadPluginsFromDisk,
   savePluginRegistry as saveStoredPluginRegistry,
   uninstallPluginFromUserDir,
@@ -389,7 +391,15 @@ export function validateScriptEntryPath(value: unknown) {
   if (
     entry
       .split('/')
-      .some((segment) => segment === '..' || segment === '.' || segment === '')
+      .some(
+        (segment) =>
+          segment === '..' ||
+          segment === '.' ||
+          segment === '' ||
+          segment.includes(':') ||
+          segment.endsWith('.') ||
+          segment.endsWith(' '),
+      )
   ) {
     return 'entry 不允许包含 ..、. 或空路径片段。';
   }
@@ -414,7 +424,15 @@ export function validateExternalEntryPath(
   if (
     entry
       .split('/')
-      .some((segment) => segment === '..' || segment === '.' || segment === '')
+      .some(
+        (segment) =>
+          segment === '..' ||
+          segment === '.' ||
+          segment === '' ||
+          segment.includes(':') ||
+          segment.endsWith('.') ||
+          segment.endsWith(' '),
+      )
   ) {
     return 'entry 不允许包含 ..、. 或空路径片段。';
   }
@@ -1796,6 +1814,7 @@ export async function installPlugin(
   overwrite = false,
   assets: PluginInstallAsset[] = [],
   sourceManifestPath?: string | null,
+  sourcePackagePath?: string | null,
 ) {
   if (
     plugins.some(
@@ -1816,12 +1835,20 @@ export async function installPlugin(
     (plugin) => plugin.pluginId === manifest.pluginId,
   ) as PluginManifest;
 
-  await installPluginToUserDir(
-    installedManifest,
-    overwrite,
-    assets,
-    sourceManifestPath,
-  );
+  if (sourcePackagePath) {
+    await installPluginPackageToUserDir(
+      sourcePackagePath,
+      installedManifest,
+      overwrite,
+    );
+  } else {
+    await installPluginToUserDir(
+      installedManifest,
+      overwrite,
+      assets,
+      sourceManifestPath,
+    );
+  }
   if (isDesktopRuntime()) {
     return { plugins: nextPlugins, manifest: installedManifest };
   }
@@ -1852,15 +1879,22 @@ export class PluginManifestError extends Error {
   }
 }
 
+export function stripUtf8Bom(text: string) {
+  return text.startsWith('\uFEFF') ? text.slice(1) : text;
+}
+
 export function parsePluginManifestText(text: string) {
+  const normalizedText = stripUtf8Bom(text);
   let parsedValue: unknown;
   try {
-    parsedValue = JSON.parse(text);
+    parsedValue = JSON.parse(normalizedText);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const positionMatch = detail.match(/position\s+(\d+)/i);
-    const position = positionMatch ? Number(positionMatch[1]) : text.length;
-    const prefix = text.slice(0, position);
+    const position = positionMatch
+      ? Number(positionMatch[1])
+      : normalizedText.length;
+    const prefix = normalizedText.slice(0, position);
     const line = prefix.split('\n').length;
     const lastLineBreak = prefix.lastIndexOf('\n');
     const column = position - lastLineBreak;
@@ -1879,6 +1913,14 @@ export function parsePluginManifestText(text: string) {
   return result.manifest;
 }
 
+export function parsePluginManifestValue(value: unknown) {
+  const result = validatePluginManifest(value);
+  if (!result.manifest) {
+    throw new PluginManifestError(result.errors, result.warnings);
+  }
+  return result.manifest;
+}
+
 export async function readLocalPluginManifest() {
   const pluginPackage = await readLocalPluginPackage();
   return pluginPackage?.manifest ?? null;
@@ -1887,12 +1929,17 @@ export async function readLocalPluginManifest() {
 export type LocalPluginPackage = {
   manifest: PluginManifest;
   manifestSourcePath: string | null;
+  packagePath?: string;
   scriptEntry?: {
     relativePath: string;
     sourcePath: string | null;
   };
   externalEntry?: {
     relativePath: string;
+    sourcePath: string | null;
+  };
+  readme?: {
+    relativePath: 'README.md';
     sourcePath: string | null;
   };
 };
@@ -1910,36 +1957,66 @@ function resolveSiblingEntryPath(manifestPath: string | null, entry: string) {
 }
 
 export async function readLocalPluginPackage(): Promise<LocalPluginPackage | null> {
-  const opened = await openLocalTextFile({
-    accept: '.json,.lmplugin,application/json,application/octet-stream',
-    filterName: 'Plugin manifest',
-    extensions: ['json', 'lmplugin'],
-  });
-  if (!opened) {
-    return null;
+  if (isDesktopRuntime()) {
+    const opened = await openPluginImportWithDialog();
+    if (!opened) return null;
+    const manifest = parsePluginManifestValue(opened.manifest);
+    if (opened.kind === 'lmplugin') {
+      return {
+        manifest,
+        manifestSourcePath: null,
+        packagePath: opened.path,
+      };
+    }
+    return localManifestPackage(manifest, opened.path);
   }
 
-  const manifest = parsePluginManifestText(opened.content);
+  const opened = await openLocalTextFile({
+    accept: '.json,application/json',
+    filterName: 'Plugin manifest',
+    extensions: ['json'],
+  });
+  if (!opened) return null;
+  return localManifestPackage(
+    parsePluginManifestText(opened.content),
+    opened.path,
+  );
+}
+
+function localManifestPackage(
+  manifest: PluginManifest,
+  manifestPath: string | null,
+): LocalPluginPackage {
+  if (!manifestPath) {
+    return {
+      manifest,
+      manifestSourcePath: null,
+    };
+  }
   const scriptEntry =
     manifest.pluginType === 'script' && manifest.entry
       ? {
           relativePath: manifest.entry,
-          sourcePath: resolveSiblingEntryPath(opened.path, manifest.entry),
+          sourcePath: resolveSiblingEntryPath(manifestPath, manifest.entry),
         }
       : undefined;
   const externalEntry =
     manifest.pluginType === 'external-command' && manifest.entry
       ? {
           relativePath: manifest.entry,
-          sourcePath: resolveSiblingEntryPath(opened.path, manifest.entry),
+          sourcePath: resolveSiblingEntryPath(manifestPath, manifest.entry),
         }
       : undefined;
 
   return {
     manifest,
-    manifestSourcePath: opened.path,
+    manifestSourcePath: manifestPath,
     scriptEntry,
     externalEntry,
+    readme: {
+      relativePath: 'README.md',
+      sourcePath: resolveSiblingEntryPath(manifestPath, 'README.md'),
+    },
   };
 }
 

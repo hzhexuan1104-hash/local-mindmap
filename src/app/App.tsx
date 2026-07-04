@@ -218,6 +218,7 @@ import {
   createSampleWorkflowPlugin,
   createSamplePythonPlugin,
   ensureUserDataDirs,
+  exportPluginPackage,
   getUserDataDir,
   installPluginToUserDir,
   isDesktopRuntime,
@@ -610,6 +611,10 @@ export function App() {
   );
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [lastPluginInstallError, setLastPluginInstallError] = useState('');
+  const [lastPluginExport, setLastPluginExport] = useState<{
+    pluginId: string;
+    path: string;
+  } | null>(null);
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
   const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
   const [isExternalRunnerEnabled, setIsExternalRunnerEnabled] = useState(false);
@@ -1480,14 +1485,17 @@ export function App() {
         return;
       }
       const { manifest } = pluginPackage;
-      if (manifest.pluginType === 'script') {
+      if (manifest.pluginType === 'script' && !pluginPackage.packagePath) {
         if (!manifest.entry || !pluginPackage.scriptEntry?.sourcePath) {
           throw new Error(
             `导入失败：脚本入口文件不存在：${manifest.entry ?? 'main.js'}。`,
           );
         }
       }
-      if (manifest.pluginType === 'external-command') {
+      if (
+        manifest.pluginType === 'external-command' &&
+        !pluginPackage.packagePath
+      ) {
         if (!manifest.entry || !pluginPackage.externalEntry?.sourcePath) {
           throw new Error(
             `导入失败：外部命令入口文件不存在：${manifest.entry ?? 'entry'}。`,
@@ -1515,14 +1523,8 @@ export function App() {
         return;
       }
 
-      const {
-        plugins: nextPlugins,
-        manifest: installedManifest,
-      } = await installPlugin(
-        plugins,
-        manifest,
-        exists,
-        pluginPackage.scriptEntry
+      const installAssets = [
+        ...(pluginPackage.scriptEntry
           ? [
               {
                 relativePath: pluginPackage.scriptEntry.relativePath,
@@ -1536,8 +1538,27 @@ export function App() {
                   sourcePath: pluginPackage.externalEntry.sourcePath,
                 },
               ]
-            : [],
+            : []),
+        ...(pluginPackage.readme
+          ? [
+              {
+                relativePath: pluginPackage.readme.relativePath,
+                sourcePath: pluginPackage.readme.sourcePath,
+                optional: true,
+              },
+            ]
+          : []),
+      ];
+      const {
+        plugins: nextPlugins,
+        manifest: installedManifest,
+      } = await installPlugin(
+        plugins,
+        manifest,
+        exists,
+        installAssets,
         pluginPackage.manifestSourcePath,
+        pluginPackage.packagePath,
       );
       setPlugins(nextPlugins);
       setLastPluginInstallError('');
@@ -1545,7 +1566,7 @@ export function App() {
         `已${exists ? '覆盖安装' : '安装'}插件：${installedManifest.name}。` +
         `pluginId：${installedManifest.pluginId}。` +
         `版本：${installedManifest.version}。` +
-        `已保存到用户目录：plugins/installed/${installedManifest.pluginId}/manifest.json。` +
+        `安装目录：plugins/installed/${installedManifest.pluginId}。` +
         '已更新插件注册表：plugins/plugin-registry.json。';
       const warningCount = installedManifest.validationWarnings?.length ?? 0;
       recordPluginLog(
@@ -1791,6 +1812,35 @@ export function App() {
       showMessage(`${label}已复制`);
     } catch {
       showMessage(`复制${label}失败`);
+    }
+  };
+
+  const handleExportPluginPackage = async (pluginId: string) => {
+    try {
+      const path = await exportPluginPackage(pluginId);
+      if (!path) return;
+      setLastPluginExport({ pluginId, path });
+      showMessage(`插件包导出成功：${path}`);
+    } catch (error) {
+      showMessage(`插件包导出失败：${getErrorMessage(error, '未知错误')}`);
+    }
+  };
+
+  const handleCopyExportedPluginPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      showMessage('插件包完整路径已复制');
+    } catch {
+      showMessage('复制插件包路径失败');
+    }
+  };
+
+  const handleOpenExportedPluginLocation = async (path: string) => {
+    try {
+      await openFileLocation(path);
+      showMessage('已打开插件包所在目录');
+    } catch (error) {
+      showMessage(`打开所在目录失败：${getErrorMessage(error, '未知错误')}`);
     }
   };
 
@@ -4925,6 +4975,16 @@ export function App() {
             void handleSetPluginTrusted(pluginId, trusted)
           }
           onCopyPluginId={(pluginId) => void handleCopyPluginId(pluginId)}
+          onExportPackage={(pluginId) =>
+            void handleExportPluginPackage(pluginId)
+          }
+          lastPluginExport={lastPluginExport}
+          onCopyExportPath={(path) =>
+            void handleCopyExportedPluginPath(path)
+          }
+          onOpenExportLocation={(path) =>
+            void handleOpenExportedPluginLocation(path)
+          }
           onCopyPath={(relativePath, label) =>
             void handleCopyPluginPath(relativePath, label)
           }

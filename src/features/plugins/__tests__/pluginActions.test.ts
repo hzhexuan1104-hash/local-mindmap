@@ -59,7 +59,7 @@ describe('Script Plugin Action validation', () => {
     const context = createScriptPluginContext(rootNode, 'node-1');
     expect(context).toEqual({
       contextVersion: 1,
-      app: { version: '1.9.0', platform: 'desktop' },
+      app: { version: '1.9.1', platform: 'desktop' },
       mindmap: {
         title: 'Root',
         nodeCount: 2,

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LEGACY_STORAGE_KEYS,
   USER_DATA_COMMANDS,
@@ -32,6 +32,7 @@ import type { MindmapNodeType } from '../../mindmap/types';
 import type { MindmapTemplate } from '../../mindmap/templates';
 import {
   installPlugin,
+  readLocalPluginPackage,
   setPluginEnabled,
   uninstallPlugin,
   validatePluginManifest,
@@ -178,6 +179,43 @@ describe('userDataStorage desktop commands', () => {
     setUserDataStorageInvokerForTests(null);
     Reflect.deleteProperty(globalThis, 'window');
     Reflect.deleteProperty(globalThis, 'isTauri');
+  });
+
+  it('routes lmplugin imports through the package command without JSON.parse on package bytes', async () => {
+    const parseSpy = vi.spyOn(JSON, 'parse');
+    setUserDataStorageInvokerForTests(async (command) => {
+      expect(command).toBe(USER_DATA_COMMANDS.openPluginImportWithDialog);
+      return {
+        path: 'C:/plugins/valid-python-keyword-plugin.LMPLUGIN',
+        fileName: 'valid-python-keyword-plugin.LMPLUGIN',
+        kind: 'lmplugin',
+        manifest: {
+          manifestVersion: 1,
+          pluginId: 'localmindmap.test.package.dispatch',
+          name: 'Package dispatch',
+          version: '1.0.0',
+          author: 'Test',
+          description: 'Package dispatch test.',
+          pluginType: 'external-command',
+          runtime: 'python',
+          entry: 'main.py',
+          capabilities: ['external-command', 'mindmap:read'],
+          enabled: true,
+          permissions: ['external-command', 'mindmap:read'],
+        },
+      } as never;
+    });
+
+    await expect(readLocalPluginPackage()).resolves.toMatchObject({
+      packagePath: 'C:/plugins/valid-python-keyword-plugin.LMPLUGIN',
+      manifestSourcePath: null,
+      manifest: {
+        pluginId: 'localmindmap.test.package.dispatch',
+        trusted: false,
+      },
+    });
+    expect(parseSpy).not.toHaveBeenCalled();
+    parseSpy.mockRestore();
   });
 
   it('uses the expected Tauri command names and argument shapes', async () => {
