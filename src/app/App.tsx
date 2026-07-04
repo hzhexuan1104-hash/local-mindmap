@@ -114,6 +114,7 @@ import {
   setPluginEnabled,
   setPluginTrusted,
   shouldConfirmScriptPluginRun,
+  shouldConfirmExternalPluginRun,
   shouldConfirmWorkflowPluginRun,
   uninstallPlugin,
   PluginManifestError,
@@ -140,6 +141,11 @@ import {
   type ScriptShowMessageAction,
 } from '../features/plugins/pluginScriptActions';
 import { runScriptPlugin } from '../features/plugins/pluginScriptRunner';
+import {
+  parseExternalActionsOutput,
+  runExternalCommandPlugin,
+  testPythonRuntime,
+} from '../features/plugins/pluginExternalRunner';
 import {
   resolveWorkflowActions,
   requestWorkflowTrustDecision,
@@ -210,6 +216,7 @@ import {
   createSampleBatchScriptPlugin,
   createSampleScriptPlugin,
   createSampleWorkflowPlugin,
+  createSamplePythonPlugin,
   ensureUserDataDirs,
   getUserDataDir,
   installPluginToUserDir,
@@ -362,6 +369,9 @@ type PluginRunRecord = {
   actionCount?: number;
   appliedActionCount?: number;
   durationMs?: number;
+  exitCode?: number | null;
+  stdoutSize?: number;
+  stderrPreview?: string;
   error?: string;
 };
 
@@ -602,10 +612,15 @@ export function App() {
   const [lastPluginInstallError, setLastPluginInstallError] = useState('');
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
   const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
+  const [isExternalRunnerEnabled, setIsExternalRunnerEnabled] = useState(false);
+  const [pythonPath, setPythonPath] = useState('python');
   const [scriptRunResults, setScriptRunResults] = useState<
     Record<string, PluginRunRecord>
   >({});
   const [workflowRunResults, setWorkflowRunResults] = useState<
+    Record<string, PluginRunRecord>
+  >({});
+  const [externalRunResults, setExternalRunResults] = useState<
     Record<string, PluginRunRecord>
   >({});
   const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
@@ -932,11 +947,15 @@ export function App() {
       .then((settings) => {
         if (active) {
           setIsScriptRunnerEnabled(settings.scriptRunnerEnabled);
+          setIsExternalRunnerEnabled(settings.externalRunnerEnabled);
+          setPythonPath(settings.pythonPath);
         }
       })
       .catch(() => {
         if (active) {
           setIsScriptRunnerEnabled(false);
+          setIsExternalRunnerEnabled(false);
+          setPythonPath('python');
         }
       });
     return () => {
@@ -1468,6 +1487,13 @@ export function App() {
           );
         }
       }
+      if (manifest.pluginType === 'external-command') {
+        if (!manifest.entry || !pluginPackage.externalEntry?.sourcePath) {
+          throw new Error(
+            `导入失败：外部命令入口文件不存在：${manifest.entry ?? 'entry'}。`,
+          );
+        }
+      }
 
       const existingPlugin = plugins.find(
         (plugin) => plugin.pluginId === manifest.pluginId,
@@ -1503,7 +1529,14 @@ export function App() {
                 sourcePath: pluginPackage.scriptEntry.sourcePath,
               },
             ]
-          : [],
+          : pluginPackage.externalEntry
+            ? [
+                {
+                  relativePath: pluginPackage.externalEntry.relativePath,
+                  sourcePath: pluginPackage.externalEntry.sourcePath,
+                },
+              ]
+            : [],
         pluginPackage.manifestSourcePath,
       );
       setPlugins(nextPlugins);
@@ -1519,6 +1552,8 @@ export function App() {
         'info',
         installedManifest.pluginType === 'script'
           ? 'script-plugin-imported'
+          : installedManifest.pluginType === 'external-command'
+            ? 'external-plugin-imported'
           : installedManifest.pluginType === 'action-workflow'
             ? 'workflow-imported'
           : 'import-success',
@@ -1569,20 +1604,25 @@ export function App() {
   ) => {
     const targetPlugin = plugins.find((plugin) => plugin.pluginId === pluginId);
     const isWorkflow = targetPlugin?.pluginType === 'action-workflow';
+    const isExternal = targetPlugin?.pluginType === 'external-command';
     const nextPlugins = setPluginTrusted(plugins, pluginId, trusted);
     try {
       await savePluginRegistry(nextPlugins);
       setPlugins(nextPlugins);
       recordPluginLog(
         'info',
-        isWorkflow
+        isExternal
+          ? trusted
+            ? 'external-trust-granted'
+            : 'external-trust-revoked'
+          : isWorkflow
           ? trusted
             ? 'workflow-trust-granted'
             : 'workflow-trust-revoked'
           : trusted
             ? 'script-trust-granted'
             : 'script-trust-revoked',
-        `${isWorkflow ? 'workflow' : 'script'} trust ${trusted ? 'granted' : 'revoked'}`,
+        `${isExternal ? 'external' : isWorkflow ? 'workflow' : 'script'} trust ${trusted ? 'granted' : 'revoked'}`,
         pluginId,
       );
       showMessage(trusted ? '已信任此插件' : '已取消信任此插件');
@@ -1593,7 +1633,11 @@ export function App() {
 
   const handleScriptRunnerEnabledChange = async (enabled: boolean) => {
     try {
-      await savePluginSettings({ scriptRunnerEnabled: enabled });
+      await savePluginSettings({
+        scriptRunnerEnabled: enabled,
+        externalRunnerEnabled: isExternalRunnerEnabled,
+        pythonPath,
+      });
       setIsScriptRunnerEnabled(enabled);
       recordPluginLog(
         'info',
@@ -1603,6 +1647,69 @@ export function App() {
       showMessage(enabled ? '脚本插件运行器已启用' : '脚本插件运行器已关闭');
     } catch (error) {
       showMessage(getErrorMessage(error, '脚本运行器设置保存失败'));
+    }
+  };
+
+  const handleExternalRunnerEnabledChange = async (enabled: boolean) => {
+    try {
+      await savePluginSettings({
+        scriptRunnerEnabled: isScriptRunnerEnabled,
+        externalRunnerEnabled: enabled,
+        pythonPath,
+      });
+      setIsExternalRunnerEnabled(enabled);
+      recordPluginLog(
+        'info',
+        enabled ? 'external-runner-enabled' : 'external-runner-disabled',
+        `external runner ${enabled ? 'enabled' : 'disabled'}`,
+      );
+      showMessage(
+        enabled ? '外部命令插件运行器已启用' : '外部命令插件运行器已关闭',
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error, '外部命令运行器设置保存失败'));
+    }
+  };
+
+  const handleSavePythonPath = async (nextPythonPath: string) => {
+    const normalizedPath = nextPythonPath.trim() || 'python';
+    try {
+      await savePluginSettings({
+        scriptRunnerEnabled: isScriptRunnerEnabled,
+        externalRunnerEnabled: isExternalRunnerEnabled,
+        pythonPath: normalizedPath,
+      });
+      setPythonPath(normalizedPath);
+      recordPluginLog(
+        'info',
+        'python-path-saved',
+        `python path saved: ${normalizedPath}`,
+      );
+      showMessage('Python 路径已保存。');
+    } catch (error) {
+      showMessage(getErrorMessage(error, 'Python 路径保存失败'));
+    }
+  };
+
+  const handleTestPython = async (candidatePath: string) => {
+    try {
+      const result = await testPythonRuntime(candidatePath);
+      if (!result.ok) {
+        const reason = result.error ?? 'Python 测试失败。';
+        recordPluginLog('error', 'python-test-failed', reason);
+        showMessage(reason);
+        return;
+      }
+      recordPluginLog(
+        'info',
+        'python-test-succeeded',
+        `python test succeeded: ${result.version ?? 'unknown'}`,
+      );
+      showMessage(`Python 可用：${result.version ?? '版本未知'}`);
+    } catch (error) {
+      const reason = getErrorMessage(error, 'Python 测试失败。');
+      recordPluginLog('error', 'python-test-failed', reason);
+      showMessage(reason);
     }
   };
 
@@ -3233,6 +3340,29 @@ export function App() {
     }
   };
 
+  const handleCreateSamplePythonPlugin = async () => {
+    if (!isDesktopApp) {
+      showMessage('不支持在 Web 端创建 Python 插件目录。');
+      return;
+    }
+    try {
+      const result = await createSamplePythonPlugin();
+      if (!result) {
+        showMessage('不支持在 Web 端创建 Python 插件目录。');
+        return;
+      }
+      showMessage(
+        result.created
+          ? `Python 插件示例已创建：${result.directoryPath}`
+          : 'Python 插件示例已存在，未覆盖用户文件。',
+      );
+    } catch (error) {
+      showMessage(
+        `创建 Python 插件示例失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
   const setWorkflowRunResult = (
     pluginId: string,
     result: PluginRunRecord,
@@ -3463,6 +3593,333 @@ export function App() {
     }
   };
 
+  const setExternalRunResult = (
+    pluginId: string,
+    result: PluginRunRecord,
+  ) => {
+    setExternalRunResults((current) => ({
+      ...current,
+      [pluginId]: result,
+    }));
+  };
+
+  const handleRunExternalPlugin = async (
+    pluginId?: string,
+    contextNodeId?: string,
+    menuId?: string,
+  ) => {
+    if (!pluginId) {
+      showMessage('外部命令插件缺少 pluginId。');
+      return;
+    }
+    const plugin = plugins.find((item) => item.pluginId === pluginId);
+    if (!plugin?.enabled) {
+      showMessage(`插件已禁用：${pluginId}`);
+      return;
+    }
+    if (plugin.manifestValid === false) {
+      showMessage(`插件 manifest 无效：${pluginId}`);
+      return;
+    }
+    if (
+      plugin.pluginType !== 'external-command' ||
+      !plugin.runtime ||
+      !plugin.entry
+    ) {
+      showMessage(`插件不是有效的 external-command：${pluginId}`);
+      return;
+    }
+    if (!isExternalRunnerEnabled) {
+      const reason = '外部命令插件运行器未启用。';
+      setExternalRunResult(pluginId, {
+        status: 'runner_disabled',
+        message: reason,
+        lastRunAt: new Date().toISOString(),
+        error: reason,
+      });
+      recordPluginLog('warning', 'external-runner-disabled', reason, pluginId, {
+        menuId,
+      });
+      showMessage(reason);
+      return;
+    }
+
+    const writePermissions = getPluginWritePermissions(plugin);
+    let trustConfirmedForRun = false;
+    if (shouldConfirmExternalPluginRun(plugin)) {
+      recordPluginLog(
+        'warning',
+        'external-trust-requested',
+        `external trust requested permissions=${writePermissions.join(', ')}`,
+        pluginId,
+        { menuId },
+      );
+      const allowed = window.confirm(
+        `高风险实验功能：该外部命令插件会启动本地进程并请求修改当前导图。\n插件：${plugin.name}\n权限：${writePermissions.join(', ')}\n\n确定：继续选择“仅本次”或“信任”\n取消：取消执行`,
+      );
+      if (!allowed) {
+        showMessage('已取消外部命令插件执行。');
+        return;
+      }
+      trustConfirmedForRun = true;
+      const trust = window.confirm(
+        `是否信任插件“${plugin.name}”？\n\n确定：信任此插件，后续不再提示\n取消：仅允许本次执行`,
+      );
+      if (trust) {
+        await handleSetPluginTrusted(pluginId, true);
+      }
+    }
+
+    const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
+    const context = createScriptPluginContext(
+      mindmap,
+      effectiveSelectedNodeId,
+      contextNodeId ? [contextNodeId] : selectedNodeIds,
+    );
+    recordPluginLog(
+      'info',
+      'external-execution-started',
+      `external execution started runtime=${plugin.runtime} entry=${plugin.entry}`,
+      pluginId,
+      { menuId },
+    );
+    recordPluginLog(
+      'info',
+      'external-stdin-sent',
+      `external stdin sent nodeCount=${context.nodes.length} truncated=${Boolean(context.truncated)}`,
+      pluginId,
+      { menuId },
+    );
+
+    try {
+      const processResult = await runExternalCommandPlugin({
+        pluginId,
+        context,
+        pythonPath,
+      });
+      const stderrPreview = processResult.stderr.slice(0, 2000);
+      recordPluginLog(
+        'info',
+        'external-stdout-received',
+        `external stdout received size=${processResult.stdoutSize}`,
+        pluginId,
+        { menuId, durationMs: processResult.durationMs },
+      );
+      if (processResult.stderrSize > 0) {
+        recordPluginLog(
+          'warning',
+          'external-stderr-received',
+          `external stderr received size=${processResult.stderrSize}: ${stderrPreview}`,
+          pluginId,
+          { menuId, durationMs: processResult.durationMs },
+        );
+      }
+      recordPluginLog(
+        processResult.status === 'success' ? 'info' : 'error',
+        processResult.status === 'timeout'
+          ? 'external-process-timeout'
+          : 'external-process-exited',
+        `external process ${processResult.status} exitCode=${String(processResult.exitCode)}`,
+        pluginId,
+        { menuId, durationMs: processResult.durationMs },
+      );
+      if (processResult.status !== 'success') {
+        const reason = processResult.error ?? '外部进程执行失败。';
+        setExternalRunResult(pluginId, {
+          status:
+            processResult.status === 'timeout' ? 'timeout' : 'failed',
+          message: reason,
+          lastRunAt: new Date().toISOString(),
+          durationMs: processResult.durationMs,
+          exitCode: processResult.exitCode,
+          stdoutSize: processResult.stdoutSize,
+          stderrPreview,
+          appliedActionCount: 0,
+          error: reason,
+        });
+        recordPluginLog(
+          'error',
+          'external-execution-failed',
+          reason,
+          pluginId,
+          { menuId, durationMs: processResult.durationMs },
+        );
+        showMessage(`外部命令执行失败：${reason}`);
+        return;
+      }
+
+      let outputActions: unknown[];
+      try {
+        outputActions = parseExternalActionsOutput(processResult.stdout);
+      } catch (error) {
+        const reason = getErrorMessage(error, 'stdout 不是合法 JSON。');
+        setExternalRunResult(pluginId, {
+          status: 'failed',
+          message: reason,
+          lastRunAt: new Date().toISOString(),
+          durationMs: processResult.durationMs,
+          exitCode: processResult.exitCode,
+          stdoutSize: processResult.stdoutSize,
+          stderrPreview,
+          appliedActionCount: 0,
+          error: reason,
+        });
+        recordPluginLog(
+          'error',
+          'external-execution-failed',
+          reason,
+          pluginId,
+          { menuId, durationMs: processResult.durationMs },
+        );
+        showMessage(`外部命令输出无效：${reason}`);
+        return;
+      }
+
+      const validation = validateScriptPluginActions(outputActions, mindmap);
+      if (!validation.valid) {
+        setExternalRunResult(pluginId, {
+          status: 'validation_failed',
+          message: validation.error,
+          lastRunAt: new Date().toISOString(),
+          durationMs: processResult.durationMs,
+          exitCode: processResult.exitCode,
+          stdoutSize: processResult.stdoutSize,
+          stderrPreview,
+          actionCount: outputActions.length,
+          appliedActionCount: 0,
+          error: validation.error,
+        });
+        recordPluginLog(
+          'error',
+          'external-action-validation-failed',
+          validation.error,
+          pluginId,
+          {
+            menuId,
+            durationMs: processResult.durationMs,
+            actionCount: outputActions.length,
+          },
+        );
+        showMessage(`外部命令 action 校验失败：${validation.error}`);
+        return;
+      }
+      const mutatesMindmap = validation.actions.some(
+        (action) => action.type !== 'showMessage',
+      );
+      if (mutatesMindmap && !plugin.trusted && !trustConfirmedForRun) {
+        recordPluginLog(
+          'warning',
+          'external-trust-requested',
+          'external trust requested after write actions were returned',
+          pluginId,
+          { menuId, actionCount: validation.actions.length },
+        );
+        const allowed = window.confirm(
+          `该外部命令插件返回了导图修改 actions，但 manifest 未声明写权限。\n插件：${plugin.name}\n\n确定：继续进行权限校验\n取消：不执行 actions`,
+        );
+        if (!allowed) {
+          showMessage('已取消外部命令 actions 执行。');
+          return;
+        }
+      }
+      const permissionValidation = validateScriptActionPermissions(
+        validation.actions,
+        plugin.permissions,
+        '外部命令插件',
+      );
+      if (!permissionValidation.valid) {
+        setExternalRunResult(pluginId, {
+          status: 'validation_failed',
+          message: permissionValidation.error,
+          lastRunAt: new Date().toISOString(),
+          durationMs: processResult.durationMs,
+          exitCode: processResult.exitCode,
+          stdoutSize: processResult.stdoutSize,
+          stderrPreview,
+          actionCount: validation.actions.length,
+          appliedActionCount: 0,
+          error: permissionValidation.error,
+        });
+        recordPluginLog(
+          'error',
+          'external-action-validation-failed',
+          permissionValidation.error,
+          pluginId,
+          { menuId, actionCount: validation.actions.length },
+        );
+        showMessage(`外部命令权限校验失败：${permissionValidation.error}`);
+        return;
+      }
+
+      const applied = applyScriptPluginActions(mindmap, validation.actions);
+      if (mutatesMindmap) {
+        recordHistory();
+        setMindmap(applied.rootNode);
+        setIsDocumentDirty(true);
+        recordPluginLog(
+          'info',
+          'external-undo-batch-created',
+          `external undo batch created mutationCount=${applied.mutationCount}`,
+          pluginId,
+          { menuId, actionCount: validation.actions.length },
+        );
+      }
+      showScriptMessages(applied.messages);
+      setExternalRunResult(pluginId, {
+        status: 'success',
+        message: `已执行 ${applied.appliedCount} 个 actions。`,
+        lastRunAt: new Date().toISOString(),
+        durationMs: processResult.durationMs,
+        exitCode: processResult.exitCode,
+        stdoutSize: processResult.stdoutSize,
+        stderrPreview,
+        actionCount: validation.actions.length,
+        appliedActionCount: applied.appliedCount,
+      });
+      recordPluginLog(
+        'info',
+        'external-action-applied',
+        `external action applied count=${applied.appliedCount}`,
+        pluginId,
+        {
+          menuId,
+          actionCount: validation.actions.length,
+          durationMs: processResult.durationMs,
+        },
+      );
+      recordPluginLog(
+        'info',
+        'external-execution-succeeded',
+        'external execution succeeded',
+        pluginId,
+        {
+          menuId,
+          actionCount: validation.actions.length,
+          durationMs: processResult.durationMs,
+        },
+      );
+      if (applied.messages.length === 0) {
+        showMessage('外部命令插件执行完成。');
+      }
+    } catch (error) {
+      const reason = getErrorMessage(error, '外部命令执行失败。');
+      setExternalRunResult(pluginId, {
+        status: 'failed',
+        message: reason,
+        lastRunAt: new Date().toISOString(),
+        error: reason,
+      });
+      recordPluginLog(
+        'error',
+        'external-execution-failed',
+        reason,
+        pluginId,
+        { menuId },
+      );
+      showMessage(`外部命令执行失败：${reason}`);
+    }
+  };
+
   const pluginCommandHandlers: PluginCommandHandlers = {
     'builtin.openPluginManager': () => setIsPluginManagerVisible(true),
     'builtin.reloadPlugins': handleReloadPlugins,
@@ -3483,6 +3940,10 @@ export function App() {
       }
       if (commandId === 'plugin.runWorkflow') {
         await handleRunWorkflowPlugin(pluginId, contextNodeId, menuId);
+        return;
+      }
+      if (commandId === 'plugin.runExternal') {
+        await handleRunExternalPlugin(pluginId, contextNodeId, menuId);
         return;
       }
       await executePluginCommand({
@@ -4440,6 +4901,9 @@ export function App() {
           onCreateSampleWorkflowPlugin={() =>
             void handleCreateSampleWorkflowPlugin()
           }
+          onCreateSamplePythonPlugin={() =>
+            void handleCreateSamplePythonPlugin()
+          }
           onOpenSampleScriptPluginDir={() =>
             void handleOpenSampleScriptPluginDir()
           }
@@ -4449,6 +4913,14 @@ export function App() {
           }
           scriptRunResults={scriptRunResults}
           workflowRunResults={workflowRunResults}
+          isExternalRunnerEnabled={isExternalRunnerEnabled}
+          onExternalRunnerEnabledChange={(enabled) =>
+            void handleExternalRunnerEnabledChange(enabled)
+          }
+          pythonPath={pythonPath}
+          onSavePythonPath={(path) => void handleSavePythonPath(path)}
+          onTestPython={(path) => void handleTestPython(path)}
+          externalRunResults={externalRunResults}
           onSetPluginTrusted={(pluginId, trusted) =>
             void handleSetPluginTrusted(pluginId, trusted)
           }
@@ -4705,10 +5177,12 @@ export function App() {
                         runContextMenuAction(() => {
                           recordPluginLog(
                             'info',
-                            menu.command === 'plugin.runWorkflow'
+                            menu.command === 'plugin.runExternal'
+                              ? 'external-context-menu-invoked'
+                              : menu.command === 'plugin.runWorkflow'
                               ? 'workflow-context-menu-invoked'
                               : 'script-context-menu-invoked',
-                            `${menu.command === 'plugin.runWorkflow' ? 'workflow' : 'script'} context menu invoked menu=${menu.id} nodeId=${contextMenu.nodeId}`,
+                            `${menu.command === 'plugin.runExternal' ? 'external' : menu.command === 'plugin.runWorkflow' ? 'workflow' : 'script'} context menu invoked menu=${menu.id} nodeId=${contextMenu.nodeId}`,
                             group.pluginId,
                             { menuId: menu.id },
                           );

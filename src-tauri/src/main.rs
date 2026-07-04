@@ -8,8 +8,15 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
 
@@ -19,6 +26,7 @@ const CONFIG_DIR_NAME: &str = "config";
 const LEGACY_IDENTIFIER_DIR_NAME: &str = "com.localmindmap.app";
 const IDENTIFIER_MIGRATION_FLAG_PATH: &str = "config/identifier-migration-v1.6.json";
 const USER_PLUGIN_REGISTRY_PATH: &str = "plugins/plugin-registry.json";
+const USER_PLUGIN_SETTINGS_PATH: &str = "config/plugin-settings.json";
 const USER_PLUGIN_INSTALLED_DIR: &str = "plugins/installed";
 const USER_PLUGIN_DEV_DIR: &str = "plugins/dev";
 const SAMPLE_PLUGIN_DIR_NAME: &str = "sample-json-plugin";
@@ -48,6 +56,18 @@ const SAMPLE_WORKFLOW_PLUGIN_MANIFEST: &str =
     include_str!("../../docs/examples/sample-json-workflow-plugin/manifest.json");
 const SAMPLE_WORKFLOW_PLUGIN_README: &str =
     include_str!("../../docs/examples/sample-json-workflow-plugin/README.md");
+const SAMPLE_PYTHON_PLUGIN_DIR_NAME: &str = "sample-python-plugin";
+const SAMPLE_PYTHON_PLUGIN_ID: &str = "localmindmap.dev.sample-python-plugin";
+const SAMPLE_PYTHON_PLUGIN_MANIFEST: &str =
+    include_str!("../../docs/examples/sample-python-plugin/manifest.json");
+const SAMPLE_PYTHON_PLUGIN_MAIN: &str =
+    include_str!("../../docs/examples/sample-python-plugin/main.py");
+const SAMPLE_PYTHON_PLUGIN_README: &str =
+    include_str!("../../docs/examples/sample-python-plugin/README.md");
+const EXTERNAL_STDOUT_LIMIT: usize = 1024 * 1024;
+const EXTERNAL_STDERR_LIMIT: usize = 64 * 1024;
+const EXTERNAL_DEFAULT_TIMEOUT_MS: u64 = 5000;
+const EXTERNAL_MAX_TIMEOUT_MS: u64 = 30_000;
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
@@ -77,6 +97,8 @@ const FORBIDDEN_DECLARATIVE_FIELDS: &[&str] = &[
     "code",
     "shell",
     "executable",
+    "commandline",
+    "args",
 ];
 const DECLARATIVE_PLUGIN_TYPES: &[&str] = &[
     "theme-pack",
@@ -87,6 +109,7 @@ const DECLARATIVE_PLUGIN_TYPES: &[&str] = &[
     "tool",
     "script",
     "action-workflow",
+    "external-command",
 ];
 const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "themes",
@@ -97,6 +120,7 @@ const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "tools",
     "script",
     "workflow",
+    "external-command",
     "mindmap:read",
     "mindmap:write",
     "node:read",
@@ -458,6 +482,20 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
             .map(str::trim)
             .ok_or_else(|| "pluginType=script 时 entry 必填。".to_string())?;
         validate_script_entry_path(entry)?;
+    } else if plugin_type == "external-command" {
+        let runtime = object
+            .get("runtime")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "pluginType=external-command 时 runtime 必填。".to_string())?;
+        if runtime != "python" && runtime != "executable" {
+            return Err("runtime 仅允许 python 或 executable。".to_string());
+        }
+        let entry = object
+            .get("entry")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| "pluginType=external-command 时 entry 必填。".to_string())?;
+        validate_external_entry_path(entry, runtime)?;
     } else if plugin_type == "action-workflow" {
         if object.contains_key("entry") {
             return Err("action-workflow 插件不允许声明 entry。".to_string());
@@ -502,6 +540,8 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
             validate_script_menu_commands(contributions)?;
         } else if plugin_type == "action-workflow" {
             validate_workflow_menu_commands(contributions)?;
+        } else if plugin_type == "external-command" {
+            validate_external_menu_commands(contributions)?;
         } else {
             validate_non_executable_menu_commands(contributions)?;
         }
@@ -569,6 +609,46 @@ fn validate_script_entry_path(entry: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_safe_entry_path(entry: &str) -> Result<String, String> {
+    if entry.trim().is_empty() {
+        return Err("entry 必填。".to_string());
+    }
+    let normalized = entry.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if normalized.starts_with('/')
+        || normalized.starts_with("//")
+        || normalized.as_bytes().get(1) == Some(&b':')
+        || lower.contains("://")
+    {
+        return Err("entry 只能是插件目录内相对路径，不能是绝对路径或远程 URL。".to_string());
+    }
+    if normalized
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err("entry 不允许包含 ..、. 或空路径片段。".to_string());
+    }
+    Ok(normalized)
+}
+
+fn validate_external_entry_path(entry: &str, runtime: &str) -> Result<(), String> {
+    let normalized = validate_safe_entry_path(entry)?;
+    let lower = normalized.to_ascii_lowercase();
+    if runtime == "python" && !lower.ends_with(".py") {
+        return Err("runtime=python 时 entry 必须是 .py 文件。".to_string());
+    }
+    if runtime == "executable" {
+        if lower.ends_with(".dll") {
+            return Err("runtime=executable 不支持 DLL。".to_string());
+        }
+        #[cfg(target_os = "windows")]
+        if !lower.ends_with(".exe") {
+            return Err("Windows 下 runtime=executable 时 entry 必须是 .exe 文件。".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn validate_script_menu_commands(contributions: &Value) -> Result<(), String> {
     let Some(menus) = contributions.get("menus") else {
         return Ok(());
@@ -605,6 +685,26 @@ fn validate_workflow_menu_commands(contributions: &Value) -> Result<(), String> 
     Ok(())
 }
 
+fn validate_external_menu_commands(contributions: &Value) -> Result<(), String> {
+    let Some(menus) = contributions.get("menus") else {
+        return Ok(());
+    };
+    let menus = menus
+        .as_array()
+        .ok_or_else(|| "contributions.menus must be an array.".to_string())?;
+    for menu in menus {
+        let Some(command) = menu.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if command != "plugin.runExternal" {
+            return Err(
+                "external-command 插件菜单 command 必须是 plugin.runExternal。".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_non_executable_menu_commands(contributions: &Value) -> Result<(), String> {
     let Some(menus) = contributions.get("menus") else {
         return Ok(());
@@ -617,7 +717,10 @@ fn validate_non_executable_menu_commands(contributions: &Value) -> Result<(), St
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if command == "plugin.runScript" || command == "plugin.runWorkflow" {
+        if command == "plugin.runScript"
+            || command == "plugin.runWorkflow"
+            || command == "plugin.runExternal"
+        {
             return Err(format!("当前插件类型不能使用 {command}。"));
         }
     }
@@ -702,7 +805,23 @@ fn upsert_plugin_registry(
             .map(|current_id| current_id != plugin_id)
             .unwrap_or(true)
     });
-    plugins.push(manifest.clone());
+    let installed_at = manifest.get("installedAt").cloned().unwrap_or(Value::Null);
+    plugins.push(json!({
+        "pluginId": plugin_id,
+        "enabled": manifest
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        "trusted": manifest
+            .get("trusted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "installedAt": installed_at.clone(),
+        "updatedAt": manifest
+            .get("updatedAt")
+            .cloned()
+            .unwrap_or_else(|| installed_at.clone())
+    }));
     Ok(Value::Array(plugins))
 }
 
@@ -771,7 +890,7 @@ fn copy_plugin_install_assets(
         .map(Path::to_path_buf);
 
     for asset in assets {
-        validate_script_entry_path(&asset.relative_path)?;
+        validate_safe_entry_path(&asset.relative_path)?;
         let relative_path = normalized_user_relative_path(&asset.relative_path)?;
         let target_path = staging_dir.join(&relative_path);
         if let Some(parent) = target_path.parent() {
@@ -822,6 +941,23 @@ where
 {
     validate_declarative_manifest(plugin_id, manifest)
         .map_err(|error| format!("插件 manifest 校验失败：{error}"))?;
+    let plugin_type = manifest
+        .get("pluginType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if plugin_type == "script" || plugin_type == "external-command" {
+        let entry = manifest
+            .get("entry")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .replace('\\', "/");
+        if !assets
+            .iter()
+            .any(|asset| asset.relative_path.replace('\\', "/") == entry)
+        {
+            return Err(format!("导入失败：插件入口文件不存在：{entry}。"));
+        }
+    }
 
     let relative_plugin_dir = format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}");
     let relative_manifest_path = format!("{relative_plugin_dir}/{MANIFEST_FILE_NAME}");
@@ -925,6 +1061,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 fn install_plugin_to_user_dir_at(
     root: &Path,
     plugin_id: &str,
@@ -1189,6 +1326,22 @@ fn sample_workflow_plugin_creation_result(
     }
 }
 
+fn sample_python_plugin_creation_result(root: &Path, created: bool) -> SamplePluginCreationResult {
+    let directory = root
+        .join(USER_PLUGIN_DEV_DIR)
+        .join(SAMPLE_PYTHON_PLUGIN_DIR_NAME);
+    SamplePluginCreationResult {
+        created,
+        directory_path: directory.to_string_lossy().to_string(),
+        manifest_path: directory
+            .join(MANIFEST_FILE_NAME)
+            .to_string_lossy()
+            .to_string(),
+        readme_path: directory.join("README.md").to_string_lossy().to_string(),
+        main_path: Some(directory.join("main.py").to_string_lossy().to_string()),
+    }
+}
+
 fn create_sample_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
     let manifest: Value = serde_json::from_str(SAMPLE_PLUGIN_MANIFEST)
         .map_err(|error| format!("Bundled sample plugin manifest is invalid: {error}"))?;
@@ -1350,6 +1503,47 @@ fn create_sample_workflow_plugin_at(root: &Path) -> Result<SamplePluginCreationR
     Ok(sample_workflow_plugin_creation_result(root, true))
 }
 
+fn create_sample_python_plugin_at(root: &Path) -> Result<SamplePluginCreationResult, String> {
+    let manifest: Value = serde_json::from_str(SAMPLE_PYTHON_PLUGIN_MANIFEST)
+        .map_err(|error| format!("Bundled Python plugin manifest is invalid: {error}"))?;
+    validate_declarative_manifest(SAMPLE_PYTHON_PLUGIN_ID, &manifest)
+        .map_err(|error| format!("Bundled Python plugin validation failed: {error}"))?;
+
+    let dev_dir = plugin_dev_dir_at(root)?;
+    fs::create_dir_all(&dev_dir)
+        .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
+    let target_dir = dev_dir.join(SAMPLE_PYTHON_PLUGIN_DIR_NAME);
+    if target_dir.exists() {
+        return Ok(sample_python_plugin_creation_result(root, false));
+    }
+
+    let staging_dir = dev_dir.join(format!(".{SAMPLE_PYTHON_PLUGIN_DIR_NAME}.creating"));
+    remove_path_if_exists(&staging_dir)?;
+    fs::create_dir_all(&staging_dir)
+        .map_err(|error| format!("Failed to create Python plugin staging directory: {error}"))?;
+
+    let write_result = (|| {
+        fs::write(
+            staging_dir.join(MANIFEST_FILE_NAME),
+            SAMPLE_PYTHON_PLUGIN_MANIFEST,
+        )
+        .map_err(|error| format!("Failed to write Python plugin manifest: {error}"))?;
+        fs::write(staging_dir.join("main.py"), SAMPLE_PYTHON_PLUGIN_MAIN)
+            .map_err(|error| format!("Failed to write Python plugin main.py: {error}"))?;
+        fs::write(staging_dir.join("README.md"), SAMPLE_PYTHON_PLUGIN_README)
+            .map_err(|error| format!("Failed to write Python plugin README: {error}"))?;
+        fs::rename(&staging_dir, &target_dir)
+            .map_err(|error| format!("Failed to commit Python plugin directory: {error}"))
+    })();
+
+    if let Err(error) = write_result {
+        let _ = remove_path_if_exists(&staging_dir);
+        return Err(error);
+    }
+
+    Ok(sample_python_plugin_creation_result(root, true))
+}
+
 #[tauri::command]
 fn open_plugin_dev_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
@@ -1393,6 +1587,12 @@ fn create_sample_batch_script_plugin(app: AppHandle) -> Result<SamplePluginCreat
 fn create_sample_workflow_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_workflow_plugin_at(&root)
+}
+
+#[tauri::command]
+fn create_sample_python_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    create_sample_python_plugin_at(&root)
 }
 
 #[tauri::command]
@@ -2080,6 +2280,407 @@ fn uninstall_desktop_plugin(app: AppHandle, plugin_id: String) -> Result<(), Str
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalProcessResult {
+    status: String,
+    stdout: String,
+    stderr: String,
+    stdout_size: usize,
+    stderr_size: usize,
+    exit_code: Option<i32>,
+    duration_ms: u128,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PythonTestResult {
+    ok: bool,
+    version: Option<String>,
+    exit_code: Option<i32>,
+    duration_ms: u128,
+    error: Option<String>,
+}
+
+struct CapturedOutput {
+    bytes: Vec<u8>,
+    size: usize,
+    exceeded: bool,
+}
+
+fn read_output_limited<R: Read>(
+    mut reader: R,
+    limit: usize,
+    exceeded_flag: Arc<AtomicBool>,
+) -> CapturedOutput {
+    let mut bytes = Vec::with_capacity(limit.min(16 * 1024));
+    let mut size = 0usize;
+    let mut buffer = [0u8; 8192];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => {
+                size = size.saturating_add(count);
+                let remaining = limit.saturating_sub(bytes.len());
+                bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+                if size > limit {
+                    exceeded_flag.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+    CapturedOutput {
+        bytes,
+        size,
+        exceeded: size > limit,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn hide_child_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_child_window(_command: &mut Command) {}
+
+fn configure_python_utf8(command: &mut Command) {
+    command
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1");
+}
+
+fn serialize_context_utf8(context: &Value) -> Result<Vec<u8>, String> {
+    serde_json::to_string(context)
+        .map(String::into_bytes)
+        .map_err(|error| format!("context JSON UTF-8 序列化失败：{error}"))
+}
+
+fn run_managed_process(
+    command: &mut Command,
+    stdin_bytes: &[u8],
+    timeout_ms: u64,
+    stdout_limit: usize,
+    stderr_limit: usize,
+) -> Result<ExternalProcessResult, String> {
+    hide_child_window(command);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let started = Instant::now();
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("外部进程启动失败：{error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取外部进程 stdout。".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取外部进程 stderr。".to_string())?;
+    let stdout_exceeded = Arc::new(AtomicBool::new(false));
+    let stderr_exceeded = Arc::new(AtomicBool::new(false));
+    let stdout_thread = {
+        let flag = Arc::clone(&stdout_exceeded);
+        thread::spawn(move || read_output_limited(stdout, stdout_limit, flag))
+    };
+    let stderr_thread = {
+        let flag = Arc::clone(&stderr_exceeded);
+        thread::spawn(move || read_output_limited(stderr, stderr_limit, flag))
+    };
+
+    let stdin_error = child.stdin.take().and_then(|mut stdin| {
+        stdin
+            .write_all(stdin_bytes)
+            .and_then(|_| stdin.flush())
+            .err()
+            .map(|error| format!("context 写入 stdin 失败：{error}"))
+    });
+
+    let mut timed_out = false;
+    let mut output_limited = false;
+    let exit_status = loop {
+        if stdout_exceeded.load(Ordering::Relaxed) {
+            output_limited = true;
+            let _ = child.kill();
+            break child
+                .wait()
+                .map_err(|error| format!("等待外部进程退出失败：{error}"))?;
+        }
+        if started.elapsed() >= Duration::from_millis(timeout_ms) {
+            timed_out = true;
+            let _ = child.kill();
+            break child
+                .wait()
+                .map_err(|error| format!("等待超时进程退出失败：{error}"))?;
+        }
+        match child
+            .try_wait()
+            .map_err(|error| format!("读取外部进程状态失败：{error}"))?
+        {
+            Some(status) => break status,
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+
+    let captured_stdout = stdout_thread
+        .join()
+        .map_err(|_| "stdout 读取线程异常退出。".to_string())?;
+    let captured_stderr = stderr_thread
+        .join()
+        .map_err(|_| "stderr 读取线程异常退出。".to_string())?;
+    output_limited |= captured_stdout.exceeded;
+
+    let (stdout, invalid_stdout_utf8) = match String::from_utf8(captured_stdout.bytes) {
+        Ok(value) => (value, false),
+        Err(error) => (String::from_utf8_lossy(error.as_bytes()).to_string(), true),
+    };
+    let stderr = match String::from_utf8(captured_stderr.bytes) {
+        Ok(value) => value,
+        Err(error) => format!(
+            "stderr 非合法 UTF-8，已使用安全替换预览。\n{}",
+            String::from_utf8_lossy(error.as_bytes())
+        ),
+    };
+    let exit_code = exit_status.code();
+    let (status, error) = if timed_out {
+        (
+            "timeout",
+            Some(format!("外部进程执行超时（{timeout_ms}ms），已终止。")),
+        )
+    } else if output_limited {
+        (
+            "output_limit",
+            Some(format!(
+                "stdout 超过最大限制 {} 字节，进程已终止。",
+                stdout_limit
+            )),
+        )
+    } else if invalid_stdout_utf8 {
+        (
+            "failed",
+            Some("stdout 不是合法 UTF-8，请确保外部程序输出 UTF-8 JSON。".to_string()),
+        )
+    } else if let Some(error) = stdin_error {
+        ("failed", Some(error))
+    } else if !exit_status.success() {
+        (
+            "failed",
+            Some(format!(
+                "外部进程退出码非 0：{}。",
+                exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            )),
+        )
+    } else {
+        ("success", None)
+    };
+
+    Ok(ExternalProcessResult {
+        status: status.to_string(),
+        stdout,
+        stderr,
+        stdout_size: captured_stdout.size,
+        stderr_size: captured_stderr.size,
+        exit_code,
+        duration_ms: started.elapsed().as_millis(),
+        error,
+    })
+}
+
+fn validate_python_path(python_path: &str) -> Result<PathBuf, String> {
+    let trimmed = python_path.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return Err("Python 路径不能为空。".to_string());
+    }
+    if ["python", "python3", "python.exe"].contains(&trimmed) {
+        return Ok(PathBuf::from(trimmed));
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        return Err(
+            "Python 路径只允许简单命令 python/python3/python.exe 或可执行文件绝对路径。"
+                .to_string(),
+        );
+    }
+    if !path.is_file() {
+        return Err(format!("Python 可执行文件不存在：{}", path.display()));
+    }
+    #[cfg(target_os = "windows")]
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        return Err("Windows 下 Python 路径必须指向 .exe 文件。".to_string());
+    }
+    Ok(path)
+}
+
+fn external_settings_at(root: &Path) -> Result<(bool, String), String> {
+    let settings = read_user_json_at(root, USER_PLUGIN_SETTINGS_PATH, json!({}))?;
+    let enabled = settings
+        .get("externalRunnerEnabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let python_path = settings
+        .get("pythonPath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("python")
+        .to_string();
+    Ok((enabled, python_path))
+}
+
+fn registry_plugin_enabled(root: &Path, plugin_id: &str) -> Result<bool, String> {
+    let registry = read_user_json_at(root, USER_PLUGIN_REGISTRY_PATH, json!([]))?;
+    Ok(registry.as_array().is_some_and(|plugins| {
+        plugins.iter().any(|plugin| {
+            plugin.get("pluginId").and_then(Value::as_str) == Some(plugin_id)
+                && plugin
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+    }))
+}
+
+fn run_external_command_at(
+    root: &Path,
+    plugin_id: &str,
+    context: &Value,
+    requested_python_path: &str,
+    timeout_ms: u64,
+) -> Result<ExternalProcessResult, String> {
+    if !is_safe_plugin_id(plugin_id) {
+        return Err("Invalid pluginId.".to_string());
+    }
+    let (runner_enabled, configured_python_path) = external_settings_at(root)?;
+    if !runner_enabled {
+        return Err("外部命令插件运行器未启用。".to_string());
+    }
+    if !registry_plugin_enabled(root, plugin_id)? {
+        return Err(format!("插件已禁用或未安装：{plugin_id}"));
+    }
+    if context.get("contextVersion").and_then(Value::as_u64) != Some(1) {
+        return Err("外部命令 contextVersion 必须是 1。".to_string());
+    }
+    let stdin = serialize_context_utf8(context)?;
+    if stdin.len() > 8 * 1024 * 1024 {
+        return Err("context JSON 超过 8MB 限制。".to_string());
+    }
+
+    let relative_manifest = format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}/{MANIFEST_FILE_NAME}");
+    let manifest = read_user_json_at(root, &relative_manifest, Value::Null)?;
+    validate_declarative_manifest(plugin_id, &manifest)
+        .map_err(|error| format!("installed manifest 无效：{error}"))?;
+    if manifest.get("pluginType").and_then(Value::as_str) != Some("external-command") {
+        return Err("插件不是 external-command 类型。".to_string());
+    }
+    let runtime = manifest
+        .get("runtime")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "external-command manifest 缺少 runtime。".to_string())?;
+    let entry = manifest
+        .get("entry")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "external-command manifest 缺少 entry。".to_string())?;
+    validate_external_entry_path(entry, runtime)?;
+
+    let relative_plugin_dir = format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}");
+    let plugin_dir = resolve_user_relative_path(root, &relative_plugin_dir)?;
+    let entry_path = resolve_user_relative_path(
+        root,
+        &format!("{relative_plugin_dir}/{}", entry.replace('\\', "/")),
+    )?;
+    if !entry_path.is_file() {
+        return Err(format!("插件入口文件不存在：{}", entry_path.display()));
+    }
+
+    let mut command = if runtime == "python" {
+        if requested_python_path.trim() != configured_python_path {
+            return Err("Python 路径与已保存配置不一致，请重新加载设置。".to_string());
+        }
+        let python = validate_python_path(&configured_python_path)?;
+        let mut command = Command::new(python);
+        command.arg(&entry_path);
+        configure_python_utf8(&mut command);
+        command
+    } else {
+        Command::new(&entry_path)
+    };
+    command.current_dir(&plugin_dir);
+    run_managed_process(
+        &mut command,
+        &stdin,
+        timeout_ms.clamp(1, EXTERNAL_MAX_TIMEOUT_MS),
+        EXTERNAL_STDOUT_LIMIT,
+        EXTERNAL_STDERR_LIMIT,
+    )
+}
+
+#[tauri::command]
+async fn run_external_command_plugin(
+    app: AppHandle,
+    plugin_id: String,
+    context: Value,
+    python_path: String,
+    timeout_ms: Option<u64>,
+) -> Result<ExternalProcessResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_external_command_at(
+            &root,
+            &plugin_id,
+            &context,
+            &python_path,
+            timeout_ms.unwrap_or(EXTERNAL_DEFAULT_TIMEOUT_MS),
+        )
+    })
+    .await
+    .map_err(|error| format!("外部进程任务异常：{error}"))?
+}
+
+fn test_python_runtime_at(python_path: &str) -> Result<PythonTestResult, String> {
+    let executable = validate_python_path(python_path)?;
+    let mut command = Command::new(executable);
+    command.arg("--version");
+    configure_python_utf8(&mut command);
+    let result = run_managed_process(
+        &mut command,
+        &[],
+        EXTERNAL_DEFAULT_TIMEOUT_MS,
+        64 * 1024,
+        64 * 1024,
+    )?;
+    let version = if result.stdout.trim().is_empty() {
+        result.stderr.trim().to_string()
+    } else {
+        result.stdout.trim().to_string()
+    };
+    Ok(PythonTestResult {
+        ok: result.status == "success" && !version.is_empty(),
+        version: (!version.is_empty()).then_some(version),
+        exit_code: result.exit_code,
+        duration_ms: result.duration_ms,
+        error: result.error,
+    })
+}
+
+#[tauri::command]
+async fn test_python_runtime(python_path: String) -> Result<PythonTestResult, String> {
+    tauri::async_runtime::spawn_blocking(move || test_python_runtime_at(&python_path))
+        .await
+        .map_err(|error| format!("Python 测试任务异常：{error}"))?
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -2098,6 +2699,7 @@ fn main() {
             create_sample_script_plugin,
             create_sample_batch_script_plugin,
             create_sample_workflow_plugin,
+            create_sample_python_plugin,
             open_sample_script_plugin_dir,
             open_plugin_manifest_dir,
             scan_installed_plugin_manifests,
@@ -2113,7 +2715,9 @@ fn main() {
             list_desktop_plugins,
             install_desktop_plugin_manifest,
             set_desktop_plugin_enabled,
-            uninstall_desktop_plugin
+            uninstall_desktop_plugin,
+            run_external_command_plugin,
+            test_python_runtime
         ])
         .run(tauri::generate_context!())
         .expect("failed to run local-mindmap desktop shell");
@@ -2169,6 +2773,350 @@ mod tests {
                 }]
             }
         })
+    }
+
+    fn test_external_python_plugin(plugin_id: &str) -> Value {
+        json!({
+            "manifestVersion": 1,
+            "pluginId": plugin_id,
+            "name": "External Python test plugin",
+            "version": "1.0.0",
+            "author": "Local Mindmap Test",
+            "description": "Tests the external command protocol.",
+            "pluginType": "external-command",
+            "runtime": "python",
+            "entry": "main.py",
+            "capabilities": ["external-command", "mindmap:read", "mindmap:write"],
+            "enabled": true,
+            "permissions": [
+                "external-command",
+                "mindmap:read",
+                "mindmap:write",
+                "node:read",
+                "node:write"
+            ],
+            "contributions": {
+                "menus": [{
+                    "id": "run",
+                    "label": "Run",
+                    "location": "plugins",
+                    "command": "plugin.runExternal",
+                    "when": "hasSelectedNode"
+                }]
+            }
+        })
+    }
+
+    fn test_external_executable_plugin(plugin_id: &str, entry: &str) -> Value {
+        json!({
+            "manifestVersion": 1,
+            "pluginId": plugin_id,
+            "name": "External executable test plugin",
+            "version": "1.0.0",
+            "author": "Local Mindmap Test",
+            "description": "Tests direct executable startup.",
+            "pluginType": "external-command",
+            "runtime": "executable",
+            "entry": entry,
+            "capabilities": ["external-command", "mindmap:read"],
+            "enabled": true,
+            "permissions": ["external-command", "mindmap:read"],
+            "contributions": {
+                "menus": [{
+                    "id": "run",
+                    "label": "Run",
+                    "location": "plugins",
+                    "command": "plugin.runExternal",
+                    "when": "always"
+                }]
+            }
+        })
+    }
+
+    fn install_external_python_for_test(
+        root: &Path,
+        plugin_id: &str,
+        source: &str,
+    ) -> Result<(), String> {
+        ensure_user_data_dirs_at(root)?;
+        let source_dir = root.join("source-plugin");
+        fs::create_dir_all(&source_dir).map_err(|error| error.to_string())?;
+        let manifest_path = source_dir.join(MANIFEST_FILE_NAME);
+        let entry_path = source_dir.join("main.py");
+        fs::write(&manifest_path, "{}").map_err(|error| error.to_string())?;
+        fs::write(&entry_path, source).map_err(|error| error.to_string())?;
+        let manifest = test_external_python_plugin(plugin_id);
+        let assets = vec![PluginInstallAsset {
+            relative_path: "main.py".to_string(),
+            source_path: Some(entry_path.to_string_lossy().to_string()),
+            text: None,
+        }];
+        install_plugin_to_user_dir_at_with_writer(
+            root,
+            plugin_id,
+            &manifest,
+            false,
+            Some(&manifest_path.to_string_lossy()),
+            &assets,
+            write_user_json_at,
+        )?;
+        write_user_json_at(
+            root,
+            USER_PLUGIN_SETTINGS_PATH,
+            &json!({
+                "scriptRunnerEnabled": false,
+                "externalRunnerEnabled": true,
+                "pythonPath": "python"
+            }),
+        )
+    }
+
+    fn external_test_context() -> Value {
+        json!({
+            "contextVersion": 1,
+            "app": { "version": "1.9.0", "platform": "desktop" },
+            "mindmap": {
+                "title": "中心主题",
+                "nodeCount": 1,
+                "selectedNodeId": "root",
+                "rootNodeId": "root"
+            },
+            "selectedNode": {
+                "id": "root",
+                "text": "中心主题",
+                "remark": "",
+                "parentId": null,
+                "childrenIds": [],
+                "type": "default"
+            },
+            "nodes": [],
+            "selection": { "nodeIds": ["root"] }
+        })
+    }
+
+    #[test]
+    fn serializes_external_context_as_utf8_json_bytes() {
+        let bytes =
+            serialize_context_utf8(&external_test_context()).expect("context should serialize");
+        let decoded = std::str::from_utf8(&bytes).expect("context bytes must be valid UTF-8");
+        assert!(decoded.contains("中心主题"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).expect("context should remain JSON")
+                ["selectedNode"]["text"],
+            "中心主题"
+        );
+    }
+
+    #[test]
+    fn validates_external_command_schema_and_command_ownership() {
+        let plugin_id = "localmindmap.test.external.schema";
+        let manifest = test_external_python_plugin(plugin_id);
+        validate_declarative_manifest(plugin_id, &manifest)
+            .expect("valid external manifest should pass");
+
+        for (field, value) in [
+            ("runtime", Value::Null),
+            ("entry", Value::Null),
+            ("shell", Value::String("cmd".to_string())),
+            ("args", json!([])),
+            ("commandLine", Value::String("python main.py".to_string())),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid
+                .as_object_mut()
+                .expect("manifest object")
+                .insert(field.to_string(), value);
+            assert!(
+                validate_declarative_manifest(plugin_id, &invalid).is_err(),
+                "{field} should be rejected"
+            );
+        }
+
+        let mut invalid_entry = manifest.clone();
+        invalid_entry["entry"] = Value::String("../main.py".to_string());
+        assert!(validate_declarative_manifest(plugin_id, &invalid_entry).is_err());
+        let mut invalid_command = manifest;
+        invalid_command["contributions"]["menus"][0]["command"] =
+            Value::String("plugin.runScript".to_string());
+        assert!(validate_declarative_manifest(plugin_id, &invalid_command).is_err());
+    }
+
+    #[test]
+    fn external_runner_stays_disabled_when_settings_are_missing_or_damaged() {
+        let root = test_root("external-runner-disabled");
+        let plugin_id = "localmindmap.test.external.disabled";
+        install_external_python_for_test(
+            &root,
+            plugin_id,
+            "import json; print(json.dumps({'actions': []}))",
+        )
+        .expect("plugin install should succeed");
+        fs::remove_file(root.join(USER_PLUGIN_SETTINGS_PATH)).expect("settings should exist");
+        assert!(
+            run_external_command_at(&root, plugin_id, &external_test_context(), "python", 500)
+                .expect_err("missing settings must disable runner")
+                .contains("未启用")
+        );
+        fs::write(root.join(USER_PLUGIN_SETTINGS_PATH), "{bad json")
+            .expect("damaged settings should be written");
+        assert!(
+            run_external_command_at(&root, plugin_id, &external_test_context(), "python", 500)
+                .is_err()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn external_python_runner_handles_protocol_stderr_exit_and_timeout() {
+        if !test_python_runtime_at("python")
+            .map(|result| result.ok)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let cases = [
+            (
+                "success",
+                "import json,os,sys\nc=json.load(sys.stdin)\nsys.stderr.write(os.environ.get('PYTHONIOENCODING','') + '|' + os.environ.get('PYTHONUTF8',''))\nprint(json.dumps({'actions':[{'type':'showMessage','message':c['selectedNode']['text']}]}, ensure_ascii=False))",
+                1000,
+                "success",
+            ),
+            (
+                "non-json",
+                "print('not json')",
+                1000,
+                "success",
+            ),
+            (
+                "non-zero",
+                "import sys\nsys.stderr.write('failed')\nsys.exit(7)",
+                1000,
+                "failed",
+            ),
+            (
+                "timeout",
+                "import time\ntime.sleep(1)\nprint('{\"actions\": []}')",
+                50,
+                "timeout",
+            ),
+            (
+                "output-limit",
+                "print('x' * 1100000)",
+                2000,
+                "output_limit",
+            ),
+            (
+                "invalid-stdout-utf8",
+                "import sys\nsys.stdout.buffer.write(bytes([255]))",
+                1000,
+                "failed",
+            ),
+            (
+                "invalid-stderr-utf8",
+                "import json,sys\nsys.stderr.buffer.write(bytes([255]))\nprint(json.dumps({'actions': []}))",
+                1000,
+                "success",
+            ),
+        ];
+
+        for (name, source, timeout, expected_status) in cases {
+            let root = test_root(&format!("external-{name}"));
+            let plugin_id = format!("localmindmap.test.external.{name}");
+            install_external_python_for_test(&root, &plugin_id, source)
+                .expect("plugin install should succeed");
+            let result = run_external_command_at(
+                &root,
+                &plugin_id,
+                &external_test_context(),
+                "python",
+                timeout,
+            )
+            .expect("runner should return a process result");
+            assert_eq!(result.status, expected_status);
+            if name == "success" {
+                let output: Value =
+                    serde_json::from_str(&result.stdout).expect("stdout should be UTF-8 JSON");
+                assert_eq!(output["actions"][0]["message"], "中心主题");
+                assert!(result.stdout.contains("中心主题"));
+                assert_eq!(result.stderr, "utf-8|1");
+                assert_eq!(result.exit_code, Some(0));
+            } else if name == "non-zero" {
+                assert_eq!(result.exit_code, Some(7));
+                assert!(result.stderr.contains("failed"));
+            } else if name == "invalid-stdout-utf8" {
+                assert_eq!(
+                    result.error.as_deref(),
+                    Some("stdout 不是合法 UTF-8，请确保外部程序输出 UTF-8 JSON。")
+                );
+            } else if name == "invalid-stderr-utf8" {
+                assert!(result.stderr.contains("stderr 非合法 UTF-8"));
+            }
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn external_executable_runner_starts_installed_exe_without_shell() {
+        let root = test_root("external-executable");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let source_dir = root.join("source-executable-plugin");
+        fs::create_dir_all(&source_dir).expect("source directory should exist");
+        let manifest_path = source_dir.join(MANIFEST_FILE_NAME);
+        fs::write(&manifest_path, "{}").expect("source manifest should exist");
+        let windows_dir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let system_exe = Path::new(&windows_dir).join("System32").join("whoami.exe");
+        let source_exe = source_dir.join("plugin.exe");
+        fs::copy(system_exe, &source_exe).expect("test executable should be copied");
+        let plugin_id = "localmindmap.test.external.executable";
+        let manifest = test_external_executable_plugin(plugin_id, "plugin.exe");
+        let assets = vec![PluginInstallAsset {
+            relative_path: "plugin.exe".to_string(),
+            source_path: Some(source_exe.to_string_lossy().to_string()),
+            text: None,
+        }];
+        install_plugin_to_user_dir_at_with_writer(
+            &root,
+            plugin_id,
+            &manifest,
+            false,
+            Some(&manifest_path.to_string_lossy()),
+            &assets,
+            write_user_json_at,
+        )
+        .expect("executable plugin should install");
+        write_user_json_at(
+            &root,
+            USER_PLUGIN_SETTINGS_PATH,
+            &json!({
+                "externalRunnerEnabled": true,
+                "pythonPath": "python"
+            }),
+        )
+        .expect("settings should be written");
+        let result =
+            run_external_command_at(&root, plugin_id, &external_test_context(), "python", 2000)
+                .expect("executable should return a process result");
+        assert_eq!(result.status, "success");
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!result.stdout.trim().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn creates_valid_python_sample_without_overwriting_existing_files() {
+        let root = test_root("python-sample");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let created =
+            create_sample_python_plugin_at(&root).expect("Python sample creation should succeed");
+        assert!(created.created);
+        assert!(Path::new(&created.manifest_path).is_file());
+        assert!(Path::new(created.main_path.as_deref().unwrap_or_default()).is_file());
+        let existing = create_sample_python_plugin_at(&root)
+            .expect("existing Python sample should be reported");
+        assert!(!existing.created);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2802,7 +3750,8 @@ mod tests {
         assert_eq!(manifest["version"], "1.0.1");
         assert_eq!(manifest["name"], "Updated plugin");
         assert_eq!(manifest["enabled"], false);
-        assert_eq!(registry[0]["version"], "1.0.1");
+        assert_eq!(registry[0]["pluginId"], plugin_id);
+        assert!(registry[0].get("version").is_none());
         assert_eq!(registry[0]["enabled"], false);
         let scanned = scan_installed_plugin_manifests_at(&root, &[])
             .expect("installed plugin scan should succeed");
@@ -2823,6 +3772,9 @@ mod tests {
         first["version"] = Value::String("1.0.0".to_string());
         install_plugin_to_user_dir_at(&root, plugin_id, &first, false)
             .expect("initial install should succeed");
+        let registry_before =
+            read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))
+                .expect("initial registry should be readable");
 
         let mut update = first.clone();
         update["version"] = Value::String("1.0.1".to_string());
@@ -2852,7 +3804,8 @@ mod tests {
         let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, Value::Array(vec![]))
             .expect("previous registry should be restored");
         assert_eq!(manifest["version"], "1.0.0");
-        assert_eq!(registry[0]["version"], "1.0.0");
+        assert_eq!(registry, registry_before);
+        assert!(registry[0].get("version").is_none());
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
 

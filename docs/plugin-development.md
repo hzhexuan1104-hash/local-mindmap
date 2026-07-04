@@ -505,3 +505,197 @@ plugins/dev/sample-json-workflow-plugin/
 JSON Action 工作流不执行 JS、Shell、DLL、Python 或外部命令，不访问文件系统、
 网络、DOM、Tauri API 或 React state。它只能执行宿主解析并校验通过的结构化
 actions；v1.7 声明式插件和 v1.8 script 插件沿用各自既有执行边界。
+
+## v1.9 Python / 外部命令插件（实验）
+
+### Manifest
+
+外部命令插件使用 `pluginType: "external-command"`，`runtime` 必须是
+`python` 或 `executable`，菜单命令必须是 `plugin.runExternal`。
+
+```json
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.external.python.demo",
+  "name": "Python demo",
+  "version": "1.0.0",
+  "author": "Developer",
+  "description": "Reads context and returns actions.",
+  "pluginType": "external-command",
+  "runtime": "python",
+  "entry": "main.py",
+  "capabilities": ["external-command", "mindmap:read", "mindmap:write"],
+  "enabled": true,
+  "permissions": [
+    "external-command",
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write"
+  ],
+  "contributions": {
+    "menus": [{
+      "id": "run",
+      "label": "运行 Python 插件",
+      "location": "plugins",
+      "command": "plugin.runExternal",
+      "when": "hasSelectedNode"
+    }]
+  }
+}
+```
+
+`entry` 必须是插件目录内的普通相对路径，不允许绝对路径、`.`、`..`、空路径
+段或远程 URL。Python entry 必须以 `.py` 结尾；Windows executable entry
+必须以 `.exe` 结尾，DLL 永远拒绝。`commandLine`、`args`、`shell`、`script`
+和 `code` 字段属于 schema error。script、action-workflow 和 external-command
+三种类型不能交叉使用彼此的运行命令。缺少 `external-command` permission 会
+产生 warning。
+
+导入时选择 `manifest.json`。宿主检查 entry 与 manifest 位于同一目录或其子目录，
+然后以事务方式复制到：
+
+```text
+plugins/installed/<pluginId>/
+  manifest.json
+  main.py
+```
+
+entry 缺失或复制失败会终止导入并回滚。覆盖安装保留 registry 中的 enabled 和
+trusted；运行时重新读取并校验 installed manifest，而不是信任导入时的内存对象。
+
+### 启动与 Python 配置
+
+开发者模式中的“启用外部命令插件运行器”默认关闭，状态保存到
+`config/plugin-settings.json`。配置缺失或损坏时按关闭处理；runner 关闭时插件
+仍可导入和显示菜单，但 Rust 层会在创建进程前再次拒绝执行。
+
+Python 路径默认是 PATH 中的 `python`。也可保存 `python`、`python3`、
+`python.exe` 或一个可执行文件绝对路径。“测试 Python”固定执行
+`<python> --version`。应用不会搜索下载 Python，也不会安装依赖。
+
+运行命令固定为：
+
+```text
+python <installed-entry>
+```
+
+或直接启动 installed executable entry。实现使用进程 API 和参数数组，不使用
+Shell，不解析插件提供的命令行，也不接受自定义参数。
+
+启动 Python 插件时，宿主只对该 Python 子进程设置：
+
+```text
+PYTHONIOENCODING=utf-8
+PYTHONUTF8=1
+```
+
+这两个变量不会注入 `runtime=executable` 进程。Windows 下仍建议 Python
+插件显式执行以下兼容设置，以兼容不同 Python 发行版和宿主终端配置：
+
+```python
+try:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+```
+
+### stdin context 协议
+
+宿主将 context 明确序列化为 UTF-8 JSON 字节并写入 stdin，然后关闭 stdin。context 复用 v1.8
+snapshot，新增显式 `contextVersion: 1`：
+
+```json
+{
+  "contextVersion": 1,
+  "app": { "version": "1.9.0", "platform": "desktop" },
+  "mindmap": {
+    "title": "中心主题",
+    "nodeCount": 10,
+    "selectedNodeId": "node-1",
+    "rootNodeId": "root"
+  },
+  "selectedNode": {
+    "id": "node-1",
+    "text": "节点标题",
+    "remark": "",
+    "parentId": "root",
+    "childrenIds": [],
+    "type": "default"
+  },
+  "nodes": [],
+  "selection": { "nodeIds": ["node-1"] }
+}
+```
+
+context 不含函数、DOM、Tauri API、access token、文件路径、用户数据目录或插件
+安装目录。`nodes` 最多 1000 个；超限时附加 `truncated: true` 和 `warning`。
+node-context 菜单运行时，`selectedNode` 和 selection 绑定用户右键点击的节点。
+
+### stdout actions 协议
+
+stdout 必须是合法 UTF-8，且只包含一个 JSON 对象：
+
+```json
+{
+  "actions": [
+    {
+      "type": "showMessage",
+      "level": "info",
+      "message": "完成"
+    }
+  ]
+}
+```
+
+v1.9 不接受顶层 actions 数组。stdout 按 UTF-8 严格解码；非 UTF-8、非 JSON、
+不是对象、缺少 actions 数组或超过 1MB 时整次失败，不执行任何 action，也不
+产生 undo。actions 使用与 v1.8
+相同的 Action Protocol 整批校验和权限校验；未知 action、`deleteNode` 和超限
+批次会整批拒绝。
+
+stderr 同样优先按 UTF-8 解码，不参与 JSON 解析，也不因非空而单独判失败；
+解码失败时使用安全替换预览并标记“stderr 非合法 UTF-8”。stderr 最多保留
+64KB，并写入插件日志和最近运行预览。exitCode 非 0 时，即使 stdout 合法也
+不会执行 actions。进程默认 5000ms 超时，超时或 stdout 超限会 kill 并等待退出。
+
+只有实际修改导图的成功 actions 才压入一次 undo batch。多个 `addChildNodes`
+修改可用一次 Ctrl+Z 撤销、一次 Ctrl+Y 恢复；纯 `showMessage`、进程失败、
+JSON/action 校验失败均不产生历史记录。
+
+### 信任、详情与日志
+
+external-command 插件默认 `trusted=false`。未信任且声明写权限的插件首次运行时
+可选择取消、仅允许本次或信任此插件。trusted 保存到 registry，覆盖安装保留，
+详情页可取消信任；manifest 损坏、插件禁用或 runner 关闭时，trusted=true 也
+不能绕过校验。
+
+详情页显示 runtime、entry、permissions、trusted、runner 状态、Python path，
+以及最近一次运行的时间、状态、durationMs、exitCode、stdoutSize、stderr
+preview、actionCount、appliedActionCount 和 error。日志覆盖 runner 开关、
+Python 保存/测试、进程开始、stdin/stdout/stderr、退出/超时、action 校验和
+应用、undo batch、成功/失败、trust 与 node-context 调用。
+
+开发者模式中的“创建 Python 插件示例”生成：
+
+```text
+plugins/dev/sample-python-plugin/
+  manifest.json
+  main.py
+  README.md
+```
+
+仓库副本位于 `docs/examples/sample-python-plugin/`。exe sidecar 应从 stdin
+读取 context，只向 stdout 输出协议 JSON，并将诊断信息写到 stderr；不依赖
+命令行参数。
+
+### 安全边界
+
+Local Mindmap 不提供 Shell、DLL、远程 URL、远程插件市场、网络 API、依赖下载
+或自动安装 Python，也不向插件 context 暴露文件系统路径。外部程序仍是操作系统
+进程，宿主无法把它等同于 Web Worker 沙箱：它可能凭当前用户的系统权限访问文件
+或网络。因此此功能默认关闭并标记为高风险实验能力，只应运行用户信任的本地程序。
+无论外部程序做什么，Local Mindmap 仅接受 stdout 中通过 Action Protocol 校验的
+actions 来修改当前内存中的导图；插件不能要求宿主直接写 `.lmind` 文件。

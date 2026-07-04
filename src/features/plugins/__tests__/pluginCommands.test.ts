@@ -32,6 +32,7 @@ describe('plugin command registry', () => {
       'builtin.applyTemplate',
       'plugin.runScript',
       'plugin.runWorkflow',
+      'plugin.runExternal',
     ]);
   });
 

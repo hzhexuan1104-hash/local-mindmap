@@ -6,26 +6,38 @@ import {
 
 export type PluginSettings = {
   scriptRunnerEnabled: boolean;
+  externalRunnerEnabled: boolean;
+  pythonPath: string;
 };
 
 export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   scriptRunnerEnabled: false,
+  externalRunnerEnabled: false,
+  pythonPath: 'python',
 };
 
 export function normalizePluginSettings(value: unknown): PluginSettings {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Array.isArray(value) ||
-    typeof (value as { scriptRunnerEnabled?: unknown }).scriptRunnerEnabled !==
-      'boolean'
-  ) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return { ...DEFAULT_PLUGIN_SETTINGS };
   }
+  const settings = value as {
+    scriptRunnerEnabled?: unknown;
+    externalRunnerEnabled?: unknown;
+    pythonPath?: unknown;
+  };
   return {
-    scriptRunnerEnabled: (
-      value as { scriptRunnerEnabled: boolean }
-    ).scriptRunnerEnabled,
+    scriptRunnerEnabled:
+      typeof settings.scriptRunnerEnabled === 'boolean'
+        ? settings.scriptRunnerEnabled
+        : false,
+    externalRunnerEnabled:
+      typeof settings.externalRunnerEnabled === 'boolean'
+        ? settings.externalRunnerEnabled
+        : false,
+    pythonPath:
+      typeof settings.pythonPath === 'string' && settings.pythonPath.trim()
+        ? settings.pythonPath.trim()
+        : DEFAULT_PLUGIN_SETTINGS.pythonPath,
   };
 }
 

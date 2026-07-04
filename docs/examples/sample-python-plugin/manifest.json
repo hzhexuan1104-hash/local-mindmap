@@ -1,0 +1,42 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "localmindmap.dev.sample-python-plugin",
+  "name": "示例 Python 插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap Dev",
+  "description": "通过 Python 读取当前节点标题并生成 3 个关键词子节点。",
+  "pluginType": "external-command",
+  "runtime": "python",
+  "entry": "main.py",
+  "capabilities": [
+    "external-command",
+    "mindmap:read",
+    "mindmap:write"
+  ],
+  "enabled": true,
+  "permissions": [
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write",
+    "external-command"
+  ],
+  "contributions": {
+    "menus": [
+      {
+        "id": "generateKeywordsByPython",
+        "label": "Python：生成关键词子节点",
+        "location": "plugins",
+        "command": "plugin.runExternal",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "generateKeywordsByPythonContext",
+        "label": "Python：生成关键词子节点",
+        "location": "node-context",
+        "command": "plugin.runExternal",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}

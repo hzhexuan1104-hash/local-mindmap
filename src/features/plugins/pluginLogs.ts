@@ -40,7 +40,28 @@ export type PluginLogEvent =
   | 'workflow-trust-requested'
   | 'workflow-trust-granted'
   | 'workflow-trust-revoked'
-  | 'workflow-context-menu-invoked';
+  | 'workflow-context-menu-invoked'
+  | 'external-runner-enabled'
+  | 'external-runner-disabled'
+  | 'python-path-saved'
+  | 'python-test-succeeded'
+  | 'python-test-failed'
+  | 'external-plugin-imported'
+  | 'external-execution-started'
+  | 'external-stdin-sent'
+  | 'external-stdout-received'
+  | 'external-stderr-received'
+  | 'external-process-exited'
+  | 'external-process-timeout'
+  | 'external-action-validation-failed'
+  | 'external-action-applied'
+  | 'external-undo-batch-created'
+  | 'external-execution-succeeded'
+  | 'external-execution-failed'
+  | 'external-trust-requested'
+  | 'external-trust-granted'
+  | 'external-trust-revoked'
+  | 'external-context-menu-invoked';
 
 export type PluginLogEntry = {
   id: string;

@@ -90,6 +90,7 @@ export type ScriptContextNode = {
 };
 
 export type ScriptPluginContext = {
+  contextVersion: 1;
   app: {
     version: string;
     platform: 'desktop';
@@ -184,8 +185,9 @@ export function createScriptPluginContext(
     : null;
   const truncated = nodeCount > SCRIPT_CONTEXT_NODE_LIMIT;
   const snapshot: ScriptPluginContext = {
+    contextVersion: 1,
     app: {
-      version: '1.8.0',
+      version: '1.9.0',
       platform: 'desktop',
     },
     mindmap: {

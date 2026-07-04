@@ -201,8 +201,8 @@ describe('plugin reload from installed manifests', () => {
     expect(getPersistablePluginRegistry(reloaded)).toContainEqual(
       expect.objectContaining({
         pluginId: plugin.pluginId,
-        source: 'manifest-missing',
-        manifestValid: false,
+        enabled: true,
+        trusted: false,
       }),
     );
   });
