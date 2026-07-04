@@ -1,0 +1,37 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "builtin-gallery.python-keyword",
+  "name": "Python 关键词插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap",
+  "description": "通过 Python 外部命令生成关键词子节点。",
+  "pluginType": "external-command",
+  "runtime": "python",
+  "entry": "main.py",
+  "capabilities": ["external-command", "mindmap:read", "mindmap:write"],
+  "permissions": [
+    "mindmap:read",
+    "mindmap:write",
+    "node:read",
+    "node:write",
+    "external-command"
+  ],
+  "contributions": {
+    "menus": [
+      {
+        "id": "galleryPythonKeywords",
+        "label": "插件中心 Python：生成关键词",
+        "location": "plugins",
+        "command": "plugin.runExternal",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "galleryPythonKeywordsContext",
+        "label": "Python：生成关键词",
+        "location": "node-context",
+        "command": "plugin.runExternal",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}

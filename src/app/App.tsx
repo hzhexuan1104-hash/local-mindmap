@@ -134,6 +134,10 @@ import {
   type PluginLogLevel,
 } from '../features/plugins/pluginLogs';
 import {
+  getPluginGalleryInstallWarning,
+  type PluginGalleryItem,
+} from '../features/plugins/pluginGallery';
+import {
   applyScriptPluginActions,
   createScriptPluginContext,
   validateScriptActionPermissions,
@@ -220,6 +224,7 @@ import {
   ensureUserDataDirs,
   exportPluginPackage,
   getUserDataDir,
+  installGalleryPlugin,
   installPluginToUserDir,
   isDesktopRuntime,
   migrateLegacyLocalStorageToUserData,
@@ -227,6 +232,8 @@ import {
   openUserDataDir,
   openPluginDir,
   openPluginDevDir,
+  openGalleryPluginDir,
+  openPluginDevelopmentDocs,
   openPluginManifestDir,
   readUserText,
   resolveUserDataPath,
@@ -1599,6 +1606,97 @@ export function App() {
       setLastPluginInstallError(errorMessage);
       recordPluginLog('error', 'import-failure', errorMessage);
       showMessage(errorMessage);
+    }
+  };
+
+  const handleInstallGalleryPlugin = async (item: PluginGalleryItem) => {
+    if (!isDesktopApp) {
+      showMessage('本地插件中心仅在桌面端可用。');
+      return;
+    }
+    if (!item.installable || !item.manifest) {
+      const errorMessage = item.error ?? '该 gallery 插件当前不可安装。';
+      setLastPluginInstallError(errorMessage);
+      showMessage(errorMessage);
+      return;
+    }
+    const warning = getPluginGalleryInstallWarning(item.pluginType);
+    if (warning && !window.confirm(`${warning}\n\n是否继续安装？`)) {
+      return;
+    }
+    const existing = plugins.find(
+      (plugin) => plugin.pluginId === item.id && !plugin.builtIn,
+    );
+    if (
+      existing &&
+      !window.confirm(
+        `插件已安装：${existing.name}\n` +
+          `当前版本：${existing.version}\n` +
+          `示例版本：${item.manifest.version}\n` +
+          '重新安装会保留 enabled / trusted。是否继续？',
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const result = await installGalleryPlugin(item.id, Boolean(existing));
+      const reloadedPlugins = await loadPluginRegistry();
+      setPlugins(reloadedPlugins);
+      setLastPluginInstallError('');
+      recordPluginLog(
+        'info',
+        item.pluginType === 'script'
+          ? 'script-plugin-imported'
+          : item.pluginType === 'external-command'
+            ? 'external-plugin-imported'
+            : item.pluginType === 'action-workflow'
+              ? 'workflow-imported'
+              : 'import-success',
+        `已从本地插件中心${existing ? '重新安装' : '安装'}：${result.name}`,
+        result.pluginId,
+      );
+      showMessage(
+        `已${existing ? '重新安装' : '安装'}插件：${result.name}。` +
+          `版本：${result.version}。安装目录：${result.installedDir}。` +
+          (existing
+            ? '已保留 enabled / trusted。'
+            : '新安装 trusted=false；运行器状态未改变。'),
+      );
+    } catch (error) {
+      const errorMessage = `本地插件中心安装失败：${getErrorMessage(
+        error,
+        '未知错误',
+      )}`;
+      setLastPluginInstallError(errorMessage);
+      recordPluginLog('error', 'import-failure', errorMessage, item.id);
+      showMessage(errorMessage);
+    }
+  };
+
+  const handleOpenGalleryPluginDir = async (catalogId: string) => {
+    try {
+      const opened = await openGalleryPluginDir(catalogId);
+      showMessage(
+        opened ? '已打开官方示例插件目录。' : 'Web 端不支持打开示例目录。',
+      );
+    } catch (error) {
+      showMessage(
+        `打开示例目录失败：${getErrorMessage(error, '未知错误')}`,
+      );
+    }
+  };
+
+  const handleOpenPluginDevelopmentDocs = async () => {
+    try {
+      const opened = await openPluginDevelopmentDocs();
+      showMessage(
+        opened ? '已打开插件开发文档。' : 'Web 端不支持打开本地文档。',
+      );
+    } catch (error) {
+      showMessage(
+        `打开插件开发文档失败：${getErrorMessage(error, '未知错误')}`,
+      );
     }
   };
 
@@ -4933,6 +5031,13 @@ export function App() {
           isDesktopApp={isDesktopApp}
           onClose={() => setIsPluginManagerVisible(false)}
           onInstall={handleInstallPlugin}
+          onInstallGallery={(item) => void handleInstallGalleryPlugin(item)}
+          onOpenGalleryPluginDir={(catalogId) =>
+            void handleOpenGalleryPluginDir(catalogId)
+          }
+          onOpenPluginDevelopmentDocs={() =>
+            void handleOpenPluginDevelopmentDocs()
+          }
           onToggle={(pluginId, enabled) =>
             void handleTogglePlugin(pluginId, enabled)
           }

@@ -1,0 +1,51 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "builtin-gallery.meeting-workflow",
+  "name": "会议纪要 Workflow 插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap",
+  "description": "通过 JSON Action Workflow 生成会议纪要结构。",
+  "pluginType": "action-workflow",
+  "capabilities": ["workflow", "mindmap:read", "mindmap:write"],
+  "permissions": ["mindmap:read", "mindmap:write", "node:read", "node:write"],
+  "contributions": {
+    "menus": [
+      {
+        "id": "galleryMeetingWorkflow",
+        "label": "插件中心：生成会议纪要",
+        "location": "plugins",
+        "command": "plugin.runWorkflow",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "galleryMeetingWorkflowContext",
+        "label": "工作流：生成会议纪要",
+        "location": "node-context",
+        "command": "plugin.runWorkflow",
+        "when": "hasSelectedNode"
+      }
+    ]
+  },
+  "workflow": {
+    "name": "会议纪要结构",
+    "description": "在当前节点下创建会议纪要分支。",
+    "actions": [
+      {
+        "type": "addChildNodes",
+        "parentId": "$selectedNode.id",
+        "nodes": [
+          { "text": "会议背景", "remark": "主题：$selectedNode.text" },
+          { "text": "参会人员", "remark": "" },
+          { "text": "关键议题", "remark": "" },
+          { "text": "讨论结论", "remark": "" },
+          { "text": "行动项", "remark": "生成时间：$date.now" }
+        ]
+      },
+      {
+        "type": "showMessage",
+        "level": "info",
+        "message": "已生成会议纪要结构。"
+      }
+    ]
+  }
+}
