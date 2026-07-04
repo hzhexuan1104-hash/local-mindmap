@@ -56,6 +56,10 @@ type PluginManagerPanelProps = {
   externalRunResults?: Record<string, PluginRunInfo>;
   onSetPluginTrusted?: (pluginId: string, trusted: boolean) => void;
   onCopyPluginId: (pluginId: string) => void;
+  onExportPackage?: (pluginId: string) => void;
+  lastPluginExport?: { pluginId: string; path: string } | null;
+  onCopyExportPath?: (path: string) => void;
+  onOpenExportLocation?: (path: string) => void;
   onCopyPath: (relativePath: string, label: string) => void;
   onOpenManifestDir: (pluginId: string) => void;
   onReload: () => void;
@@ -264,6 +268,10 @@ export function PluginManagerPanel({
   externalRunResults = {},
   onSetPluginTrusted,
   onCopyPluginId,
+  onExportPackage,
+  lastPluginExport,
+  onCopyExportPath,
+  onOpenExportLocation,
   onCopyPath,
   onOpenManifestDir,
   onReload,
@@ -813,6 +821,27 @@ export function PluginManagerPanel({
                           </dd>
                         </div>
                       </dl>
+                      {!plugin.builtIn ? (
+                        <div className="plugin-validation-report">
+                          <strong>插件包信息</strong>
+                          <p>格式：.lmplugin（ZIP）</p>
+                          <p>manifest：包根目录 manifest.json</p>
+                          <p>
+                            导出内容：manifest.json
+                            {plugin.entry ? `、${plugin.entry}` : ''}
+                            、README.md（如存在）
+                          </p>
+                          <p>安全状态：trusted 与 registry 元数据不写入插件包</p>
+                          {lastPluginExport?.pluginId === plugin.pluginId ? (
+                            <p>最近导出路径：{lastPluginExport.path}</p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="plugin-validation-report is-warning">
+                          <strong>插件包信息</strong>
+                          <p>内置插件随应用发布，没有独立安装目录，因此不可导出。</p>
+                        </div>
+                      )}
                       {plugin.capabilities.length > 0 ? (
                         <div className="plugin-capability-list">
                           {plugin.capabilities.map((capability) => (
@@ -1071,6 +1100,47 @@ export function PluginManagerPanel({
                       >
                         复制 pluginId
                       </button>
+                      {!plugin.builtIn && isDesktopApp ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() => onExportPackage?.(plugin.pluginId)}
+                        >
+                          导出插件包
+                        </button>
+                      ) : null}
+                      {plugin.builtIn ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          disabled
+                          title="内置插件随应用发布，没有独立安装目录"
+                        >
+                          不可导出插件包
+                        </button>
+                      ) : null}
+                      {lastPluginExport?.pluginId === plugin.pluginId ? (
+                        <>
+                          <button
+                            type="button"
+                            className="secondary-action"
+                            onClick={() =>
+                              onCopyExportPath?.(lastPluginExport.path)
+                            }
+                          >
+                            复制导出路径
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-action"
+                            onClick={() =>
+                              onOpenExportLocation?.(lastPluginExport.path)
+                            }
+                          >
+                            打开所在目录
+                          </button>
+                        </>
+                      ) : null}
                       {!plugin.builtIn ? (
                         <button
                           type="button"
