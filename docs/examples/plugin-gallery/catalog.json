@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "builtin-gallery.text-export",
+      "title": "TXT 导出插件",
+      "description": "示例声明式 TXT 导出插件，不执行代码。",
+      "category": "导入导出",
+      "pluginType": "import-export",
+      "runtime": null,
+      "path": "text-export-plugin/manifest.json",
+      "tags": ["txt", "export", "json"],
+      "recommended": true,
+      "riskLevel": "low"
+    },
+    {
+      "id": "builtin-gallery.meeting-workflow",
+      "title": "会议纪要 Workflow 插件",
+      "description": "通过 JSON Action Workflow 生成会议纪要结构。",
+      "category": "工作流",
+      "pluginType": "action-workflow",
+      "runtime": null,
+      "path": "meeting-workflow-plugin/manifest.json",
+      "tags": ["workflow", "action", "meeting"],
+      "recommended": true,
+      "riskLevel": "low"
+    },
+    {
+      "id": "builtin-gallery.script-batch",
+      "title": "批量脚本插件",
+      "description": "通过受控脚本运行器批量生成子节点。",
+      "category": "脚本",
+      "pluginType": "script",
+      "runtime": null,
+      "path": "script-batch-plugin/manifest.json",
+      "tags": ["script", "batch", "action"],
+      "recommended": false,
+      "riskLevel": "medium"
+    },
+    {
+      "id": "builtin-gallery.python-keyword",
+      "title": "Python 关键词插件",
+      "description": "通过 Python 外部命令生成关键词子节点。",
+      "category": "外部命令",
+      "pluginType": "external-command",
+      "runtime": "python",
+      "path": "python-keyword-plugin/manifest.json",
+      "tags": ["python", "external-command", "keyword"],
+      "recommended": false,
+      "riskLevel": "high"
+    }
+  ]
+}

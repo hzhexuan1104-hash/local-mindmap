@@ -1,7 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { PluginCategory, PluginManifest } from './plugins';
 import { resolveUserDataPath } from '../storage/userDataStorage';
 import type { PluginLogEntry } from '../plugins/pluginLogs';
+import {
+  filterPluginGalleryItems,
+  getPluginGalleryInstallLabel,
+  getPluginGallerySafetyText,
+  getPluginGalleryState,
+  getPluginGalleryStateLabel,
+  loadPluginGalleryCatalog,
+  PLUGIN_GALLERY_CATEGORIES,
+  PLUGIN_GALLERY_TYPES,
+  type PluginGalleryCatalog,
+  type PluginGalleryItem,
+} from '../plugins/pluginGallery';
 import {
   getWorkflowActionTypes,
   workflowHasWriteActions,
@@ -32,6 +44,10 @@ type PluginManagerPanelProps = {
   isDesktopApp: boolean;
   onClose: () => void;
   onInstall: () => void;
+  initialGalleryCatalog?: PluginGalleryCatalog | null;
+  onInstallGallery?: (item: PluginGalleryItem) => void;
+  onOpenGalleryPluginDir?: (catalogId: string) => void;
+  onOpenPluginDevelopmentDocs?: () => void;
   onToggle: (pluginId: string, enabled: boolean) => void;
   onUninstall: (pluginId: string) => void;
   onCopyUserDataDir: () => void;
@@ -244,6 +260,10 @@ export function PluginManagerPanel({
   isDesktopApp,
   onClose,
   onInstall,
+  initialGalleryCatalog,
+  onInstallGallery,
+  onOpenGalleryPluginDir,
+  onOpenPluginDevelopmentDocs,
   onToggle,
   onUninstall,
   onCopyUserDataDir,
@@ -285,6 +305,32 @@ export function PluginManagerPanel({
   const [showApiDocs, setShowApiDocs] = useState(false);
   const [showPluginLogs, setShowPluginLogs] = useState(false);
   const [pythonPathDraft, setPythonPathDraft] = useState(pythonPath);
+  const [galleryCatalog, setGalleryCatalog] =
+    useState<PluginGalleryCatalog | null>(initialGalleryCatalog ?? null);
+  const [galleryLoading, setGalleryLoading] = useState(
+    initialGalleryCatalog === undefined,
+  );
+  const [galleryKeyword, setGalleryKeyword] = useState('');
+  const [galleryCategory, setGalleryCategory] = useState('');
+  const [galleryType, setGalleryType] = useState('');
+
+  const refreshGallery = async () => {
+    setGalleryLoading(true);
+    try {
+      setGalleryCatalog(await loadPluginGalleryCatalog());
+    } finally {
+      setGalleryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (initialGalleryCatalog !== undefined) {
+      setGalleryCatalog(initialGalleryCatalog);
+      setGalleryLoading(false);
+      return;
+    }
+    void refreshGallery();
+  }, [initialGalleryCatalog]);
 
   const visiblePlugins = useMemo(() => {
     const query = keyword.trim().toLowerCase();
@@ -303,6 +349,16 @@ export function PluginManagerPanel({
       return matchesCategory && (!query || searchableText.includes(query));
     });
   }, [category, keyword, plugins]);
+  const visibleGalleryItems = useMemo(
+    () =>
+      filterPluginGalleryItems(
+        galleryCatalog?.items ?? [],
+        galleryKeyword,
+        galleryCategory,
+        galleryType,
+      ),
+    [galleryCatalog, galleryCategory, galleryKeyword, galleryType],
+  );
 
   return (
     <div className="plugin-manager-backdrop" role="presentation">
@@ -575,6 +631,210 @@ export function PluginManagerPanel({
               ) : null}
             </div>
           </details>
+
+          <section className="plugin-manager-section plugin-gallery-section">
+            <div className="plugin-section-heading">
+              <div>
+                <h3>本地插件中心</h3>
+                <p>
+                  官方示例均随应用内置；此区域不联网、不下载远程插件，也不会在安装时执行插件代码。
+                </p>
+              </div>
+              <div className="plugin-manager-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => void refreshGallery()}
+                >
+                  刷新示例库
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={onOpenPluginDevelopmentDocs}
+                  disabled={!onOpenPluginDevelopmentDocs}
+                >
+                  打开插件开发文档
+                </button>
+              </div>
+            </div>
+
+            <div className="plugin-manager-filters plugin-gallery-filters">
+              <input
+                type="search"
+                aria-label="搜索本地插件中心"
+                value={galleryKeyword}
+                placeholder="搜索标题、描述、标签、pluginId"
+                onChange={(event) => setGalleryKeyword(event.target.value)}
+              />
+              <select
+                aria-label="本地插件中心分类"
+                value={galleryCategory}
+                onChange={(event) => setGalleryCategory(event.target.value)}
+              >
+                <option value="">全部</option>
+                {PLUGIN_GALLERY_CATEGORIES.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="本地插件中心类型"
+                value={galleryType}
+                onChange={(event) => setGalleryType(event.target.value)}
+              >
+                <option value="">全部类型</option>
+                {PLUGIN_GALLERY_TYPES.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {galleryLoading ? (
+              <p className="empty-note">正在读取本地示例库…</p>
+            ) : null}
+            {galleryCatalog?.error ? (
+              <div className="plugin-install-error" role="alert">
+                <strong>本地插件中心不可用</strong>
+                <p>{galleryCatalog.error}</p>
+                <p>已安装插件列表不受影响。</p>
+              </div>
+            ) : null}
+            {!galleryLoading &&
+            !galleryCatalog?.error &&
+            visibleGalleryItems.length === 0 ? (
+              <p className="empty-note">没有匹配的官方示例插件</p>
+            ) : null}
+
+            <div className="plugin-gallery-grid">
+              {visibleGalleryItems.map((item) => {
+                const state = getPluginGalleryState(item, plugins);
+                const manifest = item.manifest;
+                const summary = manifest
+                  ? contributionSummary(manifest)
+                  : null;
+                return (
+                  <article
+                    className={`plugin-gallery-card gallery-risk-${item.riskLevel}`}
+                    key={item.id}
+                  >
+                    <div className="plugin-item-title">
+                      <strong>{item.title}</strong>
+                      {item.recommended ? <span>推荐</span> : null}
+                      <span>风险：{item.riskLevel}</span>
+                      <span
+                        className={
+                          state.state === 'installed'
+                            ? 'status-on'
+                            : state.state === 'not-installed'
+                              ? 'status-off'
+                              : 'status-invalid'
+                        }
+                      >
+                        {getPluginGalleryStateLabel(state)}
+                      </span>
+                      {state.installed && !state.enabled ? (
+                        <span className="status-off">已禁用</span>
+                      ) : null}
+                      {state.trusted ? (
+                        <span className="status-on">已信任</span>
+                      ) : null}
+                    </div>
+                    <p>{item.description}</p>
+                    <dl className="plugin-meta">
+                      <div>
+                        <dt>pluginId</dt>
+                        <dd>{item.id}</dd>
+                      </div>
+                      <div>
+                        <dt>pluginType</dt>
+                        <dd>{item.pluginType}</dd>
+                      </div>
+                      <div>
+                        <dt>runtime</dt>
+                        <dd>{item.runtime ?? '无'}</dd>
+                      </div>
+                      <div>
+                        <dt>版本</dt>
+                        <dd>{manifest?.version ?? '不可用'}</dd>
+                      </div>
+                      <div>
+                        <dt>作者</dt>
+                        <dd>{manifest?.author ?? '未知'}</dd>
+                      </div>
+                      <div>
+                        <dt>分类</dt>
+                        <dd>{item.category}</dd>
+                      </div>
+                    </dl>
+                    <div className="plugin-capability-list">
+                      {item.tags.map((tag) => (
+                        <span key={tag}>{tag}</span>
+                      ))}
+                    </div>
+                    <p className="plugin-gallery-safety">
+                      {getPluginGallerySafetyText(item.pluginType)}
+                    </p>
+                    {!item.installable ? (
+                      <div className="plugin-install-error" role="alert">
+                        <strong>不可安装</strong>
+                        <p>{item.error ?? '内置资源不可用。'}</p>
+                      </div>
+                    ) : null}
+                    <div className="plugin-item-actions">
+                      <button
+                        type="button"
+                        onClick={() => onInstallGallery?.(item)}
+                        disabled={!item.installable || !onInstallGallery}
+                      >
+                        {getPluginGalleryInstallLabel(state)}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        onClick={() => onOpenGalleryPluginDir?.(item.id)}
+                        disabled={!item.installable || !onOpenGalleryPluginDir}
+                      >
+                        打开示例目录
+                      </button>
+                    </div>
+                    <details className="plugin-gallery-details">
+                      <summary>查看详情</summary>
+                      <dl className="plugin-paths">
+                        <div><dt>描述</dt><dd>{manifest?.description ?? item.description}</dd></div>
+                        <div><dt>permissions</dt><dd>{manifest?.permissions?.join(', ') || '无'}</dd></div>
+                        <div><dt>capabilities</dt><dd>{manifest?.capabilities.join(', ') || '无'}</dd></div>
+                        <div><dt>风险等级</dt><dd>{item.riskLevel}</dd></div>
+                        <div><dt>需要脚本运行器</dt><dd>{item.pluginType === 'script' ? '是' : '否'}</dd></div>
+                        <div><dt>需要外部命令运行器</dt><dd>{item.pluginType === 'external-command' ? '是' : '否'}</dd></div>
+                        <div><dt>安装状态</dt><dd>{getPluginGalleryStateLabel(state)}</dd></div>
+                        {state.installed ? (
+                          <div>
+                            <dt>安装目录</dt>
+                            <dd>{state.installed.installedDirPath ?? `plugins/installed/${item.id}`}</dd>
+                          </div>
+                        ) : null}
+                      </dl>
+                      {summary ? (
+                        <div className="plugin-contribution-summary">
+                          {Object.entries(summary).map(([key, count]) => (
+                            <span key={key}>{key}: {count}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </details>
+                    <details className="plugin-gallery-details">
+                      <summary>查看 README</summary>
+                      <pre>{item.readme ?? 'README.md 不可用。'}</pre>
+                    </details>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
 
           <section className="plugin-manager-section">
             <div className="plugin-section-heading">

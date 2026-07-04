@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { PluginManagerPanel } from '../PluginManagerPanel';
 import type { PluginManifest } from '../plugins';
+import { normalizePluginGalleryCatalog } from '../../plugins/pluginGallery';
 
 const noop = () => undefined;
 const developerProps = {
@@ -345,5 +346,101 @@ describe('PluginManagerPanel installation errors', () => {
     expect(html).toContain('通过 Web Worker 执行本地脚本插件');
     expect(html).toContain('不支持 Shell、DLL、文件系统或网络访问');
     expect(html).toContain('不支持在 Web 端打开本地目录');
+  });
+
+  it('renders the local gallery with install state, security, details and docs actions', () => {
+    const gallery = normalizePluginGalleryCatalog({
+      version: 1,
+      items: [
+        {
+          id: 'builtin-gallery.script-batch',
+          title: '批量脚本插件',
+          description: '批量生成子节点',
+          category: '脚本',
+          pluginType: 'script',
+          runtime: null,
+          path: 'script-batch-plugin/manifest.json',
+          tags: ['script', 'batch'],
+          recommended: false,
+          riskLevel: 'medium',
+          installable: true,
+          readme: '# 批量脚本插件',
+          manifest: {
+            manifestVersion: 1,
+            pluginId: 'builtin-gallery.script-batch',
+            name: '批量脚本插件',
+            version: '1.0.0',
+            author: 'Local Mindmap',
+            description: '批量生成子节点',
+            pluginType: 'script',
+            entry: 'main.js',
+            capabilities: ['script', 'node:write'],
+            permissions: ['script', 'node:write'],
+            contributions: {
+              menus: [
+                {
+                  id: 'batch',
+                  label: '批量子节点',
+                  location: 'plugins',
+                  command: 'plugin.runScript',
+                  when: 'hasSelectedNode',
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+    const installed = {
+      ...gallery.items[0].manifest,
+      enabled: false,
+      trusted: true,
+      source: 'external',
+      installedDirPath:
+        'plugins/installed/builtin-gallery.script-batch',
+    } as PluginManifest;
+
+    const html = renderToStaticMarkup(
+      <PluginManagerPanel
+        {...developerProps}
+        plugins={[installed]}
+        initialGalleryCatalog={gallery}
+        lastInstallError=""
+        userDataDir="C:/data"
+        isDesktopApp
+        onClose={noop}
+        onInstall={noop}
+        onInstallGallery={noop}
+        onOpenGalleryPluginDir={noop}
+        onOpenPluginDevelopmentDocs={noop}
+        onToggle={noop}
+        onUninstall={noop}
+        onCopyUserDataDir={noop}
+        onOpenUserDataDir={noop}
+        onOpenPluginDir={noop}
+        onCopyPluginId={noop}
+        onCopyPath={noop}
+        onOpenManifestDir={noop}
+        onReload={noop}
+        onRepairRegistry={noop}
+        onCleanRecord={noop}
+      />,
+    );
+
+    expect(html).toContain('本地插件中心');
+    expect(html).toContain('搜索标题、描述、标签、pluginId');
+    expect(html).toContain('批量脚本插件');
+    expect(html).toContain('已安装');
+    expect(html).toContain('已禁用');
+    expect(html).toContain('已信任');
+    expect(html).toContain('重新安装');
+    expect(html).toContain('实验性脚本插件');
+    expect(html).toContain('打开示例目录');
+    expect(html).toContain('查看 README');
+    expect(html).toContain('打开插件开发文档');
+    expect(html).toContain('需要脚本运行器');
+    expect(html).toContain(
+      'plugins/installed/builtin-gallery.script-batch',
+    );
   });
 });

@@ -823,3 +823,79 @@ actions 仍由宿主执行与 v1.8/v1.9 相同的整批 schema、权限和节点
 
 v1.9.1 不改变 v1.9 的 stdin/stdout 协议，也不改变 Python、script、
 action-workflow 和 v1.7 声明式插件的运行方式。
+
+## v1.10 本地插件中心
+
+### 本地内置、完全离线
+
+插件管理器中的“本地插件中心”读取仓库内置的
+`docs/examples/plugin-gallery/catalog.json`。catalog 和示例插件文件会随应用
+编译，不请求网络、不连接远程市场，也不下载插件。catalog 损坏或单个资源缺失时，
+插件中心会显示错误或“不可安装”，已安装插件列表和运行能力不受影响。
+
+当前官方示例包括：
+
+- `builtin-gallery.text-export`：声明式 TXT 导出插件。
+- `builtin-gallery.meeting-workflow`：会议纪要 JSON Action Workflow。
+- `builtin-gallery.script-batch`：返回 `addChildNodes` 的受控脚本插件。
+- `builtin-gallery.python-keyword`：使用 stdin/stdout actions 协议的 Python 插件。
+
+### 从插件中心安装
+
+打开“插件管理”后，在“本地插件中心”可按标题、描述、标签或 pluginId 搜索，并按
+分类和 `pluginType` 筛选。卡片展示版本、作者、runtime、权限、capabilities、
+contributions 摘要、风险等级、README、安装/启用/信任状态。
+
+点击“安装”“更新”或“重新安装”后，宿主仍走与本地 manifest / `.lmplugin`
+相同的 manifest 校验、entry 校验、staging、备份、registry 提交和失败回滚流程。
+安装完成后文件位于 `plugins/installed/<pluginId>/`。新安装的 `trusted=false`；
+覆盖安装保留 registry 中原有的 `enabled` 和 `trusted`。
+
+安装目录中的 `manifest.json` 只保存插件发布清单，不写入 `trusted`、`enabled`、
+`installedAt` 等 registry 元数据。插件中心的标题、标签、推荐状态和风险等级也不会
+写入 manifest。
+
+### 安装不等于信任
+
+安装只表示插件文件已通过结构与路径校验并复制到本地目录。`trusted` 是独立的运行期
+授权状态，保存在 `plugins/plugin-registry.json`。因此安装 script、
+action-workflow 或 external-command 后，首次执行写入动作仍会经过权限确认；
+安装前的风险提示也不会把插件标记为 trusted。
+
+script 插件安装前显示实验性脚本风险说明。安装不会启用脚本运行器，脚本运行器仍默认
+关闭。external-command 安装前显示高风险本地进程说明，安装不会启用 external
+runner。external runner 默认关闭，因为外部程序虽只能通过宿主校验的 actions 修改
+导图，但其进程在操作系统层面仍可能访问本机资源。
+
+action-workflow 和 import-export 卡片分别显示“声明式工作流，不执行代码”和
+“声明式插件，不执行代码”。
+
+### 打包为 `.lmplugin`
+
+插件安装后可在详情中选择“导出插件包”。导出包根目录包含 `manifest.json`、manifest
+声明的 entry（如有）和 `README.md`（如有），不包含 trusted、registry、日志、运行器
+设置或其他用户隐私配置。导出的 `.lmplugin` 可通过“导入本地插件”重新安装。
+
+### 把插件加入本地 catalog
+
+1. 在 `docs/examples/plugin-gallery/` 新建插件目录。
+2. 添加 `manifest.json`、`README.md`，script/external-command 还需添加 entry。
+3. 在 `catalog.json` 的 `items` 中新增条目。
+4. 确保 catalog `id` 与 manifest `pluginId` 一致，`pluginType` / `runtime` 一致。
+5. 将新增文件加入 Rust 端 `PLUGIN_GALLERY_ASSETS` 内置资源映射。
+6. 运行 `npm run build`、`npm run test` 和
+   `cargo test --manifest-path ./src-tauri/Cargo.toml`。
+
+catalog 字段：
+
+- `version`：catalog schema 版本，当前为 `1`。
+- `id`：gallery ID，必须与 manifest `pluginId` 一致。
+- `title`、`description`：列表展示内容。
+- `category`：分类筛选值。
+- `pluginType`、`runtime`：插件类型及可选运行时。
+- `path`：相对 gallery 根目录的 manifest 路径；禁止绝对路径、`..`、URL、ADS。
+- `tags`：搜索标签。
+- `recommended`：推荐标记。
+- `riskLevel`：`low`、`medium` 或 `high`。
+
+示例库结构与维护细则见 `docs/examples/plugin-gallery/README.md`。

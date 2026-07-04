@@ -10,6 +10,10 @@ export const USER_DATA_COMMANDS = {
   readUserText: 'read_user_text',
   listUserFiles: 'list_user_files',
   installPluginToUserDir: 'install_plugin_to_user_dir',
+  getPluginGalleryCatalog: 'get_plugin_gallery_catalog',
+  installGalleryPlugin: 'install_gallery_plugin',
+  openGalleryPluginDir: 'open_gallery_plugin_dir',
+  openPluginDevelopmentDocs: 'open_plugin_development_docs',
   installPluginPackage: 'install_plugin_package',
   openPluginImportWithDialog: 'open_plugin_import_with_dialog',
   exportPluginPackage: 'export_plugin_package',
@@ -76,6 +80,36 @@ export type OpenedPluginImport = {
   fileName: string;
   kind: 'manifest' | 'lmplugin';
   manifest: unknown;
+};
+
+export type PluginGalleryCatalogItemData = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  pluginType: string;
+  runtime: string | null;
+  path: string;
+  tags: string[];
+  recommended: boolean;
+  riskLevel: string;
+  manifest: unknown | null;
+  readme?: string | null;
+  installable: boolean;
+  error?: string | null;
+};
+
+export type PluginGalleryCatalogData = {
+  version: number;
+  items: PluginGalleryCatalogItemData[];
+  error?: string | null;
+};
+
+export type PluginGalleryInstallResult = {
+  pluginId: string;
+  name: string;
+  version: string;
+  installedDir: string;
 };
 
 const LEGACY_MIGRATION_FLAG_PATH = 'config/migration-v1.6.json';
@@ -474,6 +508,52 @@ export async function installPluginToUserDir(
           : String(error);
     throw new Error(`插件写入用户目录失败：${detail}`);
   }
+}
+
+export async function getPluginGalleryCatalog(): Promise<PluginGalleryCatalogData> {
+  if (!isDesktopRuntime()) {
+    return {
+      version: 0,
+      items: [],
+      error: '本地插件中心仅在桌面端可用。',
+    };
+  }
+  return invokeUserDataCommand<PluginGalleryCatalogData>(
+    USER_DATA_COMMANDS.getPluginGalleryCatalog,
+  );
+}
+
+export async function installGalleryPlugin(
+  catalogId: string,
+  overwrite = false,
+) {
+  if (!isDesktopRuntime()) {
+    throw new Error('本地插件中心仅在桌面端可用。');
+  }
+  return invokeUserDataCommand<PluginGalleryInstallResult>(
+    USER_DATA_COMMANDS.installGalleryPlugin,
+    { catalogId, overwrite, installedAt: new Date().toISOString() },
+  );
+}
+
+export async function openGalleryPluginDir(catalogId: string) {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openGalleryPluginDir, {
+    catalogId,
+  });
+  return true;
+}
+
+export async function openPluginDevelopmentDocs() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+  await invokeUserDataCommand<void>(
+    USER_DATA_COMMANDS.openPluginDevelopmentDocs,
+  );
+  return true;
 }
 
 export async function openPluginImportWithDialog() {

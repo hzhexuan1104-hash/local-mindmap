@@ -64,6 +64,52 @@ const SAMPLE_PYTHON_PLUGIN_MAIN: &str =
     include_str!("../../docs/examples/sample-python-plugin/main.py");
 const SAMPLE_PYTHON_PLUGIN_README: &str =
     include_str!("../../docs/examples/sample-python-plugin/README.md");
+const PLUGIN_GALLERY_CATALOG: &str =
+    include_str!("../../docs/examples/plugin-gallery/catalog.json");
+const PLUGIN_DEVELOPMENT_DOC: &str = include_str!("../../docs/plugin-development.md");
+const PLUGIN_GALLERY_CACHE_DIR: &str = "plugins/gallery";
+const PLUGIN_GALLERY_ASSETS: &[(&str, &str)] = &[
+    (
+        "text-export-plugin/manifest.json",
+        include_str!("../../docs/examples/plugin-gallery/text-export-plugin/manifest.json"),
+    ),
+    (
+        "text-export-plugin/README.md",
+        include_str!("../../docs/examples/plugin-gallery/text-export-plugin/README.md"),
+    ),
+    (
+        "meeting-workflow-plugin/manifest.json",
+        include_str!("../../docs/examples/plugin-gallery/meeting-workflow-plugin/manifest.json"),
+    ),
+    (
+        "meeting-workflow-plugin/README.md",
+        include_str!("../../docs/examples/plugin-gallery/meeting-workflow-plugin/README.md"),
+    ),
+    (
+        "script-batch-plugin/manifest.json",
+        include_str!("../../docs/examples/plugin-gallery/script-batch-plugin/manifest.json"),
+    ),
+    (
+        "script-batch-plugin/main.js",
+        include_str!("../../docs/examples/plugin-gallery/script-batch-plugin/main.js"),
+    ),
+    (
+        "script-batch-plugin/README.md",
+        include_str!("../../docs/examples/plugin-gallery/script-batch-plugin/README.md"),
+    ),
+    (
+        "python-keyword-plugin/manifest.json",
+        include_str!("../../docs/examples/plugin-gallery/python-keyword-plugin/manifest.json"),
+    ),
+    (
+        "python-keyword-plugin/main.py",
+        include_str!("../../docs/examples/plugin-gallery/python-keyword-plugin/main.py"),
+    ),
+    (
+        "python-keyword-plugin/README.md",
+        include_str!("../../docs/examples/plugin-gallery/python-keyword-plugin/README.md"),
+    ),
+];
 const EXTERNAL_STDOUT_LIMIT: usize = 1024 * 1024;
 const EXTERNAL_STDERR_LIMIT: usize = 64 * 1024;
 const EXTERNAL_DEFAULT_TIMEOUT_MS: u64 = 5000;
@@ -81,6 +127,7 @@ const USER_DATA_DIRS: &[&str] = &[
     "plugins",
     USER_PLUGIN_INSTALLED_DIR,
     USER_PLUGIN_DEV_DIR,
+    PLUGIN_GALLERY_CACHE_DIR,
     CONFIG_DIR_NAME,
     "backups",
 ];
@@ -964,6 +1011,220 @@ fn validate_builtin_handlers(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginGalleryCatalogItem {
+    id: String,
+    title: String,
+    description: String,
+    category: String,
+    plugin_type: String,
+    runtime: Option<String>,
+    path: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    recommended: bool,
+    risk_level: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginGalleryCatalog {
+    version: u64,
+    items: Vec<PluginGalleryCatalogItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginGalleryItem {
+    #[serde(flatten)]
+    catalog: PluginGalleryCatalogItem,
+    manifest: Option<Value>,
+    readme: Option<String>,
+    installable: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginGalleryCatalogResult {
+    version: u64,
+    items: Vec<PluginGalleryItem>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginGalleryInstallResult {
+    plugin_id: String,
+    name: String,
+    version: String,
+    installed_dir: String,
+}
+
+fn validate_gallery_catalog_path(path: &str) -> Result<String, String> {
+    if path.trim().is_empty() {
+        return Err("catalog item path 不能为空。".to_string());
+    }
+    if path.contains('\\') {
+        return Err("catalog item path 必须使用 `/` 分隔符。".to_string());
+    }
+    let lower = path.to_ascii_lowercase();
+    if path.starts_with('/')
+        || path.starts_with("//")
+        || path.as_bytes().get(1) == Some(&b':')
+        || lower.contains("://")
+        || lower.starts_with("file:")
+        || lower.starts_with("http:")
+        || lower.starts_with("https:")
+    {
+        return Err("catalog item path 必须是本地相对路径，不能是绝对路径或 URL。".to_string());
+    }
+    if path.split('/').any(|segment| {
+        segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains(':')
+            || segment.ends_with('.')
+            || segment.ends_with(' ')
+    }) || Path::new(path)
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("catalog item path 不允许包含 `..`、`.`、ADS 或空路径片段。".to_string());
+    }
+    if Path::new(path).file_name().and_then(|name| name.to_str()) != Some(MANIFEST_FILE_NAME) {
+        return Err("catalog item path 必须指向 manifest.json。".to_string());
+    }
+    Ok(path.to_string())
+}
+
+fn bundled_gallery_asset(path: &str) -> Option<&'static str> {
+    PLUGIN_GALLERY_ASSETS
+        .iter()
+        .find_map(|(asset_path, content)| (*asset_path == path).then_some(*content))
+}
+
+fn gallery_plugin_asset_paths(manifest_path: &str) -> Result<Vec<&'static str>, String> {
+    let directory = Path::new(manifest_path)
+        .parent()
+        .and_then(Path::to_str)
+        .ok_or_else(|| "catalog item path 缺少插件目录。".to_string())?;
+    let prefix = format!("{directory}/");
+    Ok(PLUGIN_GALLERY_ASSETS
+        .iter()
+        .filter_map(|(path, _)| path.starts_with(&prefix).then_some(*path))
+        .collect())
+}
+
+fn plugin_gallery_item(catalog: PluginGalleryCatalogItem) -> PluginGalleryItem {
+    let result = (|| -> Result<(Value, Option<String>), String> {
+        let manifest_path = validate_gallery_catalog_path(&catalog.path)?;
+        let manifest_text = bundled_gallery_asset(&manifest_path)
+            .ok_or_else(|| format!("catalog 指向的文件不存在：{manifest_path}"))?;
+        let manifest: Value = parse_json_without_bom(manifest_text)
+            .map_err(|error| format!("gallery manifest JSON 无效：{error}"))?;
+        validate_declarative_manifest(&catalog.id, &manifest)
+            .map_err(|error| format!("gallery manifest 校验失败：{error}"))?;
+        if manifest.get("pluginType").and_then(Value::as_str) != Some(catalog.plugin_type.as_str())
+        {
+            return Err("catalog pluginType 与 manifest 不一致。".to_string());
+        }
+        if manifest.get("runtime").and_then(Value::as_str) != catalog.runtime.as_deref() {
+            return Err("catalog runtime 与 manifest 不一致。".to_string());
+        }
+        if !["low", "medium", "high"].contains(&catalog.risk_level.as_str()) {
+            return Err("catalog riskLevel 仅支持 low、medium 或 high。".to_string());
+        }
+
+        let directory = Path::new(&manifest_path)
+            .parent()
+            .and_then(Path::to_str)
+            .ok_or_else(|| "catalog item path 缺少插件目录。".to_string())?;
+        let readme_path = format!("{directory}/README.md");
+        let readme = bundled_gallery_asset(&readme_path).map(str::to_string);
+        if readme.is_none() {
+            return Err(format!("gallery 示例缺少 README.md：{readme_path}"));
+        }
+        if let Some(entry) = manifest.get("entry").and_then(Value::as_str) {
+            let entry = validate_safe_entry_path(entry)?;
+            let entry_path = format!("{directory}/{entry}");
+            if bundled_gallery_asset(&entry_path).is_none() {
+                return Err(format!("gallery 插件入口文件不存在：{entry_path}"));
+            }
+        }
+        Ok((manifest, readme))
+    })();
+
+    match result {
+        Ok((manifest, readme)) => PluginGalleryItem {
+            catalog,
+            manifest: Some(manifest),
+            readme,
+            installable: true,
+            error: None,
+        },
+        Err(error) => PluginGalleryItem {
+            catalog,
+            manifest: None,
+            readme: None,
+            installable: false,
+            error: Some(error),
+        },
+    }
+}
+
+fn load_plugin_gallery_catalog_from_text(text: &str) -> PluginGalleryCatalogResult {
+    let catalog = match parse_json_without_bom::<PluginGalleryCatalog>(text) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return PluginGalleryCatalogResult {
+                version: 0,
+                items: Vec::new(),
+                error: Some(format!("本地插件中心 catalog.json 解析失败：{error}")),
+            }
+        }
+    };
+    if catalog.version != 1 {
+        return PluginGalleryCatalogResult {
+            version: catalog.version,
+            items: Vec::new(),
+            error: Some(format!(
+                "本地插件中心 catalog 版本不受支持：{}。",
+                catalog.version
+            )),
+        };
+    }
+    PluginGalleryCatalogResult {
+        version: catalog.version,
+        items: catalog.items.into_iter().map(plugin_gallery_item).collect(),
+        error: None,
+    }
+}
+
+fn manifest_without_registry_metadata(manifest: &Value) -> Value {
+    let mut stored = manifest.clone();
+    if let Some(object) = stored.as_object_mut() {
+        for field in [
+            "enabled",
+            "trusted",
+            "installedAt",
+            "updatedAt",
+            "builtIn",
+            "source",
+            "manifestValid",
+            "manifestError",
+            "validationErrors",
+            "validationWarnings",
+            "manifestPath",
+            "installedDirPath",
+        ] {
+            object.remove(field);
+        }
+    }
+    stored
+}
+
 fn plugin_registry_contains(registry: &Value, plugin_id: &str) -> Result<bool, String> {
     let plugins = registry
         .as_array()
@@ -1185,6 +1446,7 @@ where
             .map_err(|error| format!("插件 registry 读取失败：{error}"))?;
     let installed_manifest =
         manifest_with_install_lifecycle(manifest, &original_registry, plugin_id, overwrite);
+    let stored_manifest = manifest_without_registry_metadata(&installed_manifest);
     let registry_has_plugin = plugin_registry_contains(&original_registry, plugin_id)?;
     let manifest_exists = target_manifest.is_file();
 
@@ -1203,7 +1465,7 @@ where
         .map_err(|error| format!("插件安装备份目录清理失败：{error}"))?;
     fs::create_dir_all(&staging_dir).map_err(|error| format!("插件安装目录创建失败：{error}"))?;
 
-    if let Err(error) = write_json(root, &relative_staging_manifest, &installed_manifest) {
+    if let Err(error) = write_json(root, &relative_staging_manifest, &stored_manifest) {
         let cleanup_error = remove_path_if_exists(&staging_dir).err();
         return Err(format!(
             "插件 manifest 写入失败：{error}{}",
@@ -1221,7 +1483,7 @@ where
                 .unwrap_or_default()
         ));
     }
-    if let Some(entry) = installed_manifest.get("entry").and_then(Value::as_str) {
+    if let Some(entry) = stored_manifest.get("entry").and_then(Value::as_str) {
         let entry = validate_safe_entry_path(entry)?;
         if !staging_dir.join(Path::new(&entry)).is_file() {
             let cleanup_error = remove_path_if_exists(&staging_dir).err();
@@ -1428,6 +1690,207 @@ fn install_plugin_to_user_dir(
         assets.as_deref().unwrap_or(&[]),
         write_user_json_at,
     )
+}
+
+fn install_gallery_plugin_at(
+    root: &Path,
+    catalog_text: &str,
+    catalog_id: &str,
+    overwrite: bool,
+    installed_at: Option<&str>,
+) -> Result<PluginGalleryInstallResult, String> {
+    let catalog = load_plugin_gallery_catalog_from_text(catalog_text);
+    if let Some(error) = catalog.error {
+        return Err(error);
+    }
+    let item = catalog
+        .items
+        .into_iter()
+        .find(|item| item.catalog.id == catalog_id)
+        .ok_or_else(|| format!("本地插件中心不存在条目：{catalog_id}"))?;
+    if !item.installable {
+        return Err(item
+            .error
+            .unwrap_or_else(|| "该 gallery 插件当前不可安装。".to_string()));
+    }
+    let mut manifest = item
+        .manifest
+        .ok_or_else(|| "gallery 插件 manifest 不可用。".to_string())?;
+    if let (Some(object), Some(installed_at)) = (manifest.as_object_mut(), installed_at) {
+        object.insert(
+            "installedAt".to_string(),
+            Value::String(installed_at.to_string()),
+        );
+    }
+    let manifest_path = item.catalog.path;
+    let plugin_directory = Path::new(&manifest_path)
+        .parent()
+        .and_then(Path::to_str)
+        .ok_or_else(|| "gallery 插件目录无效。".to_string())?
+        .to_string();
+    let plugin_assets = gallery_plugin_asset_paths(&manifest_path)?;
+    let plugin_id = item.catalog.id;
+
+    install_plugin_to_user_dir_at_with_stager(
+        root,
+        &plugin_id,
+        &manifest,
+        overwrite,
+        |staging_dir| {
+            for asset_path in plugin_assets {
+                if asset_path == manifest_path {
+                    continue;
+                }
+                let relative_path = asset_path
+                    .strip_prefix(&format!("{plugin_directory}/"))
+                    .ok_or_else(|| "gallery 资源路径越界。".to_string())?;
+                let normalized = validate_safe_entry_path(relative_path)?;
+                let target = staging_dir.join(&normalized);
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|error| format!("gallery 资源目录创建失败：{error}"))?;
+                }
+                let content = bundled_gallery_asset(asset_path)
+                    .ok_or_else(|| format!("gallery 资源不存在：{asset_path}"))?;
+                fs::write(&target, content)
+                    .map_err(|error| format!("gallery 资源写入失败：{error}"))?;
+            }
+            Ok(())
+        },
+        write_user_json_at,
+    )?;
+
+    Ok(PluginGalleryInstallResult {
+        plugin_id: plugin_id.clone(),
+        name: manifest
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(&plugin_id)
+            .to_string(),
+        version: manifest
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("未知")
+            .to_string(),
+        installed_dir: format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id}"),
+    })
+}
+
+fn materialize_gallery_plugin_at(
+    root: &Path,
+    catalog_text: &str,
+    catalog_id: &str,
+) -> Result<PathBuf, String> {
+    let catalog = load_plugin_gallery_catalog_from_text(catalog_text);
+    if let Some(error) = catalog.error {
+        return Err(error);
+    }
+    let item = catalog
+        .items
+        .into_iter()
+        .find(|item| item.catalog.id == catalog_id)
+        .ok_or_else(|| format!("本地插件中心不存在条目：{catalog_id}"))?;
+    if !item.installable {
+        return Err(item
+            .error
+            .unwrap_or_else(|| "该 gallery 插件资源不可用。".to_string()));
+    }
+    let asset_paths = gallery_plugin_asset_paths(&item.catalog.path)?;
+    let source_directory = Path::new(&item.catalog.path)
+        .parent()
+        .and_then(Path::to_str)
+        .ok_or_else(|| "gallery 插件目录无效。".to_string())?
+        .to_string();
+    let relative_target = format!("{PLUGIN_GALLERY_CACHE_DIR}/{catalog_id}");
+    let target = resolve_user_relative_path(root, &relative_target)?;
+    fs::create_dir_all(&target).map_err(|error| format!("gallery 示例目录创建失败：{error}"))?;
+    for asset_path in asset_paths {
+        let relative_path = asset_path
+            .strip_prefix(&format!("{source_directory}/"))
+            .ok_or_else(|| "gallery 资源路径越界。".to_string())?;
+        let normalized = validate_safe_entry_path(relative_path)?;
+        let output = target.join(normalized);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("gallery 示例资源目录创建失败：{error}"))?;
+        }
+        let content = bundled_gallery_asset(asset_path)
+            .ok_or_else(|| format!("gallery 资源不存在：{asset_path}"))?;
+        fs::write(output, content).map_err(|error| format!("gallery 示例资源写入失败：{error}"))?;
+    }
+    Ok(target)
+}
+
+fn open_directory_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("打开目录失败：{error}"))?;
+    Ok(())
+}
+
+fn open_document_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("notepad");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("打开文档失败：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_plugin_gallery_catalog() -> PluginGalleryCatalogResult {
+    load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG)
+}
+
+#[tauri::command]
+fn install_gallery_plugin(
+    app: AppHandle,
+    catalog_id: String,
+    overwrite: bool,
+    installed_at: String,
+) -> Result<PluginGalleryInstallResult, String> {
+    let root = ensure_user_data_root(&app)?;
+    install_gallery_plugin_at(
+        &root,
+        PLUGIN_GALLERY_CATALOG,
+        &catalog_id,
+        overwrite,
+        Some(&installed_at),
+    )
+}
+
+#[tauri::command]
+fn open_gallery_plugin_dir(app: AppHandle, catalog_id: String) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let directory = materialize_gallery_plugin_at(&root, PLUGIN_GALLERY_CATALOG, &catalog_id)?;
+    open_directory_path(&directory)
+}
+
+#[tauri::command]
+fn open_plugin_development_docs(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let relative_path = format!("{PLUGIN_GALLERY_CACHE_DIR}/plugin-development.md");
+    let path = resolve_user_relative_path(&root, &relative_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("插件开发文档目录创建失败：{error}"))?;
+    }
+    fs::write(&path, PLUGIN_DEVELOPMENT_DOC)
+        .map_err(|error| format!("插件开发文档写入失败：{error}"))?;
+    open_document_path(&path)
 }
 
 #[tauri::command]
@@ -3243,6 +3706,10 @@ fn main() {
             read_user_text,
             list_user_files,
             install_plugin_to_user_dir,
+            get_plugin_gallery_catalog,
+            install_gallery_plugin,
+            open_gallery_plugin_dir,
+            open_plugin_development_docs,
             uninstall_plugin_from_user_dir,
             open_user_data_dir,
             open_plugin_dir,
@@ -4434,7 +4901,8 @@ fn main() {
             .expect("updated registry should be readable");
         assert_eq!(manifest["version"], "1.0.1");
         assert_eq!(manifest["name"], "Updated plugin");
-        assert_eq!(manifest["enabled"], true);
+        assert!(manifest.get("enabled").is_none());
+        assert!(manifest.get("trusted").is_none());
         assert_eq!(registry[0]["pluginId"], plugin_id);
         assert!(registry[0].get("version").is_none());
         assert_eq!(registry[0]["enabled"], true);
@@ -5015,8 +5483,8 @@ fn main() {
         )
         .expect("installed manifest should parse");
         assert_eq!(installed_manifest["version"], "2.0.0");
-        assert_eq!(installed_manifest["enabled"], false);
-        assert_eq!(installed_manifest["trusted"], true);
+        assert!(installed_manifest.get("enabled").is_none());
+        assert!(installed_manifest.get("trusted").is_none());
 
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
@@ -5069,6 +5537,180 @@ fn main() {
 
         fs::remove_dir_all(root).expect("test directory should be removable");
         fs::remove_dir_all(second_root).expect("second test directory should be removable");
+    }
+
+    #[test]
+    fn bundled_plugin_gallery_catalog_is_valid_and_installable() {
+        let catalog = load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG);
+        assert_eq!(catalog.version, 1);
+        assert!(catalog.error.is_none());
+        assert_eq!(catalog.items.len(), 4);
+        assert!(catalog.items.iter().all(|item| item.installable));
+        assert_eq!(
+            catalog
+                .items
+                .iter()
+                .map(|item| item.catalog.plugin_type.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "import-export",
+                "action-workflow",
+                "script",
+                "external-command"
+            ])
+        );
+    }
+
+    #[test]
+    fn plugin_gallery_rejects_unsafe_and_missing_catalog_paths() {
+        for path in [
+            "../manifest.json",
+            "C:/plugins/manifest.json",
+            "https://example.com/manifest.json",
+            "plugin/../manifest.json",
+        ] {
+            assert!(
+                validate_gallery_catalog_path(path).is_err(),
+                "{path} should be rejected"
+            );
+        }
+        assert_eq!(
+            validate_gallery_catalog_path("safe-plugin/manifest.json")
+                .expect("safe relative path should pass"),
+            "safe-plugin/manifest.json"
+        );
+
+        let mut catalog: Value =
+            serde_json::from_str(PLUGIN_GALLERY_CATALOG).expect("catalog should parse");
+        catalog["items"][0]["path"] = json!("missing-plugin/manifest.json");
+        let result = load_plugin_gallery_catalog_from_text(&catalog.to_string());
+        assert!(result.error.is_none());
+        assert!(!result.items[0].installable);
+        assert!(result.items[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("不存在"));
+    }
+
+    #[test]
+    fn damaged_gallery_catalog_does_not_affect_installed_plugin_scan() {
+        let root = test_root("gallery-damaged-catalog");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "localmindmap.test.gallery-isolation";
+        let manifest = test_declarative_plugin(plugin_id);
+        install_plugin_to_user_dir_at(&root, plugin_id, &manifest, false)
+            .expect("existing plugin should install");
+
+        let catalog = load_plugin_gallery_catalog_from_text("{broken");
+        assert!(catalog.error.is_some());
+        assert!(catalog.items.is_empty());
+        let installed =
+            scan_installed_plugin_manifests_at(&root, &[]).expect("scan should still work");
+        assert!(installed
+            .iter()
+            .any(|entry| entry.plugin_id_hint == plugin_id && entry.error.is_none()));
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn gallery_installs_all_plugin_types_and_keeps_manifest_metadata_clean() {
+        let root = test_root("gallery-install-all");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let catalog = load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG);
+        for item in &catalog.items {
+            let result = install_gallery_plugin_at(
+                &root,
+                PLUGIN_GALLERY_CATALOG,
+                &item.catalog.id,
+                false,
+                Some("2026-07-04T00:00:00.000Z"),
+            )
+            .expect("gallery plugin should install");
+            let installed_dir = root.join(&result.installed_dir);
+            let manifest: Value = parse_json_without_bom(
+                &fs::read_to_string(installed_dir.join(MANIFEST_FILE_NAME))
+                    .expect("manifest should be copied"),
+            )
+            .expect("manifest should parse");
+            assert_eq!(manifest["pluginId"], item.catalog.id);
+            assert!(manifest.get("trusted").is_none());
+            assert!(manifest.get("enabled").is_none());
+            assert!(installed_dir.join("README.md").is_file());
+            if let Some(entry) = manifest.get("entry").and_then(Value::as_str) {
+                assert!(installed_dir.join(entry).is_file());
+            }
+        }
+        let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        let registry = registry.as_array().expect("registry should be an array");
+        assert_eq!(registry.len(), 4);
+        assert!(registry.iter().all(|entry| entry["trusted"] == false
+            && entry["enabled"] == true
+            && entry["installedAt"] == "2026-07-04T00:00:00.000Z"));
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn gallery_overwrite_preserves_enabled_and_trusted() {
+        let root = test_root("gallery-overwrite-lifecycle");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "builtin-gallery.script-batch";
+        install_gallery_plugin_at(
+            &root,
+            PLUGIN_GALLERY_CATALOG,
+            plugin_id,
+            false,
+            Some("2026-07-04T00:00:00.000Z"),
+        )
+        .expect("gallery plugin should install");
+        let mut registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        registry[0]["enabled"] = json!(false);
+        registry[0]["trusted"] = json!(true);
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &registry)
+            .expect("registry should update");
+
+        install_gallery_plugin_at(
+            &root,
+            PLUGIN_GALLERY_CATALOG,
+            plugin_id,
+            true,
+            Some("2026-07-05T00:00:00.000Z"),
+        )
+        .expect("gallery plugin should reinstall");
+        let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        assert_eq!(registry[0]["enabled"], false);
+        assert_eq!(registry[0]["trusted"], true);
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn unavailable_gallery_install_does_not_pollute_registry() {
+        let root = test_root("gallery-unavailable-rollback");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let mut catalog: Value =
+            serde_json::from_str(PLUGIN_GALLERY_CATALOG).expect("catalog should parse");
+        catalog["items"][0]["path"] = json!("missing/manifest.json");
+        let error = install_gallery_plugin_at(
+            &root,
+            &catalog.to_string(),
+            "builtin-gallery.text-export",
+            false,
+            Some("2026-07-04T00:00:00.000Z"),
+        )
+        .expect_err("missing gallery asset should fail");
+        assert!(error.contains("不存在"));
+        let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        assert_eq!(registry, json!([]));
+        assert!(!root
+            .join(format!(
+                "{USER_PLUGIN_INSTALLED_DIR}/builtin-gallery.text-export"
+            ))
+            .exists());
+        fs::remove_dir_all(root).expect("test directory should be removable");
     }
 
     #[test]

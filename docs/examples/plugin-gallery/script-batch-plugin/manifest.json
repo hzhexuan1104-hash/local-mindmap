@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "builtin-gallery.script-batch",
+  "name": "批量脚本插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap",
+  "description": "通过受控脚本运行器批量生成三个子节点。",
+  "pluginType": "script",
+  "entry": "main.js",
+  "capabilities": ["script", "mindmap:read", "node:read", "node:write"],
+  "permissions": ["script", "mindmap:read", "node:read", "node:write"],
+  "contributions": {
+    "menus": [
+      {
+        "id": "galleryBatchChildren",
+        "label": "插件中心脚本：新增 3 个子节点",
+        "location": "plugins",
+        "command": "plugin.runScript",
+        "when": "hasSelectedNode"
+      },
+      {
+        "id": "galleryBatchChildrenContext",
+        "label": "脚本：新增 3 个子节点",
+        "location": "node-context",
+        "command": "plugin.runScript",
+        "when": "hasSelectedNode"
+      }
+    ]
+  }
+}

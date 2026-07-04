@@ -160,3 +160,18 @@
 | PLUGIN-EXE-003 | P2 | executable 示例 manifest 与开发说明 | 已实现 |
 | PLUGIN-COMPAT-001 | P2 | Python、script、action-workflow、v1.7 声明式插件无回退 | 已实现并纳入回归测试 |
 | BUG-1.9.1-002 | P0 | `.json` 与 `.lmplugin` 包内 manifest 支持 UTF-8 BOM，损坏 JSON 仍失败 | 已修复并纳入回归测试 |
+
+## v1.10.0 本地插件中心增量矩阵
+
+| 编号 | 优先级 | 需求 | 状态 |
+|---|---|---|---|
+| PLUGIN-GALLERY-001 | P2 | 插件管理器展示纯本地官方示例 catalog，支持搜索、分类和类型筛选 | 已实现 |
+| PLUGIN-GALLERY-002 | P2 | catalog path 仅允许安全相对路径，拒绝 `..`、绝对路径、URL、ADS | 已实现 |
+| PLUGIN-GALLERY-003 | P2 | 内置 TXT、Workflow、Script、Python 四类示例及 README | 已实现 |
+| PLUGIN-GALLERY-004 | P2 | gallery 安装复用 manifest/entry 校验和事务安装，失败回滚 | 已实现 |
+| PLUGIN-GALLERY-005 | P2 | 新安装 trusted=false，覆盖安装保留 enabled/trusted | 已实现 |
+| PLUGIN-GALLERY-006 | P2 | 展示版本、权限、风险、安装/启用/信任及 manifest 异常状态 | 已实现 |
+| PLUGIN-GALLERY-007 | P2 | script/external 安装前风险提示且不自动开启 runner | 已实现 |
+| PLUGIN-GALLERY-008 | P2 | 支持查看详情、README、示例目录和插件开发文档 | 已实现 |
+| PLUGIN-GALLERY-009 | P0 | 不联网、不下载、不执行安装中的插件代码 | 已实现 |
+| PLUGIN-GALLERY-010 | P0 | `.json` / `.lmplugin` 导入导出和既有插件类型无回退 | 已纳入回归测试 |

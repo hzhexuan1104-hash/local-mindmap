@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "builtin-gallery.text-export",
+  "name": "TXT 导出插件",
+  "version": "1.0.0",
+  "author": "Local Mindmap",
+  "description": "示例声明式 TXT 导出插件，不执行代码。",
+  "pluginType": "import-export",
+  "capabilities": ["export"],
+  "contributions": {
+    "menus": [
+      {
+        "id": "galleryExportText",
+        "label": "插件中心：导出 TXT",
+        "location": "plugins",
+        "command": "builtin.exportText",
+        "when": "hasMindmap"
+      }
+    ],
+    "exporters": [
+      {
+        "id": "galleryTextExporter",
+        "label": "插件中心 TXT 导出",
+        "handler": "builtin.exportText"
+      }
+    ]
+  }
+}

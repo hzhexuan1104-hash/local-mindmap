@@ -5,7 +5,9 @@ import {
   USER_DATA_PATHS,
   createSamplePlugin,
   ensureUserDataDirs,
+  getPluginGalleryCatalog,
   getUserDataDir,
+  installGalleryPlugin,
   installPluginToUserDir,
   isDesktopRuntime,
   loadPluginRegistry,
@@ -15,6 +17,8 @@ import {
   migrateLegacyLocalStorageToUserData,
   openPluginDir,
   openPluginDevDir,
+  openGalleryPluginDir,
+  openPluginDevelopmentDocs,
   openPluginManifestDir,
   scanInstalledPluginManifests,
   readUserJson,
@@ -372,6 +376,56 @@ describe('userDataStorage desktop commands', () => {
       {
         command: USER_DATA_COMMANDS.uninstallPluginFromUserDir,
         args: { pluginId: plugin.pluginId },
+      },
+    ]);
+  });
+
+  it('routes local gallery reads, installs and local open actions through dedicated commands', async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    setUserDataStorageInvokerForTests(async (command, args) => {
+      calls.push({ command, args });
+      if (command === USER_DATA_COMMANDS.getPluginGalleryCatalog) {
+        return { version: 1, items: [] } as never;
+      }
+      if (command === USER_DATA_COMMANDS.installGalleryPlugin) {
+        return {
+          pluginId: 'builtin-gallery.text-export',
+          name: 'TXT 导出插件',
+          version: '1.0.0',
+          installedDir: 'plugins/installed/builtin-gallery.text-export',
+        } as never;
+      }
+      return undefined as never;
+    });
+
+    await expect(getPluginGalleryCatalog()).resolves.toEqual({
+      version: 1,
+      items: [],
+    });
+    await expect(
+      installGalleryPlugin('builtin-gallery.text-export', true),
+    ).resolves.toMatchObject({ version: '1.0.0' });
+    await expect(
+      openGalleryPluginDir('builtin-gallery.text-export'),
+    ).resolves.toBe(true);
+    await expect(openPluginDevelopmentDocs()).resolves.toBe(true);
+    expect(calls).toEqual([
+      { command: USER_DATA_COMMANDS.getPluginGalleryCatalog, args: undefined },
+      {
+        command: USER_DATA_COMMANDS.installGalleryPlugin,
+        args: {
+          catalogId: 'builtin-gallery.text-export',
+          overwrite: true,
+          installedAt: expect.any(String),
+        },
+      },
+      {
+        command: USER_DATA_COMMANDS.openGalleryPluginDir,
+        args: { catalogId: 'builtin-gallery.text-export' },
+      },
+      {
+        command: USER_DATA_COMMANDS.openPluginDevelopmentDocs,
+        args: undefined,
       },
     ]);
   });
