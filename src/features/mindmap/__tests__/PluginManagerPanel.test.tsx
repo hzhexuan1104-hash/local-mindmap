@@ -338,6 +338,12 @@ describe('PluginManagerPanel installation errors', () => {
     expect(html).toContain('<details');
     expect(html).not.toContain('<details open=""');
     expect(html).toContain('开发者模式');
+    expect(html).toContain('插件开发者工作台');
+    expect(html).toContain('新建插件项目');
+    expect(html).toContain('校验插件项目');
+    expect(html).toContain('打包为 .lmplugin');
+    expect(html).toContain('导入本地打包插件');
+    expect(html).toContain('查看示例插件目录');
     expect(html).toContain('打开插件开发目录');
     expect(html).toContain('创建示例插件');
     expect(html).toContain('查看插件 API 文档');

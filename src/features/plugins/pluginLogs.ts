@@ -61,7 +61,13 @@ export type PluginLogEvent =
   | 'external-trust-requested'
   | 'external-trust-granted'
   | 'external-trust-revoked'
-  | 'external-context-menu-invoked';
+  | 'external-context-menu-invoked'
+  | 'dev-project-created'
+  | 'dev-manifest-validated'
+  | 'dev-package-built'
+  | 'dev-package-import-verified'
+  | 'dev-project-validation-failed'
+  | 'dev-package-build-failed';
 
 export type PluginLogEntry = {
   id: string;

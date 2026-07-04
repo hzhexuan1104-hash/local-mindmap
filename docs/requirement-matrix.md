@@ -175,3 +175,18 @@
 | PLUGIN-GALLERY-008 | P2 | 支持查看详情、README、示例目录和插件开发文档 | 已实现 |
 | PLUGIN-GALLERY-009 | P0 | 不联网、不下载、不执行安装中的插件代码 | 已实现 |
 | PLUGIN-GALLERY-010 | P0 | `.json` / `.lmplugin` 导入导出和既有插件类型无回退 | 已纳入回归测试 |
+
+## v1.11.0 插件开发者工作台增量矩阵
+
+| 编号 | 优先级 | 需求 | 状态 |
+|---|---|---|---|
+| PLUGIN-DEV-001 | P2 | 在开发者模式提供创建、校验、打包、导入验证、目录和文档入口 | 已实现 |
+| PLUGIN-DEV-002 | P2 | 开发项目限定在 `plugins/dev/<pluginId>/`，安全 ID 且原子创建 | 已实现 |
+| PLUGIN-DEV-003 | P2 | import-export、action-workflow、script、Python、executable、theme-pack 模板 | 已实现 |
+| PLUGIN-DEV-004 | P2 | 兼容 BOM 的结构化 manifest / entry / command / permission / 风险校验 | 已实现 |
+| PLUGIN-DEV-005 | P2 | Valid 项目递归打包资源并排除 registry、trusted、构建目录、日志和临时文件 | 已实现 |
+| PLUGIN-DEV-006 | P0 | 打包和导入防 ZIP Slip、失败回滚、不联网、不执行未安装代码 | 已实现 |
+| PLUGIN-DEV-007 | P2 | 打包结果复用现有导入流程，新安装 trusted=false，覆盖保留生命周期状态 | 已实现 |
+| PLUGIN-DEV-008 | P2 | 开发者创建、校验、构建、导入验证事件进入插件日志 | 已实现 |
+| PLUGIN-DEV-009 | P2 | 工作台、模板、安全边界、UTF-8、executable 与常见错误文档 | 已实现 |
+| PLUGIN-DEV-010 | P0 | 本地插件中心、插件包、Python、Workflow、Script、声明式插件无回退 | 已纳入回归测试 |

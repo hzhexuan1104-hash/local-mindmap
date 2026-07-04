@@ -1836,6 +1836,109 @@ h3 {
   justify-content: flex-start;
 }
 
+.plugin-dev-workbench {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #aac8ed;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #ffffff 0%, #f3f8ff 100%);
+}
+
+.plugin-dev-badge {
+  align-self: start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #174a86;
+  background: #dcecff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.plugin-dev-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.plugin-dev-summary > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #d9e5f4;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.plugin-dev-summary dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.plugin-dev-summary dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.plugin-dev-project-picker {
+  max-width: 640px;
+}
+
+.plugin-dev-wizard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #cbdcf3;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.plugin-dev-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.plugin-dev-form-grid input,
+.plugin-dev-form-grid select,
+.plugin-dev-form-grid textarea,
+.plugin-dev-project-picker input {
+  width: 100%;
+  min-width: 0;
+}
+
+.plugin-dev-wide-field {
+  grid-column: 1 / -1;
+}
+
+.plugin-dev-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: #4a5567;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plugin-dev-checkboxes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plugin-dev-workbench .field-error {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plugin-dev-workbench .plugin-validation-report ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+}
+
 .plugin-log-heading {
   display: flex;
   align-items: center;
@@ -2175,6 +2278,15 @@ h3 {
 
   .plugin-gallery-grid {
     grid-template-columns: 1fr;
+  }
+
+  .plugin-dev-summary,
+  .plugin-dev-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plugin-dev-wide-field {
+    grid-column: auto;
   }
 
   .mindmap-tree {
