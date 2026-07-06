@@ -29,6 +29,9 @@ const USER_PLUGIN_REGISTRY_PATH: &str = "plugins/plugin-registry.json";
 const USER_PLUGIN_SETTINGS_PATH: &str = "config/plugin-settings.json";
 const USER_PLUGIN_INSTALLED_DIR: &str = "plugins/installed";
 const USER_PLUGIN_DEV_DIR: &str = "plugins/dev";
+const USER_PLUGIN_QUARANTINE_DIR: &str = "plugins/quarantine";
+const USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR: &str = "plugins/backups/diagnostics";
+const USER_PLUGIN_DIAGNOSTIC_REPORT_DIR: &str = "plugins/reports";
 const SAMPLE_PLUGIN_DIR_NAME: &str = "sample-json-plugin";
 const SAMPLE_PLUGIN_ID: &str = "localmindmap.dev.sample-json-plugin";
 const SAMPLE_PLUGIN_MANIFEST: &str =
@@ -149,9 +152,13 @@ const USER_DATA_DIRS: &[&str] = &[
     "plugins",
     USER_PLUGIN_INSTALLED_DIR,
     USER_PLUGIN_DEV_DIR,
+    USER_PLUGIN_QUARANTINE_DIR,
     PLUGIN_GALLERY_CACHE_DIR,
     CONFIG_DIR_NAME,
     "backups",
+    "plugins/backups",
+    USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR,
+    USER_PLUGIN_DIAGNOSTIC_REPORT_DIR,
 ];
 const ALLOWED_CAPABILITIES: &[&str] = &[
     "exportText",
@@ -421,6 +428,13 @@ where
     T: serde::de::DeserializeOwned,
 {
     serde_json::from_str(strip_utf8_bom(text))
+}
+
+fn manifest_has_top_level_key(manifest: &Value, field: &str) -> bool {
+    manifest
+        .as_object()
+        .map(|object| object.contains_key(field))
+        .unwrap_or(false)
 }
 
 fn read_user_json_at(
@@ -3802,6 +3816,1359 @@ fn reload_plugins_from_disk(app: AppHandle) -> Result<PluginDiskSnapshot, String
     reload_plugins_from_disk_at(&root)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum PluginDiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum PluginDiagnosticStatus {
+    Passed,
+    Failed,
+    Fixable,
+    Fixed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum PluginDiagnosticCategory {
+    Registry,
+    Installed,
+    Manifest,
+    Entry,
+    Security,
+    Dev,
+    Gallery,
+    Package,
+    Runtime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiagnosticItem {
+    id: String,
+    severity: PluginDiagnosticSeverity,
+    status: PluginDiagnosticStatus,
+    category: PluginDiagnosticCategory,
+    plugin_id: Option<String>,
+    title: String,
+    message: String,
+    path: Option<String>,
+    fix_action: Option<String>,
+    fixable: bool,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiagnosticSummary {
+    total: usize,
+    passed: usize,
+    warning: usize,
+    error: usize,
+    critical: usize,
+    info: usize,
+    fixable: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiagnosticCounts {
+    total_plugins: usize,
+    installed_plugins: usize,
+    registry_records: usize,
+    dev_projects: usize,
+    gallery_examples: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiagnosticFixResult {
+    action: String,
+    plugin_id: Option<String>,
+    status: String,
+    message: String,
+    backup_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiagnosticReport {
+    scan_id: String,
+    scanned_at: String,
+    app_version: String,
+    user_data_dir: String,
+    summary: PluginDiagnosticSummary,
+    counts: PluginDiagnosticCounts,
+    items: Vec<PluginDiagnosticItem>,
+    fix_results: Vec<PluginDiagnosticFixResult>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginDiagnosticFixRequest {
+    fix_actions: Option<Vec<String>>,
+}
+
+fn diagnostic_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{millis}")
+}
+
+fn diagnostic_iso_like_time() -> String {
+    format!("{}Z", diagnostic_timestamp())
+}
+
+fn diagnostic_id(prefix: &str, path_or_plugin: &str) -> String {
+    let safe = path_or_plugin
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("{prefix}-{safe}")
+}
+
+fn push_diagnostic_item(
+    items: &mut Vec<PluginDiagnosticItem>,
+    severity: PluginDiagnosticSeverity,
+    status: PluginDiagnosticStatus,
+    category: PluginDiagnosticCategory,
+    plugin_id: Option<String>,
+    title: impl Into<String>,
+    message: impl Into<String>,
+    path: Option<String>,
+    fix_action: Option<String>,
+) {
+    let fixable = matches!(status, PluginDiagnosticStatus::Fixable) && fix_action.is_some();
+    let title = title.into();
+    let id_source = plugin_id
+        .as_deref()
+        .or(path.as_deref())
+        .unwrap_or(title.as_str());
+    items.push(PluginDiagnosticItem {
+        id: diagnostic_id(
+            match category {
+                PluginDiagnosticCategory::Registry => "registry",
+                PluginDiagnosticCategory::Installed => "installed",
+                PluginDiagnosticCategory::Manifest => "manifest",
+                PluginDiagnosticCategory::Entry => "entry",
+                PluginDiagnosticCategory::Security => "security",
+                PluginDiagnosticCategory::Dev => "dev",
+                PluginDiagnosticCategory::Gallery => "gallery",
+                PluginDiagnosticCategory::Package => "package",
+                PluginDiagnosticCategory::Runtime => "runtime",
+            },
+            &format!("{}-{}", title, id_source),
+        ),
+        severity,
+        status,
+        category,
+        plugin_id,
+        title,
+        message: message.into(),
+        path,
+        fix_action,
+        fixable,
+        created_at: diagnostic_iso_like_time(),
+    });
+}
+
+fn summarize_diagnostics(items: &[PluginDiagnosticItem]) -> PluginDiagnosticSummary {
+    let mut summary = PluginDiagnosticSummary {
+        total: items.len(),
+        ..PluginDiagnosticSummary::default()
+    };
+    for item in items {
+        match item.status {
+            PluginDiagnosticStatus::Passed => summary.passed += 1,
+            _ => {}
+        }
+        match item.severity {
+            PluginDiagnosticSeverity::Info => summary.info += 1,
+            PluginDiagnosticSeverity::Warning => summary.warning += 1,
+            PluginDiagnosticSeverity::Error => summary.error += 1,
+            PluginDiagnosticSeverity::Critical => summary.critical += 1,
+        }
+        if item.fixable {
+            summary.fixable += 1;
+        }
+    }
+    summary
+}
+
+fn registry_sort_key(value: &Value) -> String {
+    for field in ["updatedAt", "installedAt"] {
+        if let Some(value) = value.get(field).and_then(Value::as_str) {
+            return value.to_string();
+        }
+    }
+    String::new()
+}
+
+fn is_url_like(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("://") || lower.starts_with("http:") || lower.starts_with("https:") || lower.starts_with("file:")
+}
+
+fn entry_security_problem(entry: &str) -> Option<(&'static str, PluginDiagnosticSeverity)> {
+    let normalized = entry.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    if is_url_like(&normalized) {
+        return Some(("entry URL is not allowed.", PluginDiagnosticSeverity::Critical));
+    }
+    if normalized.starts_with('/') || normalized.starts_with("//") || normalized.as_bytes().get(1) == Some(&b':') {
+        return Some(("entry absolute path is not allowed.", PluginDiagnosticSeverity::Critical));
+    }
+    if normalized.split('/').any(|segment| segment == "..") {
+        return Some(("entry parent traversal is not allowed.", PluginDiagnosticSeverity::Critical));
+    }
+    if normalized.split('/').any(|segment| segment.contains(':')) {
+        return Some(("entry alternate data stream or drive separator is not allowed.", PluginDiagnosticSeverity::Critical));
+    }
+    if lower.ends_with(".dll") {
+        return Some(("DLL entries are not supported.", PluginDiagnosticSeverity::Critical));
+    }
+    None
+}
+
+fn registry_entries_from_value(registry: &Value) -> Option<&Vec<Value>> {
+    registry.as_array()
+}
+
+fn read_registry_for_diagnostics(root: &Path) -> (Option<Value>, Vec<PluginDiagnosticItem>) {
+    let mut items = Vec::new();
+    let registry_path = root.join(USER_PLUGIN_REGISTRY_PATH);
+    if !registry_path.exists() {
+        push_diagnostic_item(
+            &mut items,
+            PluginDiagnosticSeverity::Warning,
+            PluginDiagnosticStatus::Fixable,
+            PluginDiagnosticCategory::Registry,
+            None,
+            "Registry missing",
+            "plugins/plugin-registry.json does not exist.",
+            Some(USER_PLUGIN_REGISTRY_PATH.to_string()),
+            Some("create-registry".to_string()),
+        );
+        return (None, items);
+    }
+    let raw = match fs::read_to_string(&registry_path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            push_diagnostic_item(
+                &mut items,
+                PluginDiagnosticSeverity::Critical,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Registry,
+                None,
+                "Registry unreadable",
+                format!("plugin-registry.json cannot be read: {error}"),
+                Some(USER_PLUGIN_REGISTRY_PATH.to_string()),
+                None,
+            );
+            return (None, items);
+        }
+    };
+    match parse_json_without_bom::<Value>(&raw) {
+        Ok(value) => {
+            if value.as_array().is_none() {
+                push_diagnostic_item(
+                    &mut items,
+                    PluginDiagnosticSeverity::Error,
+                    PluginDiagnosticStatus::Failed,
+                    PluginDiagnosticCategory::Registry,
+                    None,
+                    "Registry is not an array",
+                    "plugin-registry.json must be a JSON array. Automatic conversion is intentionally disabled.",
+                    Some(USER_PLUGIN_REGISTRY_PATH.to_string()),
+                    None,
+                );
+            }
+            (Some(value), items)
+        }
+        Err(error) => {
+            push_diagnostic_item(
+                &mut items,
+                PluginDiagnosticSeverity::Critical,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Registry,
+                None,
+                "Registry JSON damaged",
+                format!("plugin-registry.json has invalid JSON: {error}"),
+                Some(USER_PLUGIN_REGISTRY_PATH.to_string()),
+                None,
+            );
+            (None, items)
+        }
+    }
+}
+
+fn list_directories(path: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return vec![];
+    };
+    let mut names = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry
+                .file_type()
+                .ok()
+                .filter(|file_type| file_type.is_dir())
+                .map(|_| entry.file_name().to_string_lossy().to_string())
+        })
+        .filter(|name| !name.starts_with('.'))
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+fn scan_registry_diagnostics(
+    items: &mut Vec<PluginDiagnosticItem>,
+    registry: Option<&Value>,
+    installed_dirs: &[String],
+) {
+    let Some(registry) = registry else {
+        return;
+    };
+    let Some(entries) = registry_entries_from_value(registry) else {
+        return;
+    };
+    let installed_set = installed_dirs.iter().cloned().collect::<HashSet<_>>();
+    let mut seen: HashMap<String, Vec<(usize, &Value)>> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let plugin_id = entry.get("pluginId").and_then(Value::as_str).unwrap_or_default();
+        let path = Some(format!("{USER_PLUGIN_REGISTRY_PATH}#{index}"));
+        if plugin_id.trim().is_empty() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                None,
+                "Registry item missing pluginId",
+                "Registry item has no pluginId and can be removed safely.",
+                path,
+                Some(format!("remove-registry-item:{index}")),
+            );
+            continue;
+        }
+        if !is_safe_plugin_id(plugin_id) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                Some(plugin_id.to_string()),
+                "Registry item has invalid pluginId",
+                "Registry item pluginId is unsafe and can be removed.",
+                path,
+                Some(format!("remove-registry-plugin:{plugin_id}")),
+            );
+            continue;
+        }
+        seen.entry(plugin_id.to_string()).or_default().push((index, entry));
+        if entry.get("enabled").and_then(Value::as_bool).is_none() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                Some(plugin_id.to_string()),
+                "Registry enabled missing",
+                "Registry item has no enabled state. The default fix sets enabled=true.",
+                path.clone(),
+                Some(format!("set-registry-enabled:{plugin_id}")),
+            );
+        }
+        if entry.get("trusted").and_then(Value::as_bool).is_none() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                Some(plugin_id.to_string()),
+                "Registry trusted missing",
+                "Registry item has no trusted state. The default fix sets trusted=false.",
+                path.clone(),
+                Some(format!("set-registry-trusted:{plugin_id}")),
+            );
+        }
+        if !entry.get("builtIn").and_then(Value::as_bool).unwrap_or(false)
+            && !installed_set.contains(plugin_id)
+        {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                Some(plugin_id.to_string()),
+                "Registry orphan record",
+                "Registry item points to an installed plugin directory that does not exist.",
+                path.clone(),
+                Some(format!("remove-registry-orphan:{plugin_id}")),
+            );
+        }
+        if entry.get("trusted").and_then(Value::as_bool).unwrap_or(false)
+            && !installed_set.contains(plugin_id)
+        {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                Some(plugin_id.to_string()),
+                "Trusted registry item has no manifest",
+                "The safer fix removes the orphan registry item instead of preserving trusted=true.",
+                path,
+                Some(format!("remove-registry-orphan:{plugin_id}")),
+            );
+        }
+    }
+    for (plugin_id, entries) in seen {
+        if entries.len() > 1 {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Registry,
+                Some(plugin_id.clone()),
+                "Duplicate registry pluginId",
+                "Registry contains duplicate pluginId records. The fix keeps the newest updatedAt/installedAt record.",
+                Some(USER_PLUGIN_REGISTRY_PATH.to_string()),
+                Some(format!("dedupe-registry:{plugin_id}")),
+            );
+        }
+    }
+}
+
+fn scan_installed_diagnostics(
+    root: &Path,
+    items: &mut Vec<PluginDiagnosticItem>,
+    registry: Option<&Value>,
+    installed_dirs: &[String],
+) {
+    let registry_ids = registry
+        .and_then(registry_entries_from_value)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("pluginId").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let installed_root = root.join(USER_PLUGIN_INSTALLED_DIR);
+    for plugin_dir_name in installed_dirs {
+        let plugin_dir = installed_root.join(plugin_dir_name);
+        let plugin_path = format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_dir_name}");
+        if !is_safe_plugin_id(plugin_dir_name) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Installed,
+                Some(plugin_dir_name.clone()),
+                "Installed directory name invalid",
+                "Directory name is not a safe pluginId. It is not deleted automatically.",
+                Some(plugin_path.clone()),
+                None,
+            );
+        }
+        let manifest_path = plugin_dir.join(MANIFEST_FILE_NAME);
+        let relative_manifest_path = format!("{plugin_path}/{MANIFEST_FILE_NAME}");
+        if !manifest_path.is_file() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Manifest,
+                Some(plugin_dir_name.clone()),
+                "Installed manifest missing",
+                "manifest.json is missing. The safe fix moves this directory to plugins/quarantine.",
+                Some(relative_manifest_path),
+                Some(format!("quarantine-installed:{plugin_dir_name}")),
+            );
+            if !registry_ids.contains(plugin_dir_name) {
+                push_diagnostic_item(
+                    items,
+                    PluginDiagnosticSeverity::Warning,
+                    PluginDiagnosticStatus::Fixable,
+                    PluginDiagnosticCategory::Installed,
+                    Some(plugin_dir_name.clone()),
+                    "Installed orphan directory",
+                    "Installed plugin directory has no registry item.",
+                    Some(plugin_path),
+                    Some(format!("add-registry:{plugin_dir_name}")),
+                );
+            }
+            continue;
+        }
+        let raw_manifest = match fs::read_to_string(&manifest_path) {
+            Ok(text) => text,
+            Err(error) => {
+                push_diagnostic_item(
+                    items,
+                    PluginDiagnosticSeverity::Error,
+                    PluginDiagnosticStatus::Fixable,
+                    PluginDiagnosticCategory::Manifest,
+                    Some(plugin_dir_name.clone()),
+                    "Installed manifest unreadable",
+                    format!("manifest.json cannot be read: {error}. The safe fix moves the directory to quarantine."),
+                    Some(relative_manifest_path),
+                    Some(format!("quarantine-installed:{plugin_dir_name}")),
+                );
+                continue;
+            }
+        };
+        let manifest: Value = match parse_json_without_bom(&raw_manifest) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                push_diagnostic_item(
+                    items,
+                    PluginDiagnosticSeverity::Error,
+                    PluginDiagnosticStatus::Fixable,
+                    PluginDiagnosticCategory::Manifest,
+                    Some(plugin_dir_name.clone()),
+                    "Installed manifest JSON damaged",
+                    format!("manifest.json is invalid JSON: {error}. The safe fix moves the directory to quarantine."),
+                    Some(relative_manifest_path),
+                    Some(format!("quarantine-installed:{plugin_dir_name}")),
+                );
+                continue;
+            }
+        };
+        let manifest_plugin_id = manifest
+            .get("pluginId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if manifest_plugin_id != *plugin_dir_name {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Manifest,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "Manifest pluginId differs from directory",
+                format!("manifest pluginId `{manifest_plugin_id}` differs from installed directory `{plugin_dir_name}`."),
+                Some(relative_manifest_path.clone()),
+                None,
+            );
+        }
+        if let Err(error) = validate_declarative_manifest(
+            if manifest_plugin_id.is_empty() { plugin_dir_name } else { &manifest_plugin_id },
+            &manifest,
+        ) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Manifest,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "Manifest schema errors",
+                error,
+                Some(relative_manifest_path.clone()),
+                None,
+            );
+        }
+        for field in ["trusted", "installedAt", "updatedAt"] {
+            if manifest_has_top_level_key(&manifest, field) {
+                push_diagnostic_item(
+                    items,
+                    PluginDiagnosticSeverity::Warning,
+                    PluginDiagnosticStatus::Fixable,
+                    PluginDiagnosticCategory::Manifest,
+                    Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                    "Manifest contains lifecycle field",
+                    format!("manifest.json contains `{field}`. Lifecycle state belongs in plugin-registry.json."),
+                    Some(relative_manifest_path.clone()),
+                    Some(format!("strip-manifest-lifecycle:{plugin_dir_name}")),
+                );
+            }
+        }
+        if let Some(field) = contains_forbidden_declarative_field(&manifest) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Critical,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Security,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "Dangerous manifest field",
+                format!("manifest.json contains dangerous field `{field}`. Automatic repair is disabled."),
+                Some(relative_manifest_path.clone()),
+                None,
+            );
+        }
+        let plugin_type = manifest.get("pluginType").and_then(Value::as_str).unwrap_or_default();
+        let runtime = manifest.get("runtime").and_then(Value::as_str).unwrap_or_default();
+        if !DECLARATIVE_PLUGIN_TYPES.contains(&plugin_type) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Runtime,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "Unknown pluginType",
+                format!("pluginType `{plugin_type}` is not supported."),
+                Some(relative_manifest_path.clone()),
+                None,
+            );
+        }
+        if let Some(entry) = manifest.get("entry").and_then(Value::as_str) {
+            if let Some((message, severity)) = entry_security_problem(entry) {
+                push_diagnostic_item(
+                    items,
+                    severity,
+                    PluginDiagnosticStatus::Failed,
+                    PluginDiagnosticCategory::Entry,
+                    Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                    "Entry path is unsafe",
+                    message,
+                    Some(relative_manifest_path.clone()),
+                    None,
+                );
+            } else {
+                let entry_path = plugin_dir.join(entry.replace('\\', "/"));
+                if !entry_path.is_file() {
+                    push_diagnostic_item(
+                        items,
+                        PluginDiagnosticSeverity::Error,
+                        PluginDiagnosticStatus::Failed,
+                        PluginDiagnosticCategory::Entry,
+                        Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                        "Entry file missing",
+                        format!("Entry file `{entry}` does not exist."),
+                        Some(format!("{plugin_path}/{entry}")),
+                        None,
+                    );
+                }
+                if plugin_type == "external-command" && runtime == "executable" && !entry.to_ascii_lowercase().ends_with(".exe") {
+                    push_diagnostic_item(
+                        items,
+                        PluginDiagnosticSeverity::Error,
+                        PluginDiagnosticStatus::Failed,
+                        PluginDiagnosticCategory::Runtime,
+                        Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                        "Executable entry is not .exe",
+                        "runtime=executable requires an .exe entry on Windows packages.",
+                        Some(relative_manifest_path.clone()),
+                        None,
+                    );
+                }
+            }
+        } else if plugin_type == "script" || plugin_type == "external-command" {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Entry,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "Entry missing",
+                "Executable plugin types must declare an entry file.",
+                Some(relative_manifest_path.clone()),
+                None,
+            );
+        }
+        if plugin_type != "external-command" && !runtime.is_empty() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Runtime,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "runtime/pluginType mismatch",
+                "runtime should only be declared for pluginType=external-command.",
+                Some(relative_manifest_path.clone()),
+                None,
+            );
+        }
+        if !plugin_dir.join("README.md").is_file() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Info,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Manifest,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                "README missing",
+                "README.md is recommended for installed plugins.",
+                Some(format!("{plugin_path}/README.md")),
+                None,
+            );
+        }
+        if !registry_ids.contains(plugin_dir_name) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Fixable,
+                PluginDiagnosticCategory::Installed,
+                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id }),
+                "Installed orphan directory",
+                "Installed plugin directory has no registry item. The fix adds enabled=true and trusted=false.",
+                Some(plugin_path),
+                Some(format!("add-registry:{plugin_dir_name}")),
+            );
+        }
+    }
+}
+
+fn scan_dev_diagnostics(root: &Path, items: &mut Vec<PluginDiagnosticItem>) -> usize {
+    let dev_root = root.join(USER_PLUGIN_DEV_DIR);
+    let dev_dirs = list_directories(&dev_root);
+    for plugin_id in &dev_dirs {
+        let relative_path = format!("{USER_PLUGIN_DEV_DIR}/{plugin_id}");
+        if !is_safe_plugin_id(plugin_id) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Dev,
+                Some(plugin_id.clone()),
+                "Dev project directory name invalid",
+                "Developer project directory name is not a safe pluginId.",
+                Some(relative_path.clone()),
+                None,
+            );
+            continue;
+        }
+        let validation = validate_dev_plugin_project_at(root, plugin_id);
+        for error in &validation.errors {
+            let severity = if error.code == "manifest-missing" {
+                PluginDiagnosticSeverity::Warning
+            } else {
+                PluginDiagnosticSeverity::Error
+            };
+            push_diagnostic_item(
+                items,
+                severity,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Dev,
+                Some(plugin_id.clone()),
+                format!("Dev {}", error.code),
+                error.message.clone(),
+                error.field.clone().map(|field| format!("{relative_path}/{field}")).or(Some(relative_path.clone())),
+                None,
+            );
+        }
+        for warning in &validation.warnings {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Dev,
+                Some(plugin_id.clone()),
+                format!("Dev {}", warning.code),
+                warning.message.clone(),
+                warning.field.clone().map(|field| format!("{relative_path}/{field}")).or(Some(relative_path.clone())),
+                None,
+            );
+        }
+        push_diagnostic_item(
+            items,
+            PluginDiagnosticSeverity::Info,
+            PluginDiagnosticStatus::Passed,
+            PluginDiagnosticCategory::Dev,
+            Some(plugin_id.clone()),
+            if validation.can_package { "Dev project packageable" } else { "Dev project not packageable" },
+            if validation.can_package {
+                "Developer project can be packaged."
+            } else {
+                "Developer project cannot be packaged until validation errors are fixed."
+            },
+            Some(relative_path),
+            None,
+        );
+    }
+    dev_dirs.len()
+}
+
+fn scan_gallery_diagnostics(items: &mut Vec<PluginDiagnosticItem>) -> usize {
+    let catalog: Result<PluginGalleryCatalog, _> = parse_json_without_bom(PLUGIN_GALLERY_CATALOG);
+    let catalog = match catalog {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Gallery,
+                None,
+                "Gallery catalog JSON damaged",
+                format!("docs/examples/plugin-gallery/catalog.json is invalid: {error}"),
+                Some("docs/examples/plugin-gallery/catalog.json".to_string()),
+                None,
+            );
+            return 0;
+        }
+    };
+    let mut seen = HashSet::new();
+    for item in &catalog.items {
+        if !seen.insert(item.id.clone()) {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Gallery,
+                Some(item.id.clone()),
+                "Duplicate gallery catalog id",
+                "catalog.json contains a duplicate item id.",
+                Some("docs/examples/plugin-gallery/catalog.json".to_string()),
+                None,
+            );
+        }
+        if item.risk_level.trim().is_empty() {
+            push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Warning,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Gallery,
+                Some(item.id.clone()),
+                "Gallery riskLevel missing",
+                "Gallery catalog item should declare riskLevel.",
+                Some("docs/examples/plugin-gallery/catalog.json".to_string()),
+                None,
+            );
+        }
+        match validate_gallery_catalog_path(&item.path) {
+            Ok(path) => {
+                let manifest_text = bundled_gallery_asset(&path);
+                let Some(manifest_text) = manifest_text else {
+                    push_diagnostic_item(
+                        items,
+                        PluginDiagnosticSeverity::Error,
+                        PluginDiagnosticStatus::Failed,
+                        PluginDiagnosticCategory::Gallery,
+                        Some(item.id.clone()),
+                        "Gallery manifest missing",
+                        "Catalog item points to a manifest that is not bundled.",
+                        Some(format!("docs/examples/plugin-gallery/{path}")),
+                        None,
+                    );
+                    continue;
+                };
+                match parse_json_without_bom::<Value>(manifest_text) {
+                    Ok(manifest) => {
+                        if let Err(error) = validate_declarative_manifest(&item.id, &manifest) {
+                            push_diagnostic_item(
+                                items,
+                                PluginDiagnosticSeverity::Error,
+                                PluginDiagnosticStatus::Failed,
+                                PluginDiagnosticCategory::Gallery,
+                                Some(item.id.clone()),
+                                "Gallery manifest schema errors",
+                                error,
+                                Some(format!("docs/examples/plugin-gallery/{path}")),
+                                None,
+                            );
+                        }
+                        if manifest.get("pluginType").and_then(Value::as_str) != Some(item.plugin_type.as_str()) {
+                            push_diagnostic_item(
+                                items,
+                                PluginDiagnosticSeverity::Warning,
+                                PluginDiagnosticStatus::Failed,
+                                PluginDiagnosticCategory::Gallery,
+                                Some(item.id.clone()),
+                                "Gallery pluginType mismatch",
+                                "Catalog pluginType differs from manifest pluginType.",
+                                Some(format!("docs/examples/plugin-gallery/{path}")),
+                                None,
+                            );
+                        }
+                        if let Some(entry) = manifest.get("entry").and_then(Value::as_str) {
+                            if let Ok(entry) = validate_safe_entry_path(entry) {
+                                let directory = Path::new(&path).parent().and_then(Path::to_str).unwrap_or_default();
+                                let entry_path = format!("{directory}/{entry}");
+                                if bundled_gallery_asset(&entry_path).is_none() {
+                                    push_diagnostic_item(
+                                        items,
+                                        PluginDiagnosticSeverity::Error,
+                                        PluginDiagnosticStatus::Failed,
+                                        PluginDiagnosticCategory::Gallery,
+                                        Some(item.id.clone()),
+                                        "Gallery entry missing",
+                                        "Gallery sample entry file is not bundled.",
+                                        Some(format!("docs/examples/plugin-gallery/{entry_path}")),
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                        let directory = Path::new(&path).parent().and_then(Path::to_str).unwrap_or_default();
+                        let readme_path = format!("{directory}/README.md");
+                        if bundled_gallery_asset(&readme_path).is_none() {
+                            push_diagnostic_item(
+                                items,
+                                PluginDiagnosticSeverity::Warning,
+                                PluginDiagnosticStatus::Failed,
+                                PluginDiagnosticCategory::Gallery,
+                                Some(item.id.clone()),
+                                "Gallery README missing",
+                                "Gallery sample should include README.md.",
+                                Some(format!("docs/examples/plugin-gallery/{readme_path}")),
+                                None,
+                            );
+                        }
+                    }
+                    Err(error) => push_diagnostic_item(
+                        items,
+                        PluginDiagnosticSeverity::Error,
+                        PluginDiagnosticStatus::Failed,
+                        PluginDiagnosticCategory::Gallery,
+                        Some(item.id.clone()),
+                        "Gallery manifest JSON damaged",
+                        format!("Gallery manifest JSON is invalid: {error}"),
+                        Some(format!("docs/examples/plugin-gallery/{path}")),
+                        None,
+                    ),
+                }
+            }
+            Err(error) => push_diagnostic_item(
+                items,
+                PluginDiagnosticSeverity::Error,
+                PluginDiagnosticStatus::Failed,
+                PluginDiagnosticCategory::Gallery,
+                Some(item.id.clone()),
+                "Gallery catalog path invalid",
+                error,
+                Some("docs/examples/plugin-gallery/catalog.json".to_string()),
+                None,
+            ),
+        }
+    }
+    catalog.items.len()
+}
+
+fn scan_package_diagnostics(root: &Path, items: &mut Vec<PluginDiagnosticItem>) {
+    if root.join(USER_PLUGIN_INSTALLED_DIR).is_dir() {
+        push_diagnostic_item(
+            items,
+            PluginDiagnosticSeverity::Info,
+            PluginDiagnosticStatus::Passed,
+            PluginDiagnosticCategory::Package,
+            None,
+            ".lmplugin import/export capability available",
+            "Desktop package import/export commands are registered and local-only.",
+            Some(USER_PLUGIN_INSTALLED_DIR.to_string()),
+            None,
+        );
+    }
+}
+
+fn scan_plugin_diagnostics_at(root: &Path, scope: Option<&str>, fix_results: Vec<PluginDiagnosticFixResult>) -> Result<PluginDiagnosticReport, String> {
+    let scanned_at = diagnostic_iso_like_time();
+    let mut items = Vec::new();
+    let installed_root = root.join(USER_PLUGIN_INSTALLED_DIR);
+    fs::create_dir_all(&installed_root).map_err(|error| format!("Failed to create installed plugin directory: {error}"))?;
+    fs::create_dir_all(root.join(USER_PLUGIN_DEV_DIR)).map_err(|error| format!("Failed to create dev plugin directory: {error}"))?;
+    fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR)).map_err(|error| format!("Failed to create quarantine directory: {error}"))?;
+    let installed_dirs = list_directories(&installed_root);
+    let (registry_value, registry_read_items) = read_registry_for_diagnostics(root);
+    items.extend(registry_read_items);
+    let should_scan = |name: &str| scope.is_none_or(|scope| scope == "all" || scope == name);
+    if should_scan("registry") {
+        scan_registry_diagnostics(&mut items, registry_value.as_ref(), &installed_dirs);
+    }
+    if should_scan("installed") {
+        scan_installed_diagnostics(root, &mut items, registry_value.as_ref(), &installed_dirs);
+    }
+    let dev_projects = if should_scan("dev") {
+        scan_dev_diagnostics(root, &mut items)
+    } else {
+        list_directories(&root.join(USER_PLUGIN_DEV_DIR)).len()
+    };
+    let gallery_examples = if should_scan("gallery") {
+        scan_gallery_diagnostics(&mut items)
+    } else {
+        load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG).items.len()
+    };
+    if should_scan("package") {
+        scan_package_diagnostics(root, &mut items);
+    }
+    if items.is_empty() {
+        push_diagnostic_item(
+            &mut items,
+            PluginDiagnosticSeverity::Info,
+            PluginDiagnosticStatus::Passed,
+            PluginDiagnosticCategory::Runtime,
+            None,
+            "Plugin ecosystem healthy",
+            "No plugin diagnostics were found for the selected scope.",
+            None,
+            None,
+        );
+    }
+    let registry_records = registry_value
+        .as_ref()
+        .and_then(registry_entries_from_value)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let summary = summarize_diagnostics(&items);
+    Ok(PluginDiagnosticReport {
+        scan_id: format!("plugin-diagnostics-{}", diagnostic_timestamp()),
+        scanned_at,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        user_data_dir: root.to_string_lossy().to_string(),
+        summary,
+        counts: PluginDiagnosticCounts {
+            total_plugins: installed_dirs.len() + registry_records,
+            installed_plugins: installed_dirs.len(),
+            registry_records,
+            dev_projects,
+            gallery_examples,
+        },
+        items,
+        fix_results,
+    })
+}
+
+#[tauri::command]
+fn scan_plugin_diagnostics(app: AppHandle, scope: Option<String>) -> Result<PluginDiagnosticReport, String> {
+    let root = ensure_user_data_root(&app)?;
+    scan_plugin_diagnostics_at(&root, scope.as_deref(), vec![])
+}
+
+fn backup_diagnostics_targets(root: &Path, actions: &[String]) -> Result<String, String> {
+    let timestamp = diagnostic_timestamp();
+    let backup_rel = format!("{USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR}/{timestamp}");
+    let backup_dir = root.join(&backup_rel);
+    fs::create_dir_all(&backup_dir).map_err(|error| format!("Failed to create diagnostics backup: {error}"))?;
+    let registry_path = root.join(USER_PLUGIN_REGISTRY_PATH);
+    if registry_path.exists() {
+        fs::copy(&registry_path, backup_dir.join("plugin-registry.json"))
+            .map_err(|error| format!("Failed to back up plugin registry: {error}"))?;
+    }
+    let mut move_log = Vec::new();
+    for action in actions {
+        if let Some(plugin_id) = action.strip_prefix("strip-manifest-lifecycle:")
+            .or_else(|| action.strip_prefix("quarantine-installed:"))
+            .or_else(|| action.strip_prefix("add-registry:"))
+        {
+            if is_safe_plugin_id(plugin_id) {
+                let manifest_path = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id).join(MANIFEST_FILE_NAME);
+                if manifest_path.is_file() {
+                    let manifest_backup_dir = backup_dir.join("installed").join(plugin_id);
+                    fs::create_dir_all(&manifest_backup_dir)
+                        .map_err(|error| format!("Failed to create manifest backup dir: {error}"))?;
+                    fs::copy(&manifest_path, manifest_backup_dir.join(MANIFEST_FILE_NAME))
+                        .map_err(|error| format!("Failed to back up manifest: {error}"))?;
+                }
+                if action.starts_with("quarantine-installed:") {
+                    move_log.push(format!("{USER_PLUGIN_INSTALLED_DIR}/{plugin_id} -> {USER_PLUGIN_QUARANTINE_DIR}/{plugin_id}-{timestamp}"));
+                }
+            }
+        }
+    }
+    if !move_log.is_empty() {
+        fs::write(backup_dir.join("moves.txt"), move_log.join("\n"))
+            .map_err(|error| format!("Failed to write diagnostics move log: {error}"))?;
+    }
+    Ok(backup_rel)
+}
+
+fn read_registry_array_for_fix(root: &Path) -> Result<Vec<Value>, String> {
+    let value = read_user_json_at(root, USER_PLUGIN_REGISTRY_PATH, json!([]))?;
+    if let Some(entries) = value.as_array() {
+        Ok(entries.clone())
+    } else {
+        Err("plugin-registry.json is not an array; automatic repair skipped.".to_string())
+    }
+}
+
+fn write_registry_array_for_fix(root: &Path, entries: Vec<Value>) -> Result<(), String> {
+    write_user_json_at(root, USER_PLUGIN_REGISTRY_PATH, &Value::Array(entries))
+}
+
+fn manifest_plugin_id_at(root: &Path, plugin_id: &str) -> Option<String> {
+    let manifest_path = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id).join(MANIFEST_FILE_NAME);
+    let raw = fs::read_to_string(manifest_path).ok()?;
+    let manifest: Value = parse_json_without_bom(&raw).ok()?;
+    manifest.get("pluginId").and_then(Value::as_str).map(str::to_string)
+}
+
+fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<PluginDiagnosticFixResult>, String> {
+    let backup_path = backup_diagnostics_targets(root, actions)?;
+    let mut results = Vec::new();
+    for action in actions {
+        let mut result = PluginDiagnosticFixResult {
+            action: action.clone(),
+            plugin_id: action.split(':').nth(1).map(str::to_string),
+            status: "fixed".to_string(),
+            message: "Fixed.".to_string(),
+            backup_path: Some(backup_path.clone()),
+        };
+        let apply_result = (|| -> Result<String, String> {
+            if action == "create-registry" {
+                let path = root.join(USER_PLUGIN_REGISTRY_PATH);
+                if !path.exists() {
+                    write_user_json_at(root, USER_PLUGIN_REGISTRY_PATH, &json!([]))?;
+                }
+                return Ok("Created empty plugin-registry.json.".to_string());
+            }
+            if let Some(plugin_id) = action.strip_prefix("remove-registry-orphan:")
+                .or_else(|| action.strip_prefix("remove-registry-plugin:"))
+            {
+                let entries = read_registry_array_for_fix(root)?;
+                let next = entries
+                    .into_iter()
+                    .filter(|entry| entry.get("pluginId").and_then(Value::as_str) != Some(plugin_id))
+                    .collect::<Vec<_>>();
+                write_registry_array_for_fix(root, next)?;
+                return Ok(format!("Removed registry item `{plugin_id}`."));
+            }
+            if let Some(index_text) = action.strip_prefix("remove-registry-item:") {
+                let index = index_text.parse::<usize>().map_err(|error| format!("Invalid registry item index: {error}"))?;
+                let mut entries = read_registry_array_for_fix(root)?;
+                if index < entries.len() {
+                    entries.remove(index);
+                    write_registry_array_for_fix(root, entries)?;
+                }
+                return Ok(format!("Removed registry item at index {index}."));
+            }
+            if let Some(plugin_id) = action.strip_prefix("set-registry-enabled:") {
+                let mut entries = read_registry_array_for_fix(root)?;
+                for entry in &mut entries {
+                    if entry.get("pluginId").and_then(Value::as_str) == Some(plugin_id) {
+                        if let Some(object) = entry.as_object_mut() {
+                            object.entry("enabled").or_insert(Value::Bool(true));
+                        }
+                    }
+                }
+                write_registry_array_for_fix(root, entries)?;
+                return Ok(format!("Set enabled=true for `{plugin_id}` where missing."));
+            }
+            if let Some(plugin_id) = action.strip_prefix("set-registry-trusted:") {
+                let mut entries = read_registry_array_for_fix(root)?;
+                for entry in &mut entries {
+                    if entry.get("pluginId").and_then(Value::as_str) == Some(plugin_id) {
+                        if let Some(object) = entry.as_object_mut() {
+                            object.entry("trusted").or_insert(Value::Bool(false));
+                        }
+                    }
+                }
+                write_registry_array_for_fix(root, entries)?;
+                return Ok(format!("Set trusted=false for `{plugin_id}` where missing."));
+            }
+            if let Some(plugin_id) = action.strip_prefix("dedupe-registry:") {
+                let entries = read_registry_array_for_fix(root)?;
+                let mut best: Option<Value> = None;
+                let mut next = Vec::new();
+                for entry in entries {
+                    if entry.get("pluginId").and_then(Value::as_str) == Some(plugin_id) {
+                        if best.as_ref().is_none_or(|current| registry_sort_key(&entry) >= registry_sort_key(current)) {
+                            best = Some(entry);
+                        }
+                    } else {
+                        next.push(entry);
+                    }
+                }
+                if let Some(best) = best {
+                    next.push(best);
+                }
+                write_registry_array_for_fix(root, next)?;
+                return Ok(format!("Deduplicated registry records for `{plugin_id}`."));
+            }
+            if let Some(plugin_dir_name) = action.strip_prefix("add-registry:") {
+                if !is_safe_plugin_id(plugin_dir_name) {
+                    return Err("Unsafe pluginId; registry item not added.".to_string());
+                }
+                let manifest_id = manifest_plugin_id_at(root, plugin_dir_name)
+                    .ok_or_else(|| "Cannot add registry item because manifest is missing or invalid.".to_string())?;
+                let mut entries = read_registry_array_for_fix(root)?;
+                if !entries.iter().any(|entry| entry.get("pluginId").and_then(Value::as_str) == Some(manifest_id.as_str())) {
+                    entries.push(json!({
+                        "pluginId": manifest_id,
+                        "enabled": true,
+                        "trusted": false,
+                        "installedAt": diagnostic_iso_like_time(),
+                        "updatedAt": diagnostic_iso_like_time()
+                    }));
+                    write_registry_array_for_fix(root, entries)?;
+                }
+                return Ok(format!("Added registry item for `{plugin_dir_name}`."));
+            }
+            if let Some(plugin_id) = action.strip_prefix("strip-manifest-lifecycle:") {
+                if !is_safe_plugin_id(plugin_id) {
+                    return Err("Unsafe pluginId; manifest not changed.".to_string());
+                }
+                let manifest_path = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id).join(MANIFEST_FILE_NAME);
+                let raw = fs::read_to_string(&manifest_path).map_err(|error| format!("Failed to read manifest: {error}"))?;
+                let mut manifest: Value = parse_json_without_bom(&raw).map_err(|error| format!("Manifest JSON invalid: {error}"))?;
+                if let Some(object) = manifest.as_object_mut() {
+                    object.remove("trusted");
+                    object.remove("installedAt");
+                    object.remove("updatedAt");
+                }
+                let raw = serde_json::to_string_pretty(&manifest).map_err(|error| format!("Failed to serialize manifest: {error}"))?;
+                fs::write(&manifest_path, raw).map_err(|error| format!("Failed to write manifest: {error}"))?;
+                return Ok(format!("Removed lifecycle fields from `{plugin_id}` manifest."));
+            }
+            if let Some(plugin_id) = action.strip_prefix("quarantine-installed:") {
+                if !is_safe_plugin_id(plugin_id) {
+                    return Err("Unsafe pluginId; directory not quarantined.".to_string());
+                }
+                let source = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id);
+                if !source.exists() {
+                    return Ok("Installed directory already absent.".to_string());
+                }
+                let target_name = format!("{}-{}", plugin_id, diagnostic_timestamp());
+                let target = root.join(USER_PLUGIN_QUARANTINE_DIR).join(&target_name);
+                fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR))
+                    .map_err(|error| format!("Failed to create quarantine directory: {error}"))?;
+                fs::rename(&source, &target).map_err(|error| format!("Failed to move plugin to quarantine: {error}"))?;
+                let entries = read_registry_array_for_fix(root).unwrap_or_default();
+                let next = entries
+                    .into_iter()
+                    .filter(|entry| entry.get("pluginId").and_then(Value::as_str) != Some(plugin_id))
+                    .collect::<Vec<_>>();
+                let _ = write_registry_array_for_fix(root, next);
+                return Ok(format!("Moved plugin directory to {USER_PLUGIN_QUARANTINE_DIR}/{target_name}."));
+            }
+            Err("Unsupported or unsafe diagnostic fix action.".to_string())
+        })();
+        match apply_result {
+            Ok(message) => result.message = message,
+            Err(error) => {
+                result.status = "failed".to_string();
+                result.message = error;
+            }
+        }
+        results.push(result);
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+fn fix_plugin_diagnostics(
+    app: AppHandle,
+    request: PluginDiagnosticFixRequest,
+) -> Result<PluginDiagnosticReport, String> {
+    let root = ensure_user_data_root(&app)?;
+    let actions = request.fix_actions.unwrap_or_default();
+    let results = fix_plugin_diagnostics_at(&root, &actions)?;
+    scan_plugin_diagnostics_at(&root, Some("all"), results)
+}
+
+fn sanitized_diagnostic_report_markdown(report: &PluginDiagnosticReport) -> String {
+    let user_data_dir = report.user_data_dir.replace('\\', "/");
+    let scrub = |value: &str| value.replace(&user_data_dir, "<USER_DATA_DIR>");
+    let mut output = String::new();
+    output.push_str("# Plugin Diagnostics Report\n\n");
+    output.push_str(&format!("Scan ID: `{}`\n\n", report.scan_id));
+    output.push_str(&format!("Scanned at: `{}`\n\n", report.scanned_at));
+    output.push_str("| Metric | Count |\n|---|---:|\n");
+    output.push_str(&format!("| Total | {} |\n", report.summary.total));
+    output.push_str(&format!("| Passed | {} |\n", report.summary.passed));
+    output.push_str(&format!("| Critical | {} |\n", report.summary.critical));
+    output.push_str(&format!("| Error | {} |\n", report.summary.error));
+    output.push_str(&format!("| Warning | {} |\n", report.summary.warning));
+    output.push_str(&format!("| Info | {} |\n", report.summary.info));
+    output.push_str(&format!("| Fixable | {} |\n\n", report.summary.fixable));
+    for severity in [
+        PluginDiagnosticSeverity::Critical,
+        PluginDiagnosticSeverity::Error,
+        PluginDiagnosticSeverity::Warning,
+        PluginDiagnosticSeverity::Info,
+    ] {
+        let title = match severity {
+            PluginDiagnosticSeverity::Critical => "Critical",
+            PluginDiagnosticSeverity::Error => "Error",
+            PluginDiagnosticSeverity::Warning => "Warning",
+            PluginDiagnosticSeverity::Info => "Info",
+        };
+        output.push_str(&format!("## {title}\n\n"));
+        let mut found = false;
+        for item in report.items.iter().filter(|item| item.severity == severity) {
+            found = true;
+            output.push_str(&format!(
+                "- **{}** `{}` pluginId: `{}` category: `{:?}` path: `{}` fixable: `{}`\n  {}\n",
+                item.title,
+                item.id,
+                item.plugin_id.as_deref().unwrap_or("-"),
+                item.category,
+                item.path.as_deref().map(&scrub).unwrap_or_else(|| "-".to_string()),
+                item.fixable,
+                scrub(&item.message)
+            ));
+            if let Some(action) = &item.fix_action {
+                output.push_str(&format!("  Suggested fix: `{action}`\n"));
+            }
+        }
+        if !found {
+            output.push_str("- None\n");
+        }
+        output.push('\n');
+    }
+    if !report.fix_results.is_empty() {
+        output.push_str("## Fix Results\n\n");
+        for result in &report.fix_results {
+            output.push_str(&format!(
+                "- `{}` {}: {}\n",
+                result.action,
+                result.status,
+                scrub(&result.message)
+            ));
+        }
+    }
+    output
+}
+
+#[tauri::command]
+fn export_plugin_diagnostics_report(
+    app: AppHandle,
+    report: PluginDiagnosticReport,
+    format: String,
+) -> Result<String, String> {
+    let root = ensure_user_data_root(&app)?;
+    fs::create_dir_all(root.join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR))
+        .map_err(|error| format!("Failed to create diagnostics report directory: {error}"))?;
+    let timestamp = diagnostic_timestamp();
+    match format.as_str() {
+        "json" => {
+            let path = root.join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR).join(format!("diagnostics-report-{timestamp}.json"));
+            let mut report = report.clone();
+            report.user_data_dir = "<USER_DATA_DIR>".to_string();
+            let raw = serde_json::to_string_pretty(&report).map_err(|error| format!("Failed to serialize JSON report: {error}"))?;
+            fs::write(&path, raw).map_err(|error| format!("Failed to write JSON report: {error}"))?;
+            Ok(path.to_string_lossy().to_string())
+        }
+        "markdown" | "md" => {
+            let path = root.join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR).join(format!("diagnostics-report-{timestamp}.md"));
+            fs::write(&path, sanitized_diagnostic_report_markdown(&report))
+                .map_err(|error| format!("Failed to write Markdown report: {error}"))?;
+            Ok(path.to_string_lossy().to_string())
+        }
+        _ => Err("Unsupported diagnostics report format.".to_string()),
+    }
+}
+
+#[tauri::command]
+fn open_plugin_registry_dir(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    open_directory_path(&root.join("plugins"))
+}
+
+#[tauri::command]
+fn open_plugin_quarantine_dir(app: AppHandle) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR))
+        .map_err(|error| format!("Failed to create quarantine directory: {error}"))?;
+    open_directory_path(&root.join(USER_PLUGIN_QUARANTINE_DIR))
+}
+
 #[tauri::command]
 fn open_plugin_manifest_dir(app: AppHandle, plugin_id: String) -> Result<(), String> {
     if !is_safe_plugin_id(&plugin_id) {
@@ -5052,6 +6419,11 @@ fn main() {
             open_plugin_manifest_dir,
             scan_installed_plugin_manifests,
             reload_plugins_from_disk,
+            scan_plugin_diagnostics,
+            fix_plugin_diagnostics,
+            export_plugin_diagnostics_report,
+            open_plugin_registry_dir,
+            open_plugin_quarantine_dir,
             open_plugin_import_with_dialog,
             install_plugin_package,
             export_plugin_package,
@@ -7434,6 +8806,405 @@ fn main() {
         assert!(inspect_plugin_package(&package)
             .expect_err("non-exe executable should fail")
             .contains("entry 必须是 .exe"));
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    fn diagnostic_fix_actions_for_tests(report: &PluginDiagnosticReport) -> Vec<String> {
+        let mut actions = report
+            .items
+            .iter()
+            .filter_map(|item| item.fix_action.clone())
+            .collect::<Vec<_>>();
+        actions.sort();
+        actions.dedup();
+        actions
+    }
+
+    #[test]
+    fn plugin_diagnostics_detects_registry_states_and_bom() {
+        let root = test_root("diagnostics-registry");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+
+        let missing = scan_plugin_diagnostics_at(&root, Some("registry"), vec![])
+            .expect("diagnostics should scan missing registry");
+        assert!(missing.items.iter().any(|item| {
+            item.title == "Registry missing" && item.fix_action.as_deref() == Some("create-registry")
+        }));
+
+        fs::write(root.join(USER_PLUGIN_REGISTRY_PATH), "{broken")
+            .expect("damaged registry should be written");
+        let damaged = scan_plugin_diagnostics_at(&root, Some("registry"), vec![])
+            .expect("diagnostics should report damaged registry");
+        assert!(damaged.items.iter().any(|item| {
+            item.title == "Registry JSON damaged"
+                && item.severity == PluginDiagnosticSeverity::Critical
+        }));
+
+        let registry = json!([
+            { "pluginId": "localmindmap.test.orphan", "installedAt": "2026-07-01T00:00:00.000Z" },
+            { "pluginId": "localmindmap.test.duplicate", "enabled": true, "trusted": false, "updatedAt": "2026-07-01T00:00:00.000Z" },
+            { "pluginId": "localmindmap.test.duplicate", "enabled": false, "trusted": true, "updatedAt": "2026-07-02T00:00:00.000Z" }
+        ]);
+        fs::write(
+            root.join(USER_PLUGIN_REGISTRY_PATH),
+            format!("\u{feff}{}", registry),
+        )
+        .expect("BOM registry should be written");
+        let report = scan_plugin_diagnostics_at(&root, Some("registry"), vec![])
+            .expect("diagnostics should parse BOM registry");
+        assert!(report.items.iter().any(|item| item.title == "Registry orphan record"));
+        assert!(report.items.iter().any(|item| item.title == "Registry enabled missing"));
+        assert!(report.items.iter().any(|item| item.title == "Registry trusted missing"));
+        assert!(report.items.iter().any(|item| item.title == "Duplicate registry pluginId"));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_diagnostics_fixes_registry_and_installed_orphans_with_backup() {
+        let root = test_root("diagnostics-fix");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        let plugin_id = "localmindmap.test.valid-installed";
+        let plugin_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id);
+        fs::create_dir_all(&plugin_dir).expect("installed plugin dir should exist");
+        fs::write(
+            plugin_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&test_declarative_plugin(plugin_id))
+                .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        let missing_state_id = "localmindmap.test.missing-state";
+        let missing_state_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(missing_state_id);
+        fs::create_dir_all(&missing_state_dir).expect("installed plugin dir should exist");
+        fs::write(
+            missing_state_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&test_declarative_plugin(missing_state_id))
+                .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        fs::write(
+            root.join(USER_PLUGIN_REGISTRY_PATH),
+            serde_json::to_vec_pretty(&json!([
+                { "pluginId": "localmindmap.test.registry-orphan", "enabled": true, "trusted": false },
+                { "pluginId": missing_state_id }
+            ]))
+            .expect("registry should serialize"),
+        )
+        .expect("registry should be written");
+
+        let report = scan_plugin_diagnostics_at(&root, Some("all"), vec![])
+            .expect("diagnostics should scan");
+        let actions = diagnostic_fix_actions_for_tests(&report);
+        assert!(actions.contains(&"add-registry:localmindmap.test.valid-installed".to_string()));
+        assert!(actions.contains(&"remove-registry-orphan:localmindmap.test.registry-orphan".to_string()));
+        let results = fix_plugin_diagnostics_at(&root, &actions)
+            .expect("diagnostics fixes should apply");
+        assert!(results.iter().all(|result| result.backup_path.is_some()));
+        assert!(root.join(USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR).is_dir());
+
+        let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
+            .expect("registry should be readable");
+        assert!(plugin_registry_contains(&registry, plugin_id).expect("registry should parse"));
+        assert!(!plugin_registry_contains(&registry, "localmindmap.test.registry-orphan")
+            .expect("registry should parse"));
+        let missing_state = registry
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("pluginId").and_then(Value::as_str)
+                        == Some("localmindmap.test.missing-state")
+                })
+            })
+            .expect("missing-state item should remain");
+        assert_eq!(missing_state["enabled"], true);
+        assert_eq!(missing_state["trusted"], false);
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_diagnostics_detects_installed_manifest_entry_and_lifecycle() {
+        let root = test_root("diagnostics-installed");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &json!([]))
+            .expect("registry should be written");
+
+        let lifecycle_id = "localmindmap.test.lifecycle";
+        let lifecycle_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(lifecycle_id);
+        fs::create_dir_all(&lifecycle_dir).expect("plugin dir should exist");
+        let mut manifest = test_script_plugin(lifecycle_id);
+        manifest["trusted"] = json!(true);
+        manifest["installedAt"] = json!("2026-07-01T00:00:00.000Z");
+        manifest["updatedAt"] = json!("2026-07-02T00:00:00.000Z");
+        fs::write(
+            lifecycle_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        fs::write(lifecycle_dir.join("main.js"), "export default {};")
+            .expect("entry should be written");
+
+        let unsafe_id = "localmindmap.test.unsafe-entry";
+        let unsafe_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(unsafe_id);
+        fs::create_dir_all(&unsafe_dir).expect("plugin dir should exist");
+        let mut unsafe_manifest = test_script_plugin(unsafe_id);
+        unsafe_manifest["entry"] = json!("../main.js");
+        fs::write(
+            unsafe_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&unsafe_manifest).expect("manifest should serialize"),
+        )
+        .expect("unsafe manifest should be written");
+
+        let exe_id = "localmindmap.test.bad-exe";
+        let exe_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(exe_id);
+        fs::create_dir_all(&exe_dir).expect("plugin dir should exist");
+        fs::write(
+            exe_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&test_external_executable_plugin(exe_id, "plugin.bin"))
+                .expect("manifest should serialize"),
+        )
+        .expect("exe manifest should be written");
+        fs::write(exe_dir.join("plugin.bin"), "binary").expect("entry should be written");
+
+        let report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
+            .expect("diagnostics should scan installed plugins");
+        assert!(report.items.iter().any(|item| item.title == "Manifest contains lifecycle field"));
+        assert!(report.items.iter().any(|item| {
+            item.title == "Entry path is unsafe"
+                && item.severity == PluginDiagnosticSeverity::Critical
+        }));
+        assert!(report.items.iter().any(|item| item.title == "Executable entry is not .exe"));
+
+        fix_plugin_diagnostics_at(
+            &root,
+            &[format!("strip-manifest-lifecycle:{lifecycle_id}")],
+        )
+        .expect("lifecycle fix should apply");
+        let stripped: Value = parse_json_without_bom(
+            &fs::read_to_string(lifecycle_dir.join(MANIFEST_FILE_NAME))
+                .expect("manifest should be readable"),
+        )
+        .expect("manifest should parse");
+        assert!(stripped.get("trusted").is_none());
+        assert!(stripped.get("installedAt").is_none());
+        assert!(stripped.get("updatedAt").is_none());
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    fn write_installed_test_plugin(root: &Path, plugin_id: &str, manifest: &Value) -> PathBuf {
+        let plugin_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id);
+        fs::create_dir_all(&plugin_dir).expect("plugin dir should exist");
+        fs::write(
+            plugin_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(manifest).expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        if manifest.get("entry").and_then(Value::as_str) == Some("main.js") {
+            fs::write(plugin_dir.join("main.js"), "export default {};")
+                .expect("entry should be written");
+        }
+        plugin_dir
+    }
+
+    fn has_lifecycle_diagnostic(
+        report: &PluginDiagnosticReport,
+        plugin_id: &str,
+        field: Option<&str>,
+    ) -> bool {
+        report.items.iter().any(|item| {
+            item.title == "Manifest contains lifecycle field"
+                && item.plugin_id.as_deref() == Some(plugin_id)
+                && field.map(|field| item.message.contains(field)).unwrap_or(true)
+        })
+    }
+
+    #[test]
+    fn plugin_diagnostics_lifecycle_detection_only_checks_manifest_top_level_keys() {
+        let root = test_root("diagnostics-lifecycle-top-level");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &json!([]))
+            .expect("registry should be written");
+
+        let trusted_id = "localmindmap.test.lifecycle.top.trusted";
+        let mut trusted_manifest = test_script_plugin(trusted_id);
+        trusted_manifest["trusted"] = json!(true);
+        write_installed_test_plugin(&root, trusted_id, &trusted_manifest);
+
+        let installed_at_id = "localmindmap.test.lifecycle.top.installedAt";
+        let mut installed_at_manifest = test_script_plugin(installed_at_id);
+        installed_at_manifest["installedAt"] = json!("2026-07-01T00:00:00.000Z");
+        write_installed_test_plugin(&root, installed_at_id, &installed_at_manifest);
+
+        let updated_at_id = "localmindmap.test.lifecycle.top.updatedAt";
+        let mut updated_at_manifest = test_script_plugin(updated_at_id);
+        updated_at_manifest["updatedAt"] = json!("2026-07-02T00:00:00.000Z");
+        write_installed_test_plugin(&root, updated_at_id, &updated_at_manifest);
+
+        let description_id = "localmindmap.test.lifecycle.description.only";
+        let mut description_manifest = test_script_plugin(description_id);
+        description_manifest["description"] =
+            json!("用于验证 manifest 中 trusted / installedAt / updatedAt 会被诊断并移除。");
+        write_installed_test_plugin(&root, description_id, &description_manifest);
+
+        let label_id = "localmindmap.test.lifecycle.contribution.label";
+        let mut label_manifest = test_script_plugin(label_id);
+        label_manifest["contributions"]["menus"][0]["label"] =
+            json!("trusted label should not be lifecycle state");
+        write_installed_test_plugin(&root, label_id, &label_manifest);
+
+        let report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
+            .expect("diagnostics should scan installed plugins");
+
+        assert!(has_lifecycle_diagnostic(&report, trusted_id, Some("trusted")));
+        assert!(has_lifecycle_diagnostic(
+            &report,
+            installed_at_id,
+            Some("installedAt")
+        ));
+        assert!(has_lifecycle_diagnostic(
+            &report,
+            updated_at_id,
+            Some("updatedAt")
+        ));
+        assert!(!has_lifecycle_diagnostic(&report, description_id, None));
+        assert!(!has_lifecycle_diagnostic(&report, label_id, None));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_diagnostics_lifecycle_fix_preserves_manifest_text_fields_and_rescan_is_clean() {
+        let root = test_root("diagnostics-lifecycle-fix-description");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &json!([]))
+            .expect("registry should be written");
+
+        let plugin_id = "localmindmap.diagnostics.test.lifecycle.in.manifest";
+        let description = "用于验证 manifest 中 trusted / installedAt / updatedAt 会被诊断并移除。";
+        let mut manifest = test_script_plugin(plugin_id);
+        manifest["description"] = json!(description);
+        manifest["trusted"] = json!(true);
+        manifest["installedAt"] = json!("2026-07-01T00:00:00.000Z");
+        manifest["updatedAt"] = json!("2026-07-02T00:00:00.000Z");
+        let plugin_dir = write_installed_test_plugin(&root, plugin_id, &manifest);
+
+        let initial_report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
+            .expect("diagnostics should scan installed plugins");
+        assert!(has_lifecycle_diagnostic(&initial_report, plugin_id, Some("trusted")));
+        assert!(has_lifecycle_diagnostic(
+            &initial_report,
+            plugin_id,
+            Some("installedAt")
+        ));
+        assert!(has_lifecycle_diagnostic(
+            &initial_report,
+            plugin_id,
+            Some("updatedAt")
+        ));
+
+        fix_plugin_diagnostics_at(&root, &[format!("strip-manifest-lifecycle:{plugin_id}")])
+            .expect("lifecycle fix should apply");
+
+        let stripped: Value = parse_json_without_bom(
+            &fs::read_to_string(plugin_dir.join(MANIFEST_FILE_NAME))
+                .expect("manifest should be readable"),
+        )
+        .expect("manifest should parse");
+        assert!(stripped.get("trusted").is_none());
+        assert!(stripped.get("installedAt").is_none());
+        assert!(stripped.get("updatedAt").is_none());
+        assert_eq!(stripped.get("description").and_then(Value::as_str), Some(description));
+
+        let clean_report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
+            .expect("diagnostics should scan installed plugins");
+        assert!(!has_lifecycle_diagnostic(&clean_report, plugin_id, None));
+
+        let mut restored = stripped;
+        restored["trusted"] = json!(true);
+        fs::write(
+            plugin_dir.join(MANIFEST_FILE_NAME),
+            serde_json::to_vec_pretty(&restored).expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        let restored_report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
+            .expect("diagnostics should scan installed plugins");
+        assert!(has_lifecycle_diagnostic(&restored_report, plugin_id, Some("trusted")));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_diagnostics_lifecycle_handles_damaged_json_and_bom_manifests() {
+        let root = test_root("diagnostics-lifecycle-bom-damaged");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &json!([]))
+            .expect("registry should be written");
+
+        let damaged_id = "localmindmap.test.lifecycle.damaged";
+        let damaged_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(damaged_id);
+        fs::create_dir_all(&damaged_dir).expect("plugin dir should exist");
+        fs::write(damaged_dir.join(MANIFEST_FILE_NAME), "{broken")
+            .expect("damaged manifest should be written");
+
+        let bom_id = "localmindmap.test.lifecycle.bom";
+        let bom_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(bom_id);
+        fs::create_dir_all(&bom_dir).expect("plugin dir should exist");
+        let mut bom_manifest = test_script_plugin(bom_id);
+        bom_manifest["description"] =
+            json!("trusted / installedAt / updatedAt appear here as ordinary text.");
+        bom_manifest["trusted"] = json!(true);
+        let mut bom_manifest_text =
+            serde_json::to_string_pretty(&bom_manifest).expect("manifest should serialize");
+        bom_manifest_text.insert(0, '\u{feff}');
+        fs::write(bom_dir.join(MANIFEST_FILE_NAME), bom_manifest_text)
+            .expect("BOM manifest should be written");
+        fs::write(bom_dir.join("main.js"), "export default {};")
+            .expect("entry should be written");
+
+        let report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
+            .expect("diagnostics should scan installed plugins");
+
+        assert!(report.items.iter().any(|item| {
+            item.title == "Installed manifest JSON damaged"
+                && item.plugin_id.as_deref() == Some(damaged_id)
+        }));
+        assert!(has_lifecycle_diagnostic(&report, bom_id, Some("trusted")));
+        assert!(!has_lifecycle_diagnostic(&report, bom_id, Some("installedAt")));
+        assert!(!has_lifecycle_diagnostic(&report, bom_id, Some("updatedAt")));
+
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn plugin_diagnostics_scans_dev_gallery_package_and_sanitizes_markdown() {
+        let root = test_root("diagnostics-dev-gallery");
+        ensure_user_data_dirs_at(&root).expect("user directories should exist");
+        write_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, &json!([]))
+            .expect("registry should be written");
+        let dev_id = "localmindmap.user.diag-script";
+        create_dev_plugin_project_at(&root, &dev_project_request(dev_id, "script"))
+            .expect("dev project should be created");
+        fs::remove_file(
+            root.join(USER_PLUGIN_DEV_DIR)
+                .join(dev_id)
+                .join("README.md"),
+        )
+        .expect("README should be removed");
+
+        let report = scan_plugin_diagnostics_at(&root, Some("all"), vec![])
+            .expect("diagnostics should scan all scopes");
+        assert!(report.counts.dev_projects >= 1);
+        assert!(report.counts.gallery_examples >= 1);
+        assert!(report.items.iter().any(|item| item.title == "Dev readme-missing"));
+        assert!(report.items.iter().any(|item| item.category == PluginDiagnosticCategory::Package));
+
+        let markdown = sanitized_diagnostic_report_markdown(&report);
+        assert!(markdown.contains("Plugin Diagnostics Report"));
+        assert!(!markdown.contains(&root.to_string_lossy().to_string()));
+        assert!(!markdown.contains("async function run(context)"));
+        assert!(!markdown.contains("sys.stdin"));
+
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
 }

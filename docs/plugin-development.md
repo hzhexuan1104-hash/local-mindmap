@@ -1042,3 +1042,63 @@ print(json.dumps({"actions": []}, ensure_ascii=False))
 
 工作台操作会写入开发者日志：项目创建、manifest 校验、校验失败、包构建、
 构建失败和打包结果导入验证。
+## 插件诊断中心
+
+插件诊断中心位于插件管理器的“开发者模式”中，用于一键扫描本地插件生态健康状态。诊断中心只读取本机文件，不联网、不上传报告、不执行插件代码，也不会读取或导出用户导图内容。
+
+### 扫描范围
+
+- `plugins/plugin-registry.json`
+- `plugins/installed/`
+- `plugins/dev/`
+- `docs/examples/plugin-gallery/catalog.json`
+- `docs/examples/plugin-gallery/*/manifest.json`
+- `.lmplugin` 导入导出基础能力
+
+用户数据目录仍为 `%APPDATA%/com.localmindmap.desktop`。诊断报告中尽量使用相对路径；Markdown 导出默认将用户数据目录脱敏为 `<USER_DATA_DIR>`。
+
+### registry 与 installed 的关系
+
+`plugins/plugin-registry.json` 保存插件生命周期状态，例如 `enabled`、`trusted`、`installedAt` 和 `updatedAt`。`plugins/installed/<pluginId>/manifest.json` 保存可分发的插件声明。manifest 中不应该包含 `trusted`、`installedAt`、`updatedAt` 等生命周期字段。
+
+registry 孤儿记录是指 registry 中存在插件记录，但 `plugins/installed/<pluginId>/` 不存在。installed 孤儿目录是指 `plugins/installed/<pluginId>/` 存在有效 manifest，但 registry 中没有对应记录。
+
+### 常见诊断问题
+
+- registry 缺失、JSON 损坏、不是数组、重复 pluginId。
+- registry 项缺少 `enabled` 或 `trusted`。
+- installed 插件 manifest 缺失、JSON 损坏、schema errors。
+- entry 缺失、包含 `..`、绝对路径、URL、ADS 或 executable 非 `.exe`。
+- manifest 中出现 `shell`、`commandLine`、`args` 等危险字段。
+- dev 项目 manifest 或 entry 不完整，导致不可打包。
+- gallery catalog 路径非法、manifest 缺失、README 缺失或 riskLevel 缺失。
+
+### 自动修复
+
+诊断中心支持安全修复：
+
+- 创建缺失的 `plugin-registry.json`。
+- 移除 registry 孤儿记录。
+- 补齐 registry `enabled=true`。
+- 补齐 registry `trusted=false`。
+- 去重 registry 重复 pluginId，保留最新 `updatedAt` 或 `installedAt`。
+- 为有效 installed 插件补 registry 项。
+- 从 manifest 中移除 `trusted`、`installedAt`、`updatedAt`。
+- 将 manifest 缺失或损坏的 installed 目录移动到 `plugins/quarantine/`。
+
+修复前会先创建备份：`plugins/backups/diagnostics/<timestamp>/`。备份至少包含 registry、将修改的 manifest，以及目录移动记录。修复完成后会自动重新扫描。critical 风险项、危险路径、shell/commandLine/args 等问题默认不自动修复，需要用户手动卸载、隔离或重新安装插件。
+
+### quarantine 隔离区
+
+隔离区目录为 `plugins/quarantine/`。隔离会保留原目录内容，目标目录名包含原 pluginId 和时间戳。当前版本不提供自动恢复按钮，如需恢复，可手动检查隔离目录内容，修复 manifest 后再重新安装或移回 installed 目录。
+
+### 报告导出
+
+诊断中心可导出：
+
+- `diagnostics-report.json`
+- `diagnostics-report.md`
+
+JSON 报告包含 `scanId`、`scannedAt`、`appVersion`、`userDataDir`、`summary`、`counts`、`items`、`fixResults`。Markdown 报告包含标题、扫描时间、汇总表、critical/error/warning/info 分组、pluginId、category、path、message、fixable 和修复建议。
+
+报告不会导出插件源码内容，不会导出 `main.py` / `main.js` 内容，也不会导出用户导图内容。

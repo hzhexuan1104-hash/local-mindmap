@@ -30,6 +30,11 @@ export const USER_DATA_COMMANDS = {
   openPluginManifestDir: 'open_plugin_manifest_dir',
   scanInstalledPluginManifests: 'scan_installed_plugin_manifests',
   reloadPluginsFromDisk: 'reload_plugins_from_disk',
+  scanPluginDiagnostics: 'scan_plugin_diagnostics',
+  fixPluginDiagnostics: 'fix_plugin_diagnostics',
+  exportPluginDiagnosticsReport: 'export_plugin_diagnostics_report',
+  openPluginRegistryDir: 'open_plugin_registry_dir',
+  openPluginQuarantineDir: 'open_plugin_quarantine_dir',
 } as const;
 
 export const USER_DATA_PATHS = {
@@ -58,6 +63,81 @@ export type InstalledPluginScanEntry = {
 export type PluginDiskSnapshot = {
   registry: unknown;
   installedManifests: InstalledPluginScanEntry[];
+};
+
+export type PluginDiagnosticSeverity =
+  | 'info'
+  | 'warning'
+  | 'error'
+  | 'critical';
+
+export type PluginDiagnosticStatus =
+  | 'passed'
+  | 'failed'
+  | 'fixable'
+  | 'fixed'
+  | 'skipped';
+
+export type PluginDiagnosticCategory =
+  | 'registry'
+  | 'installed'
+  | 'manifest'
+  | 'entry'
+  | 'security'
+  | 'dev'
+  | 'gallery'
+  | 'package'
+  | 'runtime';
+
+export type PluginDiagnosticItem = {
+  id: string;
+  severity: PluginDiagnosticSeverity;
+  status: PluginDiagnosticStatus;
+  category: PluginDiagnosticCategory;
+  pluginId?: string | null;
+  title: string;
+  message: string;
+  path?: string | null;
+  fixAction?: string | null;
+  fixable: boolean;
+  createdAt: string;
+};
+
+export type PluginDiagnosticSummary = {
+  total: number;
+  passed: number;
+  warning: number;
+  error: number;
+  critical: number;
+  info: number;
+  fixable: number;
+};
+
+export type PluginDiagnosticCounts = {
+  totalPlugins: number;
+  installedPlugins: number;
+  registryRecords: number;
+  devProjects: number;
+  galleryExamples: number;
+};
+
+export type PluginDiagnosticFixResult = {
+  action: string;
+  pluginId?: string | null;
+  status: string;
+  message: string;
+  backupPath?: string | null;
+};
+
+export type PluginDiagnosticReport = {
+  scanId: string;
+  scannedAt: string;
+  appVersion: string;
+  userDataDir: string;
+  summary: PluginDiagnosticSummary;
+  counts: PluginDiagnosticCounts;
+  items: PluginDiagnosticItem[];
+  fixResults: PluginDiagnosticFixResult[];
 };
 
 export type SamplePluginCreationResult = {
@@ -780,6 +860,55 @@ export async function reloadPluginsFromDisk(): Promise<PluginDiskSnapshot> {
     registry,
     installedManifests: await scanInstalledPluginManifests(pluginIds),
   };
+}
+
+export async function scanPluginDiagnostics(scope = 'all') {
+  if (!isDesktopRuntime()) {
+    throw new Error('插件诊断中心仅在桌面端可用。');
+  }
+  return invokeUserDataCommand<PluginDiagnosticReport>(
+    USER_DATA_COMMANDS.scanPluginDiagnostics,
+    { scope },
+  );
+}
+
+export async function fixPluginDiagnostics(fixActions: string[]) {
+  if (!isDesktopRuntime()) {
+    throw new Error('插件诊断修复仅在桌面端可用。');
+  }
+  return invokeUserDataCommand<PluginDiagnosticReport>(
+    USER_DATA_COMMANDS.fixPluginDiagnostics,
+    { request: { fixActions } },
+  );
+}
+
+export async function exportPluginDiagnosticsReport(
+  report: PluginDiagnosticReport,
+  format: 'json' | 'markdown',
+) {
+  if (!isDesktopRuntime()) {
+    throw new Error('插件诊断报告导出仅在桌面端可用。');
+  }
+  return invokeUserDataCommand<string>(
+    USER_DATA_COMMANDS.exportPluginDiagnosticsReport,
+    { report, format },
+  );
+}
+
+export async function openPluginRegistryDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginRegistryDir);
+  return true;
+}
+
+export async function openPluginQuarantineDir() {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openPluginQuarantineDir);
+  return true;
 }
 
 export type UserDataMigrationResult = {

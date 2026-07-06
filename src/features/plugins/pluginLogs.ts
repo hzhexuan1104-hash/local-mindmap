@@ -67,7 +67,9 @@ export type PluginLogEvent =
   | 'dev-package-built'
   | 'dev-package-import-verified'
   | 'dev-project-validation-failed'
-  | 'dev-package-build-failed';
+  | 'dev-package-build-failed'
+  | 'diagnostics-scan'
+  | 'diagnostics-fix';
 
 export type PluginLogEntry = {
   id: string;
