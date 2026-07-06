@@ -249,6 +249,7 @@ import {
   readUserText,
   resolveUserDataPath,
   uninstallPluginFromUserDir,
+  type PluginDiagnosticFixResult,
 } from '../features/storage/userDataStorage';
 import type {
   MindmapNode,
@@ -1999,6 +2000,31 @@ export function App() {
         `打开插件开发目录失败：${getErrorMessage(error, '未知错误')}`,
       );
     }
+  };
+
+  const handleDiagnosticFixResults = (
+    results: PluginDiagnosticFixResult[],
+  ) => {
+    if (results.length === 0) {
+      return;
+    }
+    setPluginLogs((currentLogs) =>
+      results.reduce((logs, result) => {
+        const level: PluginLogLevel =
+          result.status === 'fixed' ? 'info' : 'error';
+        return appendPluginLog(
+          logs,
+          createPluginLog({
+            level,
+            event: 'diagnostics-fix',
+            pluginId: result.pluginId ?? undefined,
+            message: `${result.action}: ${result.message}${
+              result.backupPath ? ` backup=${result.backupPath}` : ''
+            }`,
+          }),
+        );
+      }, currentLogs),
+    );
   };
 
   const handleCreateDevPluginProject = async (
@@ -5295,6 +5321,7 @@ export function App() {
           onCleanRecord={(pluginId) =>
             void handleCleanPluginRecord(pluginId)
           }
+          onDiagnosticFixResults={handleDiagnosticFixResults}
           logs={pluginLogs}
           onClearLogs={() => setPluginLogs(clearPluginLogs())}
         />

@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { PluginCategory, PluginManifest } from './plugins';
 import { resolveUserDataPath } from '../storage/userDataStorage';
+import {
+  exportPluginDiagnosticsReport,
+  fixPluginDiagnostics,
+  openPluginQuarantineDir,
+  openPluginRegistryDir,
+  scanPluginDiagnostics,
+  type PluginDiagnosticCategory,
+  type PluginDiagnosticItem,
+  type PluginDiagnosticFixResult,
+  type PluginDiagnosticReport,
+  type PluginDiagnosticSeverity,
+} from '../storage/userDataStorage';
 import type { PluginLogEntry } from '../plugins/pluginLogs';
 import {
   filterPluginGalleryItems,
@@ -103,6 +115,7 @@ type PluginManagerPanelProps = {
   onReload: () => void;
   onRepairRegistry: (pluginId: string) => void;
   onCleanRecord: (pluginId: string) => void;
+  onDiagnosticFixResults?: (results: PluginDiagnosticFixResult[]) => void;
   logs: PluginLogEntry[];
   onClearLogs: () => void;
 };
@@ -116,6 +129,67 @@ const CATEGORY_OPTIONS: Array<{ value: '' | PluginCategory; label: string }> = [
   { value: 'template', label: '模板包' },
   { value: 'tool', label: '工具' },
 ];
+
+const DIAGNOSTIC_SEVERITY_OPTIONS: Array<{
+  value: '' | PluginDiagnosticSeverity;
+  label: string;
+}> = [
+  { value: '', label: '全部 severity' },
+  { value: 'critical', label: 'critical' },
+  { value: 'error', label: 'error' },
+  { value: 'warning', label: 'warning' },
+  { value: 'info', label: 'info' },
+];
+
+const DIAGNOSTIC_CATEGORY_OPTIONS: Array<{
+  value: '' | PluginDiagnosticCategory;
+  label: string;
+}> = [
+  { value: '', label: '全部 category' },
+  { value: 'registry', label: 'registry' },
+  { value: 'installed', label: 'installed' },
+  { value: 'manifest', label: 'manifest' },
+  { value: 'entry', label: 'entry' },
+  { value: 'security', label: 'security' },
+  { value: 'dev', label: 'dev' },
+  { value: 'gallery', label: 'gallery' },
+  { value: 'package', label: 'package' },
+  { value: 'runtime', label: 'runtime' },
+];
+
+function filterDiagnosticItems(
+  items: PluginDiagnosticItem[],
+  severity: '' | PluginDiagnosticSeverity,
+  category: '' | PluginDiagnosticCategory,
+  keyword: string,
+) {
+  const query = keyword.trim().toLowerCase();
+  return items.filter((item) => {
+    if (severity && item.severity !== severity) return false;
+    if (category && item.category !== category) return false;
+    if (!query) return true;
+    return [
+      item.pluginId ?? '',
+      item.title,
+      item.message,
+      item.path ?? '',
+      item.fixAction ?? '',
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(query);
+  });
+}
+
+function diagnosticFixActions(report: PluginDiagnosticReport | null) {
+  return Array.from(
+    new Set(
+      (report?.items ?? [])
+        .filter((item) => item.fixable && item.fixAction)
+        .map((item) => item.fixAction as string),
+    ),
+  );
+}
 
 function countContributions(plugin: PluginManifest) {
   if (!plugin.contributions) {
@@ -328,6 +402,7 @@ export function PluginManagerPanel({
   onReload,
   onRepairRegistry,
   onCleanRecord,
+  onDiagnosticFixResults,
   logs,
   onClearLogs,
 }: PluginManagerPanelProps) {
@@ -344,6 +419,15 @@ export function PluginManagerPanel({
   const [galleryKeyword, setGalleryKeyword] = useState('');
   const [galleryCategory, setGalleryCategory] = useState('');
   const [galleryType, setGalleryType] = useState('');
+  const [diagnosticReport, setDiagnosticReport] =
+    useState<PluginDiagnosticReport | null>(null);
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticError, setDiagnosticError] = useState('');
+  const [diagnosticSeverity, setDiagnosticSeverity] =
+    useState<'' | PluginDiagnosticSeverity>('');
+  const [diagnosticCategory, setDiagnosticCategory] =
+    useState<'' | PluginDiagnosticCategory>('');
+  const [diagnosticKeyword, setDiagnosticKeyword] = useState('');
 
   const refreshGallery = async () => {
     setGalleryLoading(true);
@@ -351,6 +435,63 @@ export function PluginManagerPanel({
       setGalleryCatalog(await loadPluginGalleryCatalog());
     } finally {
       setGalleryLoading(false);
+    }
+  };
+
+  const runDiagnostics = async (scope = 'all') => {
+    if (!isDesktopApp) {
+      setDiagnosticError('插件诊断中心仅在桌面端可用。');
+      return;
+    }
+    setDiagnosticLoading(true);
+    setDiagnosticError('');
+    try {
+      setDiagnosticReport(await scanPluginDiagnostics(scope));
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  };
+
+  const runDiagnosticFix = async (actions: string[]) => {
+    if (!isDesktopApp || actions.length === 0) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `将修复 ${actions.length} 个可修复诊断项。修复前会创建备份，critical 危险项不会自动修复。是否继续？`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setDiagnosticLoading(true);
+    setDiagnosticError('');
+    try {
+      const report = await fixPluginDiagnostics(actions);
+      setDiagnosticReport(report);
+      onDiagnosticFixResults?.(report.fixResults);
+      onReload();
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  };
+
+  const exportDiagnostics = async (format: 'json' | 'markdown') => {
+    if (!diagnosticReport) {
+      setDiagnosticError('请先扫描再导出诊断报告。');
+      return;
+    }
+    setDiagnosticLoading(true);
+    setDiagnosticError('');
+    try {
+      const path = await exportPluginDiagnosticsReport(diagnosticReport, format);
+      setDiagnosticError(`诊断报告已导出：${path}`);
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDiagnosticLoading(false);
     }
   };
 
@@ -389,6 +530,25 @@ export function PluginManagerPanel({
         galleryType,
       ),
     [galleryCatalog, galleryCategory, galleryKeyword, galleryType],
+  );
+  const visibleDiagnosticItems = useMemo(
+    () =>
+      filterDiagnosticItems(
+        diagnosticReport?.items ?? [],
+        diagnosticSeverity,
+        diagnosticCategory,
+        diagnosticKeyword,
+      ),
+    [
+      diagnosticReport?.items,
+      diagnosticCategory,
+      diagnosticKeyword,
+      diagnosticSeverity,
+    ],
+  );
+  const allDiagnosticFixActions = useMemo(
+    () => diagnosticFixActions(diagnosticReport),
+    [diagnosticReport],
   );
 
   return (
@@ -491,6 +651,136 @@ export function PluginManagerPanel({
                   onOpenExportLocation ?? (() => undefined)
                 }
               />
+              <section className="plugin-diagnostics-center">
+                <div className="plugin-section-heading">
+                  <div>
+                    <h3>插件诊断中心</h3>
+                    <p>本地扫描 registry、installed、dev、gallery 和 .lmplugin 能力；不联网、不上传报告、不执行插件代码。</p>
+                  </div>
+                  <div className="plugin-manager-actions">
+                    <button type="button" onClick={() => void runDiagnostics('all')} disabled={diagnosticLoading || !isDesktopApp}>
+                      一键扫描插件
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={() => void runDiagnosticFix(allDiagnosticFixActions)}
+                      disabled={diagnosticLoading || allDiagnosticFixActions.length === 0 || !isDesktopApp}
+                    >
+                      一键修复可修复问题
+                    </button>
+                  </div>
+                </div>
+                <div className="plugin-manager-actions plugin-diagnostics-actions">
+                  <button type="button" className="secondary-action" onClick={() => void runDiagnostics('installed')} disabled={diagnosticLoading || !isDesktopApp}>扫描已安装插件</button>
+                  <button type="button" className="secondary-action" onClick={() => void runDiagnostics('registry')} disabled={diagnosticLoading || !isDesktopApp}>扫描 registry</button>
+                  <button type="button" className="secondary-action" onClick={() => void runDiagnostics('dev')} disabled={diagnosticLoading || !isDesktopApp}>扫描开发项目</button>
+                  <button type="button" className="secondary-action" onClick={() => void runDiagnostics('gallery')} disabled={diagnosticLoading || !isDesktopApp}>扫描本地插件中心</button>
+                  <button type="button" className="secondary-action" onClick={() => void runDiagnostics('all')} disabled={diagnosticLoading || !isDesktopApp}>查看诊断报告</button>
+                  <button type="button" className="secondary-action" onClick={() => void exportDiagnostics('json')} disabled={!diagnosticReport || diagnosticLoading}>导出 JSON 报告</button>
+                  <button type="button" className="secondary-action" onClick={() => void exportDiagnostics('markdown')} disabled={!diagnosticReport || diagnosticLoading}>导出 Markdown 报告</button>
+                  <button type="button" className="secondary-action" onClick={() => void runDiagnosticFix(allDiagnosticFixActions)} disabled={diagnosticLoading || allDiagnosticFixActions.length === 0 || !isDesktopApp}>清理异常记录</button>
+                  <button type="button" className="secondary-action" onClick={onOpenPluginDir} disabled={!isDesktopApp}>打开插件目录</button>
+                  <button type="button" className="secondary-action" onClick={() => void openPluginRegistryDir()} disabled={!isDesktopApp}>打开 registry 文件所在目录</button>
+                  <button type="button" className="secondary-action" onClick={() => void openPluginQuarantineDir()} disabled={!isDesktopApp}>打开隔离目录</button>
+                </div>
+                {diagnosticError ? (
+                  <div className="plugin-install-error" role="alert">
+                    <strong>诊断中心消息</strong>
+                    <p>{diagnosticError}</p>
+                  </div>
+                ) : null}
+                {diagnosticReport ? (
+                  <>
+                    <div className="plugin-diagnostics-summary">
+                      <span>scanId: {diagnosticReport.scanId}</span>
+                      <span>最近扫描时间: {new Date(diagnosticReport.scannedAt).toLocaleString()}</span>
+                      <span>总插件数: {diagnosticReport.counts.totalPlugins}</span>
+                      <span>installed 插件数: {diagnosticReport.counts.installedPlugins}</span>
+                      <span>registry 记录数: {diagnosticReport.counts.registryRecords}</span>
+                      <span>dev 项目数: {diagnosticReport.counts.devProjects}</span>
+                      <span>gallery 示例数: {diagnosticReport.counts.galleryExamples}</span>
+                      <span>critical: {diagnosticReport.summary.critical}</span>
+                      <span>error: {diagnosticReport.summary.error}</span>
+                      <span>warning: {diagnosticReport.summary.warning}</span>
+                      <span>info: {diagnosticReport.summary.info}</span>
+                      <span>passed: {diagnosticReport.summary.passed}</span>
+                      <span>fixable: {diagnosticReport.summary.fixable}</span>
+                    </div>
+                    <div className="plugin-manager-filters plugin-diagnostics-filters">
+                      <select
+                        value={diagnosticSeverity}
+                        onChange={(event) => setDiagnosticSeverity(event.target.value as '' | PluginDiagnosticSeverity)}
+                      >
+                        {DIAGNOSTIC_SEVERITY_OPTIONS.map((option) => (
+                          <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={diagnosticCategory}
+                        onChange={(event) => setDiagnosticCategory(event.target.value as '' | PluginDiagnosticCategory)}
+                      >
+                        {DIAGNOSTIC_CATEGORY_OPTIONS.map((option) => (
+                          <option key={option.value || 'all'} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="search"
+                        value={diagnosticKeyword}
+                        placeholder="搜索 pluginId / title / message"
+                        onChange={(event) => setDiagnosticKeyword(event.target.value)}
+                      />
+                    </div>
+                    {visibleDiagnosticItems.length === 0 ? (
+                      <p className="empty-note">插件生态健康</p>
+                    ) : (
+                      <div className="plugin-diagnostics-list">
+                        {visibleDiagnosticItems.map((item) => (
+                          <article className={`plugin-diagnostic-item diagnostic-${item.severity}`} key={item.id}>
+                            <div className="plugin-item-title">
+                              <strong>{item.title}</strong>
+                              <span>{item.severity}</span>
+                              <span>{item.category}</span>
+                              <span>{item.status}</span>
+                              {item.fixable ? <span>fixable</span> : null}
+                            </div>
+                            <p>{item.message}</p>
+                            <dl className="plugin-meta">
+                              <div><dt>pluginId</dt><dd>{item.pluginId ?? '-'}</dd></div>
+                              <div><dt>path</dt><dd>{item.path ?? '-'}</dd></div>
+                              <div><dt>fixAction</dt><dd>{item.fixAction ?? '-'}</dd></div>
+                            </dl>
+                            {item.fixable && item.fixAction ? (
+                              <div className="plugin-item-actions">
+                                <button type="button" className="secondary-action" onClick={() => void runDiagnosticFix([item.fixAction as string])} disabled={diagnosticLoading}>
+                                  修复
+                                </button>
+                              </div>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                    {diagnosticReport.fixResults.length > 0 ? (
+                      <div className="plugin-log-panel">
+                        <strong>修复结果</strong>
+                        <ol className="plugin-log-list">
+                          {diagnosticReport.fixResults.map((result) => (
+                            <li className={result.status === 'fixed' ? 'is-info' : 'is-error'} key={`${result.action}-${result.message}`}>
+                              <code>{result.action}</code>
+                              {result.pluginId ? <code>{result.pluginId}</code> : null}
+                              <p>{result.status}: {result.message}</p>
+                              {result.backupPath ? <p>backup: {result.backupPath}</p> : null}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="empty-note">尚未生成诊断报告。点击“一键扫描插件”开始。</p>
+                )}
+              </section>
               <label className="stacked-control">
                 <span>启用实验性脚本插件运行器</span>
                 <input

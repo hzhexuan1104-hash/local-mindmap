@@ -337,6 +337,11 @@ describe('PluginManagerPanel installation errors', () => {
 
     expect(html).toContain('<details');
     expect(html).not.toContain('<details open=""');
+    expect(html).toContain('插件诊断中心');
+    expect(html).toContain('一键扫描插件');
+    expect(html).toContain('扫描已安装插件');
+    expect(html).toContain('导出 Markdown 报告');
+    expect(html).toContain('不联网、不上传报告、不执行插件代码');
     expect(html).toContain('开发者模式');
     expect(html).toContain('插件开发者工作台');
     expect(html).toContain('新建插件项目');

@@ -17,9 +17,14 @@ import {
   migrateLegacyLocalStorageToUserData,
   openPluginDir,
   openPluginDevDir,
+  openPluginQuarantineDir,
+  openPluginRegistryDir,
   openGalleryPluginDir,
   openPluginDevelopmentDocs,
   openPluginManifestDir,
+  exportPluginDiagnosticsReport,
+  fixPluginDiagnostics,
+  scanPluginDiagnostics,
   scanInstalledPluginManifests,
   readUserJson,
   reloadPluginsFromDisk,
@@ -31,6 +36,7 @@ import {
   setUserDataStorageInvokerForTests,
   uninstallPluginFromUserDir,
   writeUserJson,
+  type PluginDiagnosticReport,
 } from '../userDataStorage';
 import type { MindmapNodeType } from '../../mindmap/types';
 import type { MindmapTemplate } from '../../mindmap/templates';
@@ -526,6 +532,101 @@ describe('userDataStorage desktop commands', () => {
         },
       ],
     });
+  });
+
+  it('routes plugin diagnostics scan, fix, export and directory open commands', async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const report: PluginDiagnosticReport = {
+      scanId: 'scan-1',
+      scannedAt: '2026-07-06T00:00:00.000Z',
+      appVersion: '1.12.0',
+      userDataDir: 'C:/data',
+      summary: {
+        total: 1,
+        passed: 0,
+        warning: 1,
+        error: 0,
+        critical: 0,
+        info: 0,
+        fixable: 1,
+      },
+      counts: {
+        totalPlugins: 1,
+        installedPlugins: 1,
+        registryRecords: 0,
+        devProjects: 0,
+        galleryExamples: 0,
+      },
+      items: [
+        {
+          id: 'item-1',
+          severity: 'warning',
+          status: 'fixable',
+          category: 'registry',
+          pluginId: plugin.pluginId,
+          title: 'Registry orphan record',
+          message: 'orphan',
+          path: 'plugins/plugin-registry.json',
+          fixAction: `remove-registry-orphan:${plugin.pluginId}`,
+          fixable: true,
+          createdAt: '2026-07-06T00:00:00.000Z',
+        },
+      ],
+      fixResults: [],
+    };
+
+    setUserDataStorageInvokerForTests(async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ) => {
+      calls.push({ command, args });
+      if (
+        command === USER_DATA_COMMANDS.scanPluginDiagnostics ||
+        command === USER_DATA_COMMANDS.fixPluginDiagnostics
+      ) {
+        return report as T;
+      }
+      if (command === USER_DATA_COMMANDS.exportPluginDiagnosticsReport) {
+        return 'C:/data/plugins/reports/diagnostics-report.json' as T;
+      }
+      return undefined as T;
+    });
+
+    await expect(scanPluginDiagnostics('all')).resolves.toEqual(report);
+    await expect(
+      fixPluginDiagnostics([`remove-registry-orphan:${plugin.pluginId}`]),
+    ).resolves.toEqual(report);
+    await expect(exportPluginDiagnosticsReport(report, 'json')).resolves.toBe(
+      'C:/data/plugins/reports/diagnostics-report.json',
+    );
+    await expect(openPluginRegistryDir()).resolves.toBe(true);
+    await expect(openPluginQuarantineDir()).resolves.toBe(true);
+    expect(calls).toEqual([
+      {
+        command: USER_DATA_COMMANDS.scanPluginDiagnostics,
+        args: { scope: 'all' },
+      },
+      {
+        command: USER_DATA_COMMANDS.fixPluginDiagnostics,
+        args: {
+          request: {
+            fixActions: [`remove-registry-orphan:${plugin.pluginId}`],
+          },
+        },
+      },
+      {
+        command: USER_DATA_COMMANDS.exportPluginDiagnosticsReport,
+        args: { report, format: 'json' },
+      },
+      {
+        command: USER_DATA_COMMANDS.openPluginRegistryDir,
+        args: undefined,
+      },
+      {
+        command: USER_DATA_COMMANDS.openPluginQuarantineDir,
+        args: undefined,
+      },
+    ]);
   });
 
   it('exposes the concrete desktop write error', async () => {
