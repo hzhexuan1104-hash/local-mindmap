@@ -1,6 +1,7 @@
 import type {
   LmindDocument,
   MindmapNode,
+  MindmapNodeStyle,
   MindmapNodeType,
   MindmapProject,
 } from './types';
@@ -22,11 +23,44 @@ function isRawNodePosition(value: unknown): value is { x: number; y: number } {
   );
 }
 
+function normalizeNodeStyle(value: unknown): MindmapNodeStyle | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const shape =
+    value.shape === 'rectangle' ||
+    value.shape === 'pill' ||
+    value.shape === 'diamond' ||
+    value.shape === 'rounded'
+      ? value.shape
+      : undefined;
+  const style: MindmapNodeStyle = {
+    ...(shape ? { shape } : {}),
+    ...(typeof value.backgroundColor === 'string'
+      ? { backgroundColor: value.backgroundColor }
+      : {}),
+    ...(typeof value.borderColor === 'string'
+      ? { borderColor: value.borderColor }
+      : {}),
+    ...(typeof value.textColor === 'string'
+      ? { textColor: value.textColor }
+      : {}),
+    ...(typeof value.fontSize === 'number' && Number.isFinite(value.fontSize)
+      ? { fontSize: value.fontSize }
+      : {}),
+    ...(typeof value.bold === 'boolean' ? { bold: value.bold } : {}),
+  };
+
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
 function isRawMindmapNode(value: unknown): value is {
   id: string;
   text: string;
   remark?: unknown;
   nodeTypeId?: unknown;
+  style?: unknown;
   collapsed?: unknown;
   position?: unknown;
   children: unknown[];
@@ -42,6 +76,7 @@ function isRawMindmapNode(value: unknown): value is {
     Array.isArray(value.children) &&
     (value.remark === undefined || typeof value.remark === 'string') &&
     (value.nodeTypeId === undefined || typeof value.nodeTypeId === 'string') &&
+    (value.style === undefined || isRecord(value.style)) &&
     (value.collapsed === undefined || typeof value.collapsed === 'boolean') &&
     (value.position === undefined || isRawNodePosition(value.position)) &&
     value.children.every(isRawMindmapNode)
@@ -53,10 +88,13 @@ function normalizeMindmapNode(node: {
   text: string;
   remark?: unknown;
   nodeTypeId?: unknown;
+  style?: unknown;
   collapsed?: unknown;
   position?: unknown;
   children: unknown[];
 }): MindmapNode {
+  const style = normalizeNodeStyle(node.style);
+
   return {
     id: node.id,
     text: node.text,
@@ -64,6 +102,7 @@ function normalizeMindmapNode(node: {
     ...(typeof node.nodeTypeId === 'string' && node.nodeTypeId
       ? { nodeTypeId: node.nodeTypeId }
       : {}),
+    ...(style ? { style } : {}),
     ...(typeof node.collapsed === 'boolean' ? { collapsed: node.collapsed } : {}),
     ...(isRawNodePosition(node.position)
       ? { position: { x: node.position.x, y: node.position.y } }
@@ -75,6 +114,7 @@ function normalizeMindmapNode(node: {
           text: string;
           remark?: unknown;
           nodeTypeId?: unknown;
+          style?: unknown;
           collapsed?: unknown;
           position?: unknown;
           children: unknown[];

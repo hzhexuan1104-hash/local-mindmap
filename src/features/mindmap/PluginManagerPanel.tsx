@@ -122,7 +122,7 @@ type PluginManagerPanelProps = {
 
 const CATEGORY_OPTIONS: Array<{ value: '' | PluginCategory; label: string }> = [
   { value: '', label: '全部类型' },
-  { value: 'import-export', label: '导入导出' },
+  { value: 'import-export', label: '文件导入 / 导出' },
   { value: 'theme', label: '主题包' },
   { value: 'icon-pack', label: '图标包' },
   { value: 'node-type', label: '节点类型包' },

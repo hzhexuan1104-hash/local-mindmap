@@ -31,7 +31,7 @@ export function CanvasControls({
         居中
       </button>
       <button type="button" onClick={onAutoLayout} title="重新自动布局">
-        布局
+        布局结构
       </button>
       {isFocusMode ? (
         <button type="button" onClick={onExitFocusMode}>

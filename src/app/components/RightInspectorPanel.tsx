@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { RemarkPanel } from '../../features/mindmap/RemarkPanel';
+import { NODE_TYPE_SHAPES } from '../../features/mindmap/nodeTypes';
+import { getEffectiveNodeStyle } from '../../features/mindmap/nodeStyles';
 import type { SearchMatch } from '../../features/mindmap/searchReplace';
 import type {
   MindmapNode,
+  MindmapNodeStyle,
   MindmapNodeType,
 } from '../../features/mindmap/types';
 
@@ -24,6 +27,10 @@ type RightInspectorPanelProps = {
   activeRemarkMatch: SearchMatch | null;
   onChildNodeTypeChange: (nodeTypeId: string) => void;
   onSelectedNodeTypeChange: (nodeTypeId: string) => void;
+  onNodeStyleChange: (style: MindmapNodeStyle) => void;
+  onSaveStyleAsNodeType: (name: string) => void;
+  onApplyStyleToNodeType: () => void;
+  onResetNodeStyle: () => void;
   onThemeChange: (themeId: string) => void;
   onRemarkModeChange: (mode: 'edit' | 'preview') => void;
   onRemarkChange: (remark: string) => void;
@@ -42,6 +49,10 @@ export function RightInspectorPanel({
   activeRemarkMatch,
   onChildNodeTypeChange,
   onSelectedNodeTypeChange,
+  onNodeStyleChange,
+  onSaveStyleAsNodeType,
+  onApplyStyleToNodeType,
+  onResetNodeStyle,
   onThemeChange,
   onRemarkModeChange,
   onRemarkChange,
@@ -49,8 +60,10 @@ export function RightInspectorPanel({
   onCollapse,
 }: RightInspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>('style');
+  const [nodeTypeName, setNodeTypeName] = useState('');
   const selectedNodeType =
     nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
+  const effectiveStyle = getEffectiveNodeStyle(selectedNode, selectedNodeType);
 
   useEffect(() => {
     if (activeRemarkMatch?.nodeId === selectedNode.id) {
@@ -62,6 +75,12 @@ export function RightInspectorPanel({
     activeRemarkMatch?.start,
     selectedNode.id,
   ]);
+
+  useEffect(() => {
+    setNodeTypeName(
+      selectedNode.text.trim() ? `${selectedNode.text.trim()}样式` : '节点样式',
+    );
+  }, [selectedNode.id, selectedNode.text]);
 
   return (
     <aside className="inspector-panel" aria-label="节点检查器">
@@ -106,7 +125,7 @@ export function RightInspectorPanel({
         {activeTab === 'style' ? (
           <div className="inspector-section">
             <section className="inspector-control-group">
-              <h3>主题样式</h3>
+              <h3>当前画布</h3>
               <label className="stacked-control">
                 <span>画布主题</span>
                 <select
@@ -123,7 +142,8 @@ export function RightInspectorPanel({
             </section>
 
             <section className="inspector-control-group">
-              <h3>节点样式</h3>
+              <h3>节点类型</h3>
+              <p className="control-help">节点类型是全局样式模板；下方节点样式只影响当前节点。</p>
               <label className="stacked-control">
                 <span>
                   节点类型
@@ -145,7 +165,16 @@ export function RightInspectorPanel({
               </label>
 
               <label className="stacked-control">
-                <span>新增子节点类型</span>
+                <span>
+                  新建子节点默认类型
+                  <i
+                    className="tooltip-dot"
+                    title="使用快捷键或按钮新建子节点时，默认应用的节点类型。"
+                    aria-label="使用快捷键或按钮新建子节点时，默认应用的节点类型。"
+                  >
+                    ?
+                  </i>
+                </span>
                 <select
                   value={childNodeTypeId}
                   onChange={(event) => onChildNodeTypeChange(event.target.value)}
@@ -160,11 +189,121 @@ export function RightInspectorPanel({
               </label>
             </section>
 
+            <section className="inspector-control-group">
+              <h3>节点样式</h3>
+              <div className="aligned-form node-style-form">
+                <label>
+                  <span>形状</span>
+                  <select
+                    value={effectiveStyle.shape}
+                    onChange={(event) =>
+                      onNodeStyleChange({
+                        shape: event.target.value as MindmapNodeStyle['shape'],
+                      })
+                    }
+                  >
+                    {NODE_TYPE_SHAPES.map((shape) => (
+                      <option key={shape.value} value={shape.value}>
+                        {shape.label.replace(`${shape.value} `, '')}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>背景色</span>
+                  <input
+                    type="color"
+                    value={effectiveStyle.backgroundColor}
+                    onChange={(event) =>
+                      onNodeStyleChange({ backgroundColor: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  <span>边框色</span>
+                  <input
+                    type="color"
+                    value={effectiveStyle.borderColor}
+                    onChange={(event) =>
+                      onNodeStyleChange({ borderColor: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  <span>文本色</span>
+                  <input
+                    type="color"
+                    value={effectiveStyle.textColor}
+                    onChange={(event) =>
+                      onNodeStyleChange({ textColor: event.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  <span>字号</span>
+                  <input
+                    type="number"
+                    min={12}
+                    max={28}
+                    value={effectiveStyle.fontSize}
+                    onChange={(event) =>
+                      onNodeStyleChange({ fontSize: Number(event.target.value) })
+                    }
+                  />
+                </label>
+                <label>
+                  <span>加粗</span>
+                  <input
+                    type="checkbox"
+                    checked={effectiveStyle.bold}
+                    onChange={(event) =>
+                      onNodeStyleChange({ bold: event.target.checked })
+                    }
+                  />
+                </label>
+              </div>
+              <div className="node-style-actions">
+                <input
+                  type="text"
+                  value={nodeTypeName}
+                  aria-label="节点类型名称"
+                  onChange={(event) => setNodeTypeName(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => onSaveStyleAsNodeType(nodeTypeName)}
+                >
+                  保存为节点类型
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={!selectedNodeType}
+                  onClick={onApplyStyleToNodeType}
+                >
+                  应用到当前节点类型
+                </button>
+                <button
+                  type="button"
+                  className="ghost-action"
+                  onClick={onResetNodeStyle}
+                >
+                  重置为节点类型默认样式
+                </button>
+              </div>
+            </section>
+
             <section className="style-summary inspector-control-group">
               <div className="inspector-section-heading">
-                <h3>类型细节</h3>
-                <button type="button" onClick={onManageNodeTypes}>
-                  管理类型
+                <h3>全局样式模板</h3>
+                <button
+                  type="button"
+                  className="ghost-action"
+                  onClick={onManageNodeTypes}
+                  title="打开节点类型面板，管理全局样式模板。"
+                >
+                  管理全局节点类型
                 </button>
               </div>
               {selectedNodeType ? (

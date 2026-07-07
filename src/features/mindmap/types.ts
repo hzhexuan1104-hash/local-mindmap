@@ -1,8 +1,18 @@
+export type MindmapNodeStyle = {
+  shape?: MindmapNodeType['shape'];
+  backgroundColor?: string;
+  borderColor?: string;
+  textColor?: string;
+  fontSize?: number;
+  bold?: boolean;
+};
+
 export type MindmapNode = {
   id: string;
   text: string;
   remark: string;
   nodeTypeId?: string;
+  style?: MindmapNodeStyle;
   collapsed?: boolean;
   position?: {
     x: number;

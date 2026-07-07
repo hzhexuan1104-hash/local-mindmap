@@ -1,6 +1,30 @@
 import type { MindmapNode } from './types';
 
-export type SearchScope = 'all' | 'text' | 'remark';
+export type SearchScope = 'all' | 'branch' | 'text' | 'remark';
+
+export const SEARCH_SCOPE_LABELS: Record<SearchScope, string> = {
+  all: '全部节点',
+  branch: '当前分支',
+  text: '仅节点标题',
+  remark: '仅备注',
+};
+
+export function getSearchPanelStatusText(options: {
+  query: string;
+  hasRun: boolean;
+  matchCount: number;
+  activeIndex: number;
+}) {
+  if (!options.query.trim() || !options.hasRun) {
+    return '输入关键词查找节点标题和备注。';
+  }
+
+  if (options.matchCount === 0) {
+    return '未找到匹配项';
+  }
+
+  return `${options.activeIndex + 1} / ${options.matchCount}`;
+}
 
 export type SearchMatch = {
   nodeId: string;
@@ -15,7 +39,7 @@ export type SearchCursor = Pick<SearchMatch, 'nodeId' | 'field'> & {
 };
 
 const shouldSearchField = (scope: SearchScope, field: SearchMatch['field']) =>
-  scope === 'all' || scope === field;
+  scope === 'all' || scope === 'branch' || scope === field;
 
 function collectMatches(
   node: MindmapNode,
