@@ -74,6 +74,15 @@ describe('keyboard shortcut helpers', () => {
     );
   });
 
+  it('maps find and replace shortcuts', () => {
+    expect(getKeyboardShortcutAction({ key: 'f', ctrlKey: true }, defaultState)).toBe(
+      'find',
+    );
+    expect(getKeyboardShortcutAction({ key: 'h', ctrlKey: true }, defaultState)).toBe(
+      'replace',
+    );
+  });
+
   it('uses Escape for modal, context menu, box selection, then normal selection clearing', () => {
     expect(
       getKeyboardShortcutAction(

@@ -7,6 +7,8 @@ export type KeyboardShortcutAction =
   | 'paste'
   | 'duplicate'
   | 'select-all'
+  | 'find'
+  | 'replace'
   | 'save'
   | 'open'
   | 'delete';
@@ -83,6 +85,10 @@ export function getKeyboardShortcutAction(
       return 'duplicate';
     case 'a':
       return 'select-all';
+    case 'f':
+      return 'find';
+    case 'h':
+      return 'replace';
     case 's':
       return 'save';
     case 'o':

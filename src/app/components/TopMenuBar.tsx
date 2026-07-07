@@ -19,8 +19,11 @@ type TopMenuBarProps = {
   currentPath?: string | null;
   menus: TopMenuGroup[];
   message?: string;
+  messageKind?: 'info' | 'success' | 'warning' | 'error';
+  isDirty: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onQuickSave: () => void;
 };
 
 export function TopMenuBar({
@@ -28,8 +31,11 @@ export function TopMenuBar({
   currentPath,
   menus,
   message,
+  messageKind = 'info',
+  isDirty,
   onUndo,
   onRedo,
+  onQuickSave,
 }: TopMenuBarProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLElement | null>(null);
@@ -126,13 +132,16 @@ export function TopMenuBar({
           LM
         </span>
         <div className="top-brand-copy">
-          <strong id="app-title">本地化思维导图工具</strong>
+          <strong id="app-title">本地思维导图工具</strong>
           <span>Local Mindmap</span>
         </div>
       </div>
 
       <div className="top-document-title" title={currentPath ?? currentTitle}>
-        <span className="document-status-dot" aria-hidden="true" />
+        <span
+          className={isDirty ? 'document-status-dot is-dirty' : 'document-status-dot'}
+          aria-hidden="true"
+        />
         <strong>{currentTitle}</strong>
       </div>
 
@@ -147,6 +156,7 @@ export function TopMenuBar({
                 className={isOpen ? 'top-menu-trigger is-open' : 'top-menu-trigger'}
                 aria-haspopup="menu"
                 aria-expanded={isOpen}
+                title={menu.items.map((item) => item.label).join(' / ')}
                 onClick={() =>
                   setActiveMenuId((currentId) =>
                     currentId === menu.id ? null : menu.id,
@@ -177,7 +187,11 @@ export function TopMenuBar({
 
       <div className="top-menu-actions" aria-label="高频操作">
         {message ? (
-          <span className="top-status-message" role="status" title={message}>
+          <span
+            className={`top-status-message is-${messageKind}`}
+            role="status"
+            title={message}
+          >
             {message}
           </span>
         ) : null}
@@ -192,13 +206,9 @@ export function TopMenuBar({
         <button
           type="button"
           className="compact-primary-action"
-          onClick={() =>
-            setActiveMenuId((currentId) =>
-              currentId === 'import-export' ? null : 'import-export',
-            )
-          }
+          onClick={onQuickSave}
         >
-          导出
+          保存
         </button>
       </div>
     </header>

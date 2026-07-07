@@ -3,7 +3,7 @@ import {
   createTemplateThumbnail,
   type MindmapTemplate,
 } from './templates';
-import type { MindmapNode, MindmapNodeType } from './types';
+import type { MindmapNode, MindmapNodeStyle, MindmapNodeType } from './types';
 
 export const TEMPLATE_PACK_KIND = 'local-mindmap-template-pack';
 export const TEMPLATE_PACK_VERSION = '1.0';
@@ -55,6 +55,38 @@ function normalizeNodePosition(
   return undefined;
 }
 
+function normalizeNodeStyle(value: unknown): MindmapNodeStyle | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const shape =
+    value.shape === 'rounded' ||
+    value.shape === 'rectangle' ||
+    value.shape === 'pill' ||
+    value.shape === 'diamond'
+      ? value.shape
+      : undefined;
+  const style: MindmapNodeStyle = {
+    ...(shape ? { shape } : {}),
+    ...(typeof value.backgroundColor === 'string'
+      ? { backgroundColor: value.backgroundColor }
+      : {}),
+    ...(typeof value.borderColor === 'string'
+      ? { borderColor: value.borderColor }
+      : {}),
+    ...(typeof value.textColor === 'string'
+      ? { textColor: value.textColor }
+      : {}),
+    ...(typeof value.fontSize === 'number' && Number.isFinite(value.fontSize)
+      ? { fontSize: value.fontSize }
+      : {}),
+    ...(typeof value.bold === 'boolean' ? { bold: value.bold } : {}),
+  };
+
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
 function normalizeMindmapNode(value: unknown): MindmapNode | null {
   if (!isRecord(value) || !Array.isArray(value.children)) {
     return null;
@@ -80,6 +112,7 @@ function normalizeMindmapNode(value: unknown): MindmapNode | null {
   }
 
   const position = normalizeNodePosition(value.position);
+  const style = normalizeNodeStyle(value.style);
 
   return {
     id,
@@ -88,6 +121,7 @@ function normalizeMindmapNode(value: unknown): MindmapNode | null {
     ...(typeof value.nodeTypeId === 'string' && value.nodeTypeId
       ? { nodeTypeId: value.nodeTypeId }
       : {}),
+    ...(style ? { style } : {}),
     ...(typeof value.collapsed === 'boolean' ? { collapsed: value.collapsed } : {}),
     ...(position ? { position } : {}),
     children,

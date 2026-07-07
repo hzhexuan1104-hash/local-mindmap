@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   findMindmapMatches,
   findNextMatchIndex,
+  getSearchPanelStatusText,
   replaceAllInMindmap,
   replaceMatchInMindmap,
+  SEARCH_SCOPE_LABELS,
   type SearchMatch,
 } from '../searchReplace';
 import type { MindmapNode } from '../types';
@@ -147,5 +149,51 @@ describe('search and replace', () => {
     expect(matches).toHaveLength(3);
     expect(updated.text).toBe('测试123标题');
     expect(updated.remark).toBe('备注测试123测试123');
+  });
+
+  it('uses explicit scope labels and neutral initial status', () => {
+    expect(SEARCH_SCOPE_LABELS).toEqual({
+      all: '全部节点',
+      branch: '当前分支',
+      text: '仅节点标题',
+      remark: '仅备注',
+    });
+    expect(
+      getSearchPanelStatusText({
+        query: '',
+        hasRun: false,
+        matchCount: 0,
+        activeIndex: 0,
+      }),
+    ).toBe('输入关键词查找节点标题和备注。');
+    expect(
+      getSearchPanelStatusText({
+        query: 'missing',
+        hasRun: false,
+        matchCount: 0,
+        activeIndex: 0,
+      }),
+    ).toBe('输入关键词查找节点标题和备注。');
+    expect(
+      getSearchPanelStatusText({
+        query: 'missing',
+        hasRun: true,
+        matchCount: 0,
+        activeIndex: 0,
+      }),
+    ).toBe('未找到匹配项');
+  });
+
+  it('searches current branch as text and remark content', () => {
+    const node = createNode('根', '', [
+      {
+        id: 'branch',
+        text: '分支测试',
+        remark: '备注测试',
+        children: [],
+      },
+    ]);
+
+    expect(findMindmapMatches(node.children[0], '测试', 'branch')).toHaveLength(2);
   });
 });
