@@ -10,6 +10,7 @@ const defaultState: KeyboardShortcutState = {
   hasContextMenuOpen: false,
   isBoxSelecting: false,
   hasSelection: true,
+  isEditingNodeText: false,
 };
 
 describe('keyboard shortcut helpers', () => {
@@ -19,11 +20,12 @@ describe('keyboard shortcut helpers', () => {
     ).toBe('select-all');
   });
 
-  it('does not intercept Ctrl+A inside input, textarea, select, or contenteditable', () => {
+  it('does not intercept shortcuts inside input, textarea, select, button, or contenteditable', () => {
     const editableTargets = [
       { closest: () => ({ tagName: 'INPUT' }) },
       { closest: () => ({ tagName: 'TEXTAREA' }) },
       { closest: () => ({ tagName: 'SELECT' }) },
+      { closest: () => ({ tagName: 'BUTTON' }) },
       { closest: () => ({ getAttribute: () => 'true' }) },
     ] as unknown as EventTarget[];
 
@@ -35,7 +37,49 @@ describe('keyboard shortcut helpers', () => {
           defaultState,
         ),
       ).toBeNull();
+      expect(
+        getKeyboardShortcutAction({ key: 'Tab', target }, defaultState),
+      ).toBeNull();
+      expect(
+        getKeyboardShortcutAction({ key: 'Enter', target }, defaultState),
+      ).toBeNull();
     });
+  });
+
+  it('maps Tab and Enter to node creation shortcuts outside editable elements', () => {
+    expect(getKeyboardShortcutAction({ key: 'Tab' }, defaultState)).toBe(
+      'add-child',
+    );
+    expect(getKeyboardShortcutAction({ key: 'Enter' }, defaultState)).toBe(
+      'add-sibling',
+    );
+  });
+
+  it('does not map Tab or Enter while editing, without selection, or while UI overlays are active', () => {
+    expect(
+      getKeyboardShortcutAction(
+        { key: 'Tab' },
+        { ...defaultState, isEditingNodeText: true },
+      ),
+    ).toBeNull();
+    expect(
+      getKeyboardShortcutAction(
+        { key: 'Enter' },
+        { ...defaultState, hasSelection: false },
+      ),
+    ).toBeNull();
+    expect(
+      getKeyboardShortcutAction(
+        { key: 'Tab' },
+        { ...defaultState, hasModalOpen: true },
+      ),
+    ).toBeNull();
+    expect(
+      getKeyboardShortcutAction(
+        { key: 'Enter' },
+        { ...defaultState, isBoxSelecting: true },
+      ),
+    ).toBeNull();
   });
 
   it('maps supported editing shortcuts', () => {

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   clearMindmapPositions,
   createMindmapLayout,
+  getDiamondBoundaryAnchor,
+  POSITIONED_LAYOUT,
 } from '../layout';
 import { serializeLmindDocument } from '../saveMindmap';
-import type { MindmapNode } from '../types';
+import type { MindmapNode, MindmapNodeType } from '../types';
 
 const mindmap: MindmapNode = {
   id: 'root',
@@ -25,6 +27,20 @@ const mindmap: MindmapNode = {
       children: [],
     },
   ],
+};
+
+const diamondNodeType: MindmapNodeType = {
+  id: 'diamond-type',
+  name: 'Diamond',
+  icon: 'D',
+  shape: 'diamond',
+  backgroundColor: '#e7f5ff',
+  borderColor: '#1864ab',
+  textColor: '#0b7285',
+  fontSize: 18,
+  bold: true,
+  defaultText: 'Diamond node',
+  defaultRemark: '',
 };
 
 describe('mindmap layout positions', () => {
@@ -49,6 +65,119 @@ describe('mindmap layout positions', () => {
     expect(child).toBeDefined();
     expect(child!.x).toBeGreaterThan(root!.x);
     expect(layout.lines).toHaveLength(1);
+  });
+
+  it('keeps regular node anchors on the original left and right edges', () => {
+    const layout = createMindmapLayout({
+      id: 'root',
+      text: 'Root',
+      remark: '',
+      children: [
+        {
+          id: 'child',
+          text: 'Child',
+          remark: '',
+          children: [],
+        },
+      ],
+    });
+    const root = layout.nodes.find((node) => node.id === 'root')!;
+    const child = layout.nodes.find((node) => node.id === 'child')!;
+    const line = layout.lines[0];
+
+    expect(root.height).toBe(POSITIONED_LAYOUT.nodeHeight);
+    expect(child.height).toBe(POSITIONED_LAYOUT.nodeHeight);
+    expect(line.from).toEqual({
+      x: root.x + POSITIONED_LAYOUT.nodeWidth,
+      y: root.y + POSITIONED_LAYOUT.nodeHeight / 2,
+    });
+    expect(line.to).toEqual({
+      x: child.x,
+      y: child.y + POSITIONED_LAYOUT.nodeHeight / 2,
+    });
+  });
+
+  it('computes diamond anchors on the real diamond boundary', () => {
+    const rect = { x: 20, y: 40, width: 220, height: 120 };
+    const anchor = getDiamondBoundaryAnchor(rect, { x: 360, y: 190 });
+    const center = {
+      x: rect.x + rect.width / 2,
+      y: rect.y + rect.height / 2,
+    };
+    const boundaryValue =
+      Math.abs(anchor.x - center.x) / (rect.width / 2) +
+      Math.abs(anchor.y - center.y) / (rect.height / 2);
+
+    expect(boundaryValue).toBeCloseTo(1);
+    expect(anchor.x).toBeGreaterThan(center.x);
+    expect(anchor.y).toBeGreaterThan(center.y);
+  });
+
+  it('connects diamond nodes to their visual left and right vertices', () => {
+    const layout = createMindmapLayout({
+      id: 'root',
+      text: 'Root diamond',
+      remark: '',
+      style: { shape: 'diamond' },
+      children: [
+        {
+          id: 'child',
+          text: 'Child diamond',
+          remark: '',
+          style: { shape: 'diamond' },
+          children: [],
+        },
+      ],
+    });
+    const root = layout.nodes.find((node) => node.id === 'root')!;
+    const child = layout.nodes.find((node) => node.id === 'child')!;
+    const line = layout.lines[0];
+
+    expect(root.height).toBe(POSITIONED_LAYOUT.diamondNodeHeight);
+    expect(child.height).toBe(POSITIONED_LAYOUT.diamondNodeHeight);
+    expect(line.from).toEqual({
+      x: root.x + root.width,
+      y: root.y + root.height / 2,
+    });
+    expect(line.to).toEqual({
+      x: child.x,
+      y: child.y + child.height / 2,
+    });
+  });
+
+  it('uses node type diamond shape when calculating anchors', () => {
+    const layout = createMindmapLayout(
+      {
+        id: 'root',
+        text: 'Typed root',
+        remark: '',
+        nodeTypeId: diamondNodeType.id,
+        children: [
+          {
+            id: 'child',
+            text: 'Child',
+            remark: '',
+            children: [],
+          },
+        ],
+      },
+      [diamondNodeType],
+    );
+    const root = layout.nodes.find((node) => node.id === 'root')!;
+    const rootCenter = {
+      x: root.x + root.width / 2,
+      y: root.y + root.height / 2,
+    };
+    const boundaryValue =
+      Math.abs(layout.lines[0].from.x - rootCenter.x) / (root.width / 2) +
+      Math.abs(layout.lines[0].from.y - rootCenter.y) / (root.height / 2);
+
+    expect(root.shape).toBe('diamond');
+    expect(boundaryValue).toBeCloseTo(1);
+    expect(layout.lines[0].from).not.toEqual({
+      x: root.x + root.width,
+      y: root.y + POSITIONED_LAYOUT.nodeHeight / 2,
+    });
   });
 
   it('uses saved node positions in layout results', () => {

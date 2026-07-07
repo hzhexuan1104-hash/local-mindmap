@@ -1,5 +1,7 @@
 import type { CSSProperties } from 'react';
-import type { MindmapNode } from './types';
+import { getEffectiveNodeStyle } from './nodeStyles';
+import { findNodeTypeById } from './nodeTypes';
+import type { MindmapNode, MindmapNodeType } from './types';
 
 const MINDMAP_LAYOUT = {
   canvasPadding: 80,
@@ -14,6 +16,7 @@ export const POSITIONED_LAYOUT = {
   canvasPadding: 96,
   nodeWidth: MINDMAP_LAYOUT.nodeMaxWidth,
   nodeHeight: MINDMAP_LAYOUT.nodeHeight,
+  diamondNodeHeight: 120,
   horizontalGap: 180,
   verticalGap: 88,
 } as const;
@@ -41,6 +44,9 @@ export type MindmapLayoutNode = {
   node: MindmapNode;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  shape: MindmapNodeType['shape'];
 };
 
 export type MindmapLayoutLine = {
@@ -62,24 +68,49 @@ type AutoLayoutEntry = {
   y: number;
 };
 
+type AnchorRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type AnchorPoint = {
+  x: number;
+  y: number;
+};
+
 function getVisibleChildren(node: MindmapNode) {
   return node.collapsed ? [] : node.children;
 }
 
-function measureSubtreeHeight(node: MindmapNode): number {
+function getNodeShape(
+  node: MindmapNode,
+  nodeTypes: MindmapNodeType[],
+): MindmapNodeType['shape'] {
+  const nodeType = findNodeTypeById(nodeTypes, node.nodeTypeId);
+
+  return getEffectiveNodeStyle(node, nodeType).shape;
+}
+
+function measureSubtreeHeight(
+  node: MindmapNode,
+  nodeTypes: MindmapNodeType[],
+): number {
   const children = getVisibleChildren(node);
+  const nodeHeight = getLayoutNodeSize(getNodeShape(node, nodeTypes)).height;
 
   if (children.length === 0) {
-    return POSITIONED_LAYOUT.nodeHeight;
+    return nodeHeight;
   }
 
   const childrenHeight = children.reduce(
-    (sum, child) => sum + measureSubtreeHeight(child),
+    (sum, child) => sum + measureSubtreeHeight(child, nodeTypes),
     0,
   );
   const gaps = POSITIONED_LAYOUT.verticalGap * (children.length - 1);
 
-  return Math.max(POSITIONED_LAYOUT.nodeHeight, childrenHeight + gaps);
+  return Math.max(nodeHeight, childrenHeight + gaps);
 }
 
 function buildAutoLayout(
@@ -87,9 +118,11 @@ function buildAutoLayout(
   depth: number,
   top: number,
   entries: AutoLayoutEntry[],
+  nodeTypes: MindmapNodeType[],
 ): number {
-  const subtreeHeight = measureSubtreeHeight(node);
-  const nodeY = top + subtreeHeight / 2 - POSITIONED_LAYOUT.nodeHeight / 2;
+  const nodeHeight = getLayoutNodeSize(getNodeShape(node, nodeTypes)).height;
+  const subtreeHeight = measureSubtreeHeight(node, nodeTypes);
+  const nodeY = top + subtreeHeight / 2 - nodeHeight / 2;
   const nodeX =
     depth * (POSITIONED_LAYOUT.nodeWidth + POSITIONED_LAYOUT.horizontalGap);
 
@@ -103,8 +136,8 @@ function buildAutoLayout(
   let nextTop = top;
 
   children.forEach((child) => {
-    const childHeight = measureSubtreeHeight(child);
-    buildAutoLayout(child, depth + 1, nextTop, entries);
+    const childHeight = measureSubtreeHeight(child, nodeTypes);
+    buildAutoLayout(child, depth + 1, nextTop, entries, nodeTypes);
     nextTop += childHeight + POSITIONED_LAYOUT.verticalGap;
   });
 
@@ -119,20 +152,84 @@ function collectVisibleNodes(node: MindmapNode, nodes: MindmapNode[] = []) {
   return nodes;
 }
 
-export function createMindmapLayout(rootNode: MindmapNode): MindmapLayoutResult {
+function getLayoutNodeSize(shape: MindmapNodeType['shape']) {
+  return {
+    width: POSITIONED_LAYOUT.nodeWidth,
+    height:
+      shape === 'diamond'
+        ? POSITIONED_LAYOUT.diamondNodeHeight
+        : POSITIONED_LAYOUT.nodeHeight,
+  };
+}
+
+function getRectCenter(rect: AnchorRect): AnchorPoint {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+export function getDiamondBoundaryAnchor(
+  rect: AnchorRect,
+  target: AnchorPoint,
+): AnchorPoint {
+  const center = getRectCenter(rect);
+  const dx = target.x - center.x;
+  const dy = target.y - center.y;
+
+  if (dx === 0 && dy === 0) {
+    return center;
+  }
+
+  const halfWidth = rect.width / 2;
+  const halfHeight = rect.height / 2;
+  const scale = 1 / (Math.abs(dx) / halfWidth + Math.abs(dy) / halfHeight);
+
+  return {
+    x: center.x + dx * scale,
+    y: center.y + dy * scale,
+  };
+}
+
+export function getNodeBoundaryAnchor(
+  rect: AnchorRect,
+  target: AnchorPoint,
+  shape: MindmapNodeType['shape'] = 'rounded',
+): AnchorPoint {
+  if (shape === 'diamond') {
+    return getDiamondBoundaryAnchor(rect, target);
+  }
+
+  const center = getRectCenter(rect);
+
+  return {
+    x: target.x >= center.x ? rect.x + rect.width : rect.x,
+    y: center.y,
+  };
+}
+
+export function createMindmapLayout(
+  rootNode: MindmapNode,
+  nodeTypes: MindmapNodeType[] = [],
+): MindmapLayoutResult {
   const autoEntries: AutoLayoutEntry[] = [];
-  buildAutoLayout(rootNode, 0, 0, autoEntries);
+  buildAutoLayout(rootNode, 0, 0, autoEntries, nodeTypes);
   const autoPositionById = new Map(
     autoEntries.map((entry) => [entry.id, { x: entry.x, y: entry.y }]),
   );
   const nodes = collectVisibleNodes(rootNode).map((node) => {
     const autoPosition = autoPositionById.get(node.id) ?? { x: 0, y: 0 };
+    const shape = getNodeShape(node, nodeTypes);
+    const size = getLayoutNodeSize(shape);
 
     return {
       id: node.id,
       node,
       x: node.position?.x ?? autoPosition.x,
       y: node.position?.y ?? autoPosition.y,
+      width: size.width,
+      height: size.height,
+      shape,
     };
   });
   const nodeById = new Map(nodes.map((layoutNode) => [layoutNode.id, layoutNode]));
@@ -150,26 +247,35 @@ export function createMindmapLayout(rootNode: MindmapNode): MindmapLayoutResult 
         return;
       }
 
+      const fromRect = {
+        x: layoutNode.x,
+        y: layoutNode.y,
+        width: layoutNode.width,
+        height: layoutNode.height,
+      };
+      const toRect = {
+        x: childLayoutNode.x,
+        y: childLayoutNode.y,
+        width: childLayoutNode.width,
+        height: childLayoutNode.height,
+      };
+      const fromCenter = getRectCenter(fromRect);
+      const toCenter = getRectCenter(toRect);
+
       lines.push({
         id: `${layoutNode.id}-${child.id}`,
-        from: {
-          x: layoutNode.x + POSITIONED_LAYOUT.nodeWidth,
-          y: layoutNode.y + POSITIONED_LAYOUT.nodeHeight / 2,
-        },
-        to: {
-          x: childLayoutNode.x,
-          y: childLayoutNode.y + POSITIONED_LAYOUT.nodeHeight / 2,
-        },
+        from: getNodeBoundaryAnchor(fromRect, toCenter, layoutNode.shape),
+        to: getNodeBoundaryAnchor(toRect, fromCenter, childLayoutNode.shape),
       });
     });
   });
 
   const maxX = Math.max(
-    ...nodes.map((node) => node.x + POSITIONED_LAYOUT.nodeWidth),
+    ...nodes.map((node) => node.x + node.width),
     POSITIONED_LAYOUT.nodeWidth,
   );
   const maxY = Math.max(
-    ...nodes.map((node) => node.y + POSITIONED_LAYOUT.nodeHeight),
+    ...nodes.map((node) => node.y + node.height),
     POSITIONED_LAYOUT.nodeHeight,
   );
   const offsetX = POSITIONED_LAYOUT.canvasPadding;

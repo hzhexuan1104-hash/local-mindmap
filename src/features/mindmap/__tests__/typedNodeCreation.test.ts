@@ -79,6 +79,40 @@ describe('typed node creation', () => {
     expect(result?.createdNode.id).not.toBe('topic-a');
   });
 
+  it('creates a child at the end of root children for the Tab shortcut path', () => {
+    const mindmap = createMindmap();
+    const result = addTypedChildNode(mindmap, 'root', [test1], test1.id);
+
+    expect(result?.rootNode.children).toHaveLength(2);
+    expect(result?.rootNode.children[1]).toBe(result?.createdNode);
+    expect(result?.selectedNodeId).toBe(result?.createdNode.id);
+    expect(result?.selectedNodeIds).toEqual([result?.createdNode.id]);
+  });
+
+  it('creates a child at the end of a selected non-root node for the Tab shortcut path', () => {
+    const mindmap = {
+      ...createMindmap(),
+      children: [
+        {
+          ...createMindmap().children[0],
+          children: [
+            {
+              id: 'existing-child',
+              text: 'Existing child',
+              remark: '',
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const result = addTypedChildNode(mindmap, 'topic-a', [test1], test1.id);
+
+    expect(result?.rootNode.children[0].children).toHaveLength(2);
+    expect(result?.rootNode.children[0].children[1]).toBe(result?.createdNode);
+    expect(result?.selectedNodeId).toBe(result?.createdNode.id);
+  });
+
   it('creates a test1 sibling under the same parent', () => {
     const mindmap = createMindmap();
     const result = addTypedSiblingNode(
@@ -91,6 +125,29 @@ describe('typed node creation', () => {
     expect(result?.rootNode.children).toHaveLength(2);
     expect(result?.rootNode.children[1].nodeTypeId).toBe(test1.id);
     expect(result?.selectedNodeId).toBe(result?.rootNode.children[1].id);
+  });
+
+  it('creates a sibling immediately after the selected non-root node for the Enter shortcut path', () => {
+    const mindmap = {
+      ...createMindmap(),
+      children: [
+        createMindmap().children[0],
+        {
+          id: 'topic-b',
+          text: 'Topic B',
+          remark: '',
+          children: [],
+        },
+      ],
+    };
+    const result = addTypedSiblingNode(mindmap, 'topic-a', [test1], test1.id);
+
+    expect(result?.rootNode.children.map((child) => child.id)).toEqual([
+      'topic-a',
+      result?.createdNode.id,
+      'topic-b',
+    ]);
+    expect(result?.selectedNodeId).toBe(result?.createdNode.id);
   });
 
   it('does not create a sibling for the root node', () => {
@@ -150,6 +207,33 @@ describe('typed node creation', () => {
     expect(undoResult.project.rootNode.children).toHaveLength(1);
     expect(redoResult.project.rootNode.children).toHaveLength(2);
     expect(redoResult.project.rootNode.children[1].nodeTypeId).toBe(test1.id);
+  });
+
+  it('supports undo and redo after a typed sibling creation', () => {
+    const before: MindmapProject = {
+      rootNode: createMindmap(),
+      nodeTypes: [test1],
+      themeId: 'default-blue',
+    };
+    const creation = addTypedSiblingNode(
+      before.rootNode,
+      'topic-a',
+      before.nodeTypes,
+      test1.id,
+    )!;
+    const after: MindmapProject = {
+      ...before,
+      rootNode: creation.rootNode,
+    };
+    const history = pushHistory(createHistoryState(), before);
+    const undoResult = undoHistory(history, after)!;
+    const redoResult = redoHistory(undoResult.history, undoResult.project)!;
+
+    expect(undoResult.project.rootNode.children).toHaveLength(1);
+    expect(redoResult.project.rootNode.children).toHaveLength(2);
+    expect(redoResult.project.rootNode.children[1].id).toBe(
+      creation.createdNode.id,
+    );
   });
 
   it('keeps switching the current node type working', () => {

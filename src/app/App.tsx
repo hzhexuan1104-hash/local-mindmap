@@ -86,8 +86,11 @@ import {
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import {
+  applyStyleToNodeType,
   createNodeTypeFromStyle,
   getEffectiveNodeStyle,
+  getNodeShapeClassName,
+  getNodeStyleCssVariables,
   mergeNodeStyle,
 } from '../features/mindmap/nodeStyles';
 import { updateNodePositionById } from '../features/mindmap/nodePositions';
@@ -498,13 +501,9 @@ function MindmapTree({
   const hasChildren = node.children.length > 0;
   const nodeType = findNodeTypeById(nodeTypes, node.nodeTypeId);
   const effectiveNodeStyle = getEffectiveNodeStyle(node, nodeType);
-  const nodeStyle = {
-    '--node-type-bg': effectiveNodeStyle.backgroundColor,
-    '--node-type-border': effectiveNodeStyle.borderColor,
-    '--node-type-text': effectiveNodeStyle.textColor,
-    '--node-type-font-size': `${effectiveNodeStyle.fontSize}px`,
-    '--node-type-font-weight': effectiveNodeStyle.bold ? 700 : 500,
-  } as CSSProperties;
+  const nodeStyle = getNodeStyleCssVariables(
+    effectiveNodeStyle,
+  ) as CSSProperties;
 
   return (
     <div
@@ -512,8 +511,8 @@ function MindmapTree({
       style={{
         left: layoutNode.x,
         top: layoutNode.y,
-        width: POSITIONED_LAYOUT.nodeWidth,
-        minHeight: POSITIONED_LAYOUT.nodeHeight,
+        width: layoutNode.width,
+        minHeight: layoutNode.height,
       }}
     >
         <div
@@ -529,7 +528,7 @@ function MindmapTree({
             isSearchMatch ? 'is-search-match' : '',
             isRoot ? 'is-root' : '',
             nodeType || node.style ? 'has-node-type' : '',
-            `shape-${effectiveNodeStyle.shape}`,
+            getNodeShapeClassName(effectiveNodeStyle),
           ]
             .filter(Boolean)
             .join(' ')}
@@ -562,6 +561,7 @@ function MindmapTree({
             }
           }}
         >
+          <span className="mindmap-node-shape" aria-hidden="true" />
           {isEditing ? (
             <textarea
               className="node-editor"
@@ -580,7 +580,7 @@ function MindmapTree({
               }}
             />
           ) : (
-            <>
+            <span className="mindmap-node-content">
               {nodeType?.icon ? (
                 <span className="node-icon" aria-hidden="true">
                   {nodeType.icon}
@@ -599,7 +599,7 @@ function MindmapTree({
                   node.text
                 )}
               </span>
-            </>
+            </span>
           )}
         </div>
         {hasChildren ? (
@@ -716,25 +716,6 @@ export function App() {
   const selectedNode = selectedNodeId
     ? findNodeById(mindmap, selectedNodeId) ?? mindmap
     : mindmap;
-  const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
-  const nodeHitboxes = useMemo(
-    () =>
-      mindmapLayout.nodes.map((layoutNode) => ({
-        id: layoutNode.id,
-        left: layoutNode.x,
-        top: layoutNode.y,
-        width: POSITIONED_LAYOUT.nodeWidth,
-        height: POSITIONED_LAYOUT.nodeHeight,
-      })),
-    [mindmapLayout.nodes],
-  );
-  const layoutNodeById = useMemo(
-    () =>
-      new Map(
-        mindmapLayout.nodes.map((layoutNode) => [layoutNode.id, layoutNode]),
-      ),
-    [mindmapLayout.nodes],
-  );
   const selectedNodeIdSet = useMemo(
     () => new Set(selectedNodeIds),
     [selectedNodeIds],
@@ -780,6 +761,28 @@ export function App() {
         ).values(),
       ),
     [nodeTypes, pluginNodeTypes],
+  );
+  const mindmapLayout = useMemo(
+    () => createMindmapLayout(mindmap, availableNodeTypes),
+    [mindmap, availableNodeTypes],
+  );
+  const nodeHitboxes = useMemo(
+    () =>
+      mindmapLayout.nodes.map((layoutNode) => ({
+        id: layoutNode.id,
+        left: layoutNode.x,
+        top: layoutNode.y,
+        width: layoutNode.width,
+        height: layoutNode.height,
+      })),
+    [mindmapLayout.nodes],
+  );
+  const layoutNodeById = useMemo(
+    () =>
+      new Map(
+        mindmapLayout.nodes.map((layoutNode) => [layoutNode.id, layoutNode]),
+      ),
+    [mindmapLayout.nodes],
   );
   const nodeTypeCreationOptions = useMemo(
     () => getNodeTypeCreationOptions(availableNodeTypes),
@@ -1081,6 +1084,7 @@ export function App() {
         hasContextMenuOpen: Boolean(contextMenu),
         isBoxSelecting: Boolean(boxSelection),
         hasSelection: selectedNodeIds.length > 0,
+        isEditingNodeText: Boolean(editingNodeId),
       });
 
       if (!action) {
@@ -1124,6 +1128,12 @@ export function App() {
         case 'replace':
           setActiveDrawer('search');
           showMessage('已打开替换');
+          return;
+        case 'add-child':
+          handleAddChild(childNodeTypeId, { startEditing: true });
+          return;
+        case 'add-sibling':
+          handleAddSibling(childNodeTypeId, { startEditing: true });
           return;
         case 'save':
           handleSaveMindmap();
@@ -2490,14 +2500,21 @@ export function App() {
     }
   };
 
-  const applyTypedNodeCreation = (result: TypedNodeCreationResult) => {
+  const applyTypedNodeCreation = (
+    result: TypedNodeCreationResult,
+    options: { startEditing?: boolean } = {},
+  ) => {
     setMindmap(result.rootNode);
     setSelectedNodeId(result.selectedNodeId);
     setSelectedNodeIds(result.selectedNodeIds);
-    setEditingNodeId(null);
+    setEditingNodeId(options.startEditing ? result.createdNode.id : null);
+    setEditingText(options.startEditing ? result.createdNode.text : '');
   };
 
-  const handleAddChild = (nodeTypeId = childNodeTypeId) => {
+  const handleAddChild = (
+    nodeTypeId = childNodeTypeId,
+    options: { startEditing?: boolean } = {},
+  ) => {
     const parentNodeId = selectedNodeId ?? mindmap.id;
     const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
     const position = parentNode.position
@@ -2520,17 +2537,20 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeCreation(result);
+    applyTypedNodeCreation(result, options);
   };
 
-  const handleAddSibling = (nodeTypeId = childNodeTypeId) => {
+  const handleAddSibling = (
+    nodeTypeId = childNodeTypeId,
+    options: { startEditing?: boolean } = {},
+  ) => {
     if (!selectedNodeId) {
       showMessage('请先选择节点');
       return;
     }
 
     if (selectedNodeId === mindmap.id) {
-      showMessage('中心主题不能新增同级节点');
+      showMessage('中心主题不能新建同级节点，请使用 Tab 新建子节点');
       return;
     }
 
@@ -2558,7 +2578,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeCreation(result);
+    applyTypedNodeCreation(result, options);
   };
 
   const handleDeleteNode = () => {
@@ -3084,15 +3104,7 @@ export function App() {
     const nextStyle = getEffectiveNodeStyle(selectedNode, targetNodeType);
     const nextNodeTypes = nodeTypes.map((nodeType) =>
       nodeType.id === targetNodeType.id
-        ? {
-            ...nodeType,
-            shape: nextStyle.shape,
-            backgroundColor: nextStyle.backgroundColor,
-            borderColor: nextStyle.borderColor,
-            textColor: nextStyle.textColor,
-            fontSize: nextStyle.fontSize,
-            bold: nextStyle.bold,
-          }
+        ? applyStyleToNodeType(nodeType, nextStyle)
         : nodeType,
     );
 

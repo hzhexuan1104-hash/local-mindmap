@@ -861,20 +861,45 @@ h3 {
   justify-content: center;
   gap: 6px;
   padding: 14px 18px;
-  border: 2px solid var(--node-border, #1f6feb);
+  border: 0;
   border-radius: 8px;
   color: var(--node-text, #14315f);
-  background: var(--node-bg, #eef5ff);
-  box-shadow: 0 10px 24px rgb(31 111 235 / 16%);
+  background: transparent;
+  box-shadow: none;
   text-align: center;
-  font-size: 18px;
-  font-weight: 700;
+  font-size: var(--node-font-size, 18px);
+  font-weight: var(--node-font-weight, 700);
   line-height: 1.4;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
   hyphens: auto;
   cursor: grab;
+}
+
+.mindmap-node-shape {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border: 2px solid var(--node-border, #1f6feb);
+  border-radius: 8px;
+  background: var(--node-bg, #eef5ff);
+  box-shadow: 0 10px 24px rgb(31 111 235 / 16%);
+  pointer-events: none;
+}
+
+.mindmap-node-content {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.node-editor {
+  position: relative;
+  z-index: 1;
 }
 
 .mindmap-node:active {
@@ -885,26 +910,34 @@ h3 {
   filter: brightness(0.98);
 }
 
-.mindmap-node.has-node-type {
-  border-color: var(--node-type-border);
-  background: var(--node-type-bg);
-  color: var(--node-type-text);
-  font-size: var(--node-type-font-size);
-  font-weight: var(--node-type-font-weight);
-}
-
-.mindmap-node.shape-rectangle {
+.mindmap-node.shape-rectangle .mindmap-node-shape {
   border-radius: 0;
 }
 
-.mindmap-node.shape-pill {
+.mindmap-node.shape-pill .mindmap-node-shape {
   border-radius: 999px;
 }
 
 .mindmap-node.shape-diamond {
-  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
   min-height: 120px;
   padding: 28px 34px;
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape {
+  border: 0;
+  border-radius: 0;
+  background: var(--node-border, #1f6feb);
+  box-shadow: none;
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  filter: drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--node-bg, #eef5ff);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
 }
 
 .node-icon {
@@ -919,9 +952,7 @@ h3 {
 }
 
 .mindmap-node.is-selected {
-  border-color: #f59f00;
-  background: #fff7e8;
-  box-shadow: 0 0 0 4px rgb(245 159 0 / 18%);
+  box-shadow: 0 0 0 4px rgb(31 111 235 / 18%);
 }
 
 .mindmap-node.is-box-selection-preview {
@@ -933,22 +964,20 @@ h3 {
   outline-offset: 5px;
 }
 
-.mindmap-node.is-selected.is-primary-selected {
-  outline-color: rgb(245 159 0 / 42%);
-}
-
-.positioned-node-wrap:has(.mindmap-node:active) .mindmap-node {
+.positioned-node-wrap:has(.mindmap-node:active) .mindmap-node-shape {
   box-shadow: 0 16px 36px rgb(31 111 235 / 24%);
 }
 
 .mindmap-node.is-dragging {
   cursor: grabbing;
   filter: brightness(1.02);
+}
+
+.mindmap-node.is-dragging .mindmap-node-shape {
   box-shadow: 0 18px 42px rgb(31 111 235 / 28%);
 }
 
 .mindmap-node.is-drop-target {
-  border-color: #2ea043;
   box-shadow:
     0 0 0 5px rgb(46 160 67 / 18%),
     0 16px 36px rgb(46 160 67 / 22%);
@@ -984,14 +1013,6 @@ h3 {
   cursor: pointer;
   font-weight: 700;
   transform: translateY(-50%);
-}
-
-.mindmap-node.has-node-type.is-selected {
-  border-color: var(--node-type-border);
-  background: var(--node-type-bg);
-  box-shadow:
-    0 0 0 4px rgb(245 159 0 / 22%),
-    0 10px 24px rgb(31 111 235 / 16%);
 }
 
 .node-editor {
@@ -3772,7 +3793,7 @@ textarea::placeholder {
 .top-brand-copy strong {
   font-size: 13px;
   font-weight: 680;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .top-brand-copy span {
@@ -4303,23 +4324,34 @@ textarea::placeholder {
 .mindmap-node {
   min-height: 56px;
   padding: 11px 15px;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--node-text, #243d62);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--node-font-size, 15px);
+  font-weight: var(--node-font-weight, 620);
+  letter-spacing: 0;
+}
+
+.mindmap-node .mindmap-node-shape {
   border: 1px solid
     color-mix(in srgb, var(--node-border, #7ea8df) 46%, transparent);
   border-radius: var(--radius-md);
-  color: var(--node-text, #243d62);
   background:
     linear-gradient(180deg, rgb(255 255 255 / 62%), rgb(255 255 255 / 14%)),
     color-mix(in srgb, var(--node-bg, #eef5ff) 70%, white);
   box-shadow:
     0 4px 12px rgb(33 50 73 / 7%),
     inset 0 1px 0 rgb(255 255 255 / 68%);
-  font-size: 15px;
-  font-weight: 620;
-  letter-spacing: -0.01em;
 }
 
 .mindmap-node:hover {
   filter: none;
+  transform: translateY(-1px);
+}
+
+.mindmap-node:hover .mindmap-node-shape {
   border-color: color-mix(
     in srgb,
     var(--node-border, #377cf6) 64%,
@@ -4328,12 +4360,17 @@ textarea::placeholder {
   box-shadow:
     0 7px 18px rgb(33 50 73 / 10%),
     inset 0 1px 0 rgb(255 255 255 / 72%);
-  transform: translateY(-1px);
 }
 
 .mindmap-node.is-root {
   min-height: 70px;
   padding: 15px 20px;
+  border-radius: var(--radius-lg);
+  font-size: var(--node-font-size, 18px);
+  font-weight: var(--node-font-weight, 720);
+}
+
+.mindmap-node.is-root .mindmap-node-shape {
   border-color: color-mix(
     in srgb,
     var(--node-border, #377cf6) 42%,
@@ -4347,47 +4384,46 @@ textarea::placeholder {
     0 12px 28px rgb(33 50 73 / 13%),
     0 2px 6px rgb(33 50 73 / 6%),
     inset 0 1px 0 rgb(255 255 255 / 82%);
-  font-size: 18px;
-  font-weight: 720;
 }
 
 .mindmap-node.has-node-type:not(.is-root) {
+  color: var(--node-text);
+}
+
+.mindmap-node.has-node-type:not(.is-root) .mindmap-node-shape {
   border-color: color-mix(
     in srgb,
-    var(--node-type-border) 52%,
+    var(--node-border) 52%,
     transparent
   );
-  color: var(--node-type-text);
   background:
     linear-gradient(180deg, rgb(255 255 255 / 45%), transparent),
-    color-mix(in srgb, var(--node-type-bg) 74%, white);
+    color-mix(in srgb, var(--node-bg) 74%, white);
 }
 
 .mindmap-node.has-node-type.is-root {
+  color: var(--node-text);
+}
+
+.mindmap-node.has-node-type.is-root .mindmap-node-shape {
   border-color: color-mix(
     in srgb,
-    var(--node-type-border) 48%,
+    var(--node-border) 48%,
     transparent
   );
-  color: var(--node-type-text);
   background:
     linear-gradient(145deg, rgb(255 255 255 / 70%), transparent),
-    color-mix(in srgb, var(--node-type-bg) 76%, white);
+    color-mix(in srgb, var(--node-bg) 76%, white);
 }
 
 .mindmap-node.is-selected,
 .mindmap-node.has-node-type.is-selected {
-  border-color: var(--accent);
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 60%), transparent),
-    color-mix(in srgb, var(--node-bg, #edf4ff) 62%, white);
   box-shadow:
     0 0 0 3px rgb(55 124 246 / 11%),
     0 7px 18px rgb(55 124 246 / 10%);
 }
 
 .mindmap-node.is-selected:not(.is-primary-selected) {
-  border-color: rgb(55 124 246 / 62%);
   box-shadow:
     0 0 0 2px rgb(55 124 246 / 8%),
     0 5px 14px rgb(33 50 73 / 8%);
@@ -4403,6 +4439,39 @@ textarea::placeholder {
   box-shadow:
     0 0 0 4px rgb(55 124 246 / 12%),
     0 5px 14px rgb(33 50 73 / 8%);
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape {
+  border: 0;
+  border-radius: 0;
+  background: var(--node-border, #1f6feb);
+  box-shadow: none;
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  filter: drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--node-bg, #eef5ff);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+}
+
+.mindmap-node.shape-diamond.is-selected,
+.mindmap-node.shape-diamond.has-node-type.is-selected,
+.mindmap-node.shape-diamond.is-selected:not(.is-primary-selected),
+.mindmap-node.shape-diamond.is-selected.is-primary-selected {
+  box-shadow: none;
+  outline: 0;
+}
+
+.mindmap-node.shape-diamond.is-selected .mindmap-node-shape,
+.mindmap-node.shape-diamond.is-primary-selected .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(55 124 246 / 45%))
+    drop-shadow(0 0 9px rgb(55 124 246 / 34%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
 }
 
 .mindmap-node.is-search-match {
@@ -4449,6 +4518,56 @@ textarea::placeholder {
   box-shadow:
     0 0 0 5px rgb(96 170 122 / 10%),
     0 12px 28px rgb(46 110 68 / 12%);
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape,
+.mindmap-node.shape-diamond.has-node-type .mindmap-node-shape {
+  border: 0;
+  background: var(--node-border, #1f6feb);
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape::after {
+  inset: var(--node-diamond-border-width, 2px);
+  background: var(--node-bg, #eef5ff);
+}
+
+.mindmap-node.shape-diamond.is-selected,
+.mindmap-node.shape-diamond.has-node-type.is-selected,
+.mindmap-node.shape-diamond.is-selected:not(.is-primary-selected),
+.mindmap-node.shape-diamond.is-selected.is-primary-selected,
+.mindmap-node.shape-diamond.is-primary-selected,
+.mindmap-node.shape-diamond.is-box-selection-preview,
+.mindmap-node.shape-diamond.is-search-match,
+.mindmap-node.shape-diamond.is-drop-target,
+.mindmap-node.shape-diamond.is-dragging {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: 0;
+  outline-offset: 0;
+}
+
+.mindmap-node.shape-diamond.is-selected .mindmap-node-shape,
+.mindmap-node.shape-diamond.is-primary-selected .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(55 124 246 / 45%))
+    drop-shadow(0 0 9px rgb(55 124 246 / 34%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
+.mindmap-node.shape-diamond.is-box-selection-preview .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(55 124 246 / 38%))
+    drop-shadow(0 0 7px rgb(55 124 246 / 24%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
+.mindmap-node.shape-diamond.is-search-match .mindmap-node-shape,
+.mindmap-node.shape-diamond.is-drop-target .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(96 170 122 / 42%))
+    drop-shadow(0 0 8px rgb(96 170 122 / 28%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
 }
 
 .collapse-toggle {
