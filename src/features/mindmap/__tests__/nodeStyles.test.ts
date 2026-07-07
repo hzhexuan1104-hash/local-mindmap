@@ -164,6 +164,80 @@ describe('node style helpers', () => {
     expect(css).not.toMatch(/\.mindmap-node-content\s*\{[^}]*transform:/);
   });
 
+  it('keeps diamond selected styles off the visible outer hitbox', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+    const finalDropTargetRuleIndex = css.lastIndexOf('.mindmap-node.is-drop-target');
+    const finalDiamondRuleIndex = css.lastIndexOf(
+      '.mindmap-node.shape-diamond.is-selected,',
+    );
+    const diamondStateRule = /\.mindmap-node\.shape-diamond\.is-selected,[\s\S]*?\.mindmap-node\.shape-diamond\.is-dragging\s*\{([\s\S]*?)\}/.exec(
+      css,
+    )?.[1];
+
+    expect(finalDiamondRuleIndex).toBeGreaterThan(finalDropTargetRuleIndex);
+    expect(diamondStateRule).toContain('border: 0;');
+    expect(diamondStateRule).toContain('background: transparent;');
+    expect(diamondStateRule).toContain('box-shadow: none;');
+    expect(diamondStateRule).toContain('outline: 0;');
+    expect(diamondStateRule).toContain('outline-offset: 0;');
+  });
+
+  it('uses diamond shape-layer highlights for selected, box-select, and drop states', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-diamond\.is-selected \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.is-primary-selected \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 9px rgb\(55 124 246 \/ 34%\)\)/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-diamond\.is-box-selection-preview \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 7px rgb\(55 124 246 \/ 24%\)\)/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-diamond\.is-search-match \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.is-drop-target \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 8px rgb\(96 170 122 \/ 28%\)\)/,
+    );
+  });
+
+  it('renders diamond borderColor through the visible diamond shape layer', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-diamond \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.has-node-type \.mindmap-node-shape\s*\{[\s\S]*?background: var\(--node-border, #1f6feb\);/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-diamond \.mindmap-node-shape::after\s*\{[\s\S]*?inset: var\(--node-diamond-border-width, 2px\);[\s\S]*?background: var\(--node-bg, #eef5ff\);/,
+    );
+    expect(getNodeStyleCssVariables({
+      ...DEFAULT_NODE_STYLE,
+      shape: 'diamond',
+      backgroundColor: '#ffe8cc',
+      borderColor: '#d9480f',
+      textColor: '#212529',
+    })).toMatchObject({
+      '--node-bg': '#ffe8cc',
+      '--node-border': '#d9480f',
+      '--node-text': '#212529',
+    });
+  });
+
+  it('keeps non-diamond selected and shape styles stable', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+
+    expect(css).toMatch(
+      /\.mindmap-node\.is-selected,[\s\S]*?\.mindmap-node\.has-node-type\.is-selected\s*\{[\s\S]*?box-shadow:/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node\.is-primary-selected,[\s\S]*?\.mindmap-node\.is-selected\.is-primary-selected\s*\{[\s\S]*?outline:/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node \.mindmap-node-shape\s*\{[\s\S]*?border-radius: var\(--radius-md\);/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-rectangle \.mindmap-node-shape\s*\{[\s\S]*?border-radius: 0;/,
+    );
+    expect(css).toMatch(
+      /\.mindmap-node\.shape-pill \.mindmap-node-shape\s*\{[\s\S]*?border-radius: 999px;/,
+    );
+  });
+
   it('creates an explicit global node type from current node style', () => {
     vi.stubGlobal('crypto', {
       randomUUID: () => 'generated-type-id',

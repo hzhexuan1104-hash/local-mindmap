@@ -511,8 +511,8 @@ function MindmapTree({
       style={{
         left: layoutNode.x,
         top: layoutNode.y,
-        width: POSITIONED_LAYOUT.nodeWidth,
-        minHeight: POSITIONED_LAYOUT.nodeHeight,
+        width: layoutNode.width,
+        minHeight: layoutNode.height,
       }}
     >
         <div
@@ -716,25 +716,6 @@ export function App() {
   const selectedNode = selectedNodeId
     ? findNodeById(mindmap, selectedNodeId) ?? mindmap
     : mindmap;
-  const mindmapLayout = useMemo(() => createMindmapLayout(mindmap), [mindmap]);
-  const nodeHitboxes = useMemo(
-    () =>
-      mindmapLayout.nodes.map((layoutNode) => ({
-        id: layoutNode.id,
-        left: layoutNode.x,
-        top: layoutNode.y,
-        width: POSITIONED_LAYOUT.nodeWidth,
-        height: POSITIONED_LAYOUT.nodeHeight,
-      })),
-    [mindmapLayout.nodes],
-  );
-  const layoutNodeById = useMemo(
-    () =>
-      new Map(
-        mindmapLayout.nodes.map((layoutNode) => [layoutNode.id, layoutNode]),
-      ),
-    [mindmapLayout.nodes],
-  );
   const selectedNodeIdSet = useMemo(
     () => new Set(selectedNodeIds),
     [selectedNodeIds],
@@ -780,6 +761,28 @@ export function App() {
         ).values(),
       ),
     [nodeTypes, pluginNodeTypes],
+  );
+  const mindmapLayout = useMemo(
+    () => createMindmapLayout(mindmap, availableNodeTypes),
+    [mindmap, availableNodeTypes],
+  );
+  const nodeHitboxes = useMemo(
+    () =>
+      mindmapLayout.nodes.map((layoutNode) => ({
+        id: layoutNode.id,
+        left: layoutNode.x,
+        top: layoutNode.y,
+        width: layoutNode.width,
+        height: layoutNode.height,
+      })),
+    [mindmapLayout.nodes],
+  );
+  const layoutNodeById = useMemo(
+    () =>
+      new Map(
+        mindmapLayout.nodes.map((layoutNode) => [layoutNode.id, layoutNode]),
+      ),
+    [mindmapLayout.nodes],
   );
   const nodeTypeCreationOptions = useMemo(
     () => getNodeTypeCreationOptions(availableNodeTypes),

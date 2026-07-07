@@ -4520,6 +4520,56 @@ textarea::placeholder {
     0 12px 28px rgb(46 110 68 / 12%);
 }
 
+.mindmap-node.shape-diamond .mindmap-node-shape,
+.mindmap-node.shape-diamond.has-node-type .mindmap-node-shape {
+  border: 0;
+  background: var(--node-border, #1f6feb);
+}
+
+.mindmap-node.shape-diamond .mindmap-node-shape::after {
+  inset: var(--node-diamond-border-width, 2px);
+  background: var(--node-bg, #eef5ff);
+}
+
+.mindmap-node.shape-diamond.is-selected,
+.mindmap-node.shape-diamond.has-node-type.is-selected,
+.mindmap-node.shape-diamond.is-selected:not(.is-primary-selected),
+.mindmap-node.shape-diamond.is-selected.is-primary-selected,
+.mindmap-node.shape-diamond.is-primary-selected,
+.mindmap-node.shape-diamond.is-box-selection-preview,
+.mindmap-node.shape-diamond.is-search-match,
+.mindmap-node.shape-diamond.is-drop-target,
+.mindmap-node.shape-diamond.is-dragging {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: 0;
+  outline-offset: 0;
+}
+
+.mindmap-node.shape-diamond.is-selected .mindmap-node-shape,
+.mindmap-node.shape-diamond.is-primary-selected .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(55 124 246 / 45%))
+    drop-shadow(0 0 9px rgb(55 124 246 / 34%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
+.mindmap-node.shape-diamond.is-box-selection-preview .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(55 124 246 / 38%))
+    drop-shadow(0 0 7px rgb(55 124 246 / 24%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
+.mindmap-node.shape-diamond.is-search-match .mindmap-node-shape,
+.mindmap-node.shape-diamond.is-drop-target .mindmap-node-shape {
+  filter:
+    drop-shadow(0 0 0 rgb(96 170 122 / 42%))
+    drop-shadow(0 0 8px rgb(96 170 122 / 28%))
+    drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
+}
+
 .collapse-toggle {
   right: -11px;
   width: 22px;
