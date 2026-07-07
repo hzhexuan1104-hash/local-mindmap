@@ -6,6 +6,14 @@ import type {
 
 export type EffectiveNodeStyle = Required<MindmapNodeStyle>;
 
+export type NodeStyleCssVariables = {
+  '--node-bg': string;
+  '--node-border': string;
+  '--node-text': string;
+  '--node-font-size': string;
+  '--node-font-weight': number;
+};
+
 export const DEFAULT_NODE_STYLE: EffectiveNodeStyle = {
   shape: 'rounded',
   backgroundColor: '#ffffff',
@@ -46,6 +54,37 @@ export function mergeNodeStyle(
   return {
     ...(currentStyle ?? {}),
     ...patch,
+  };
+}
+
+export function getNodeStyleCssVariables(
+  style: EffectiveNodeStyle,
+): NodeStyleCssVariables {
+  return {
+    '--node-bg': style.backgroundColor,
+    '--node-border': style.borderColor,
+    '--node-text': style.textColor,
+    '--node-font-size': `${style.fontSize}px`,
+    '--node-font-weight': style.bold ? 700 : 500,
+  };
+}
+
+export function getNodeShapeClassName(style: EffectiveNodeStyle): string {
+  return `shape-${style.shape}`;
+}
+
+export function applyStyleToNodeType(
+  nodeType: MindmapNodeType,
+  style: EffectiveNodeStyle,
+): MindmapNodeType {
+  return {
+    ...nodeType,
+    shape: style.shape,
+    backgroundColor: style.backgroundColor,
+    borderColor: style.borderColor,
+    textColor: style.textColor,
+    fontSize: style.fontSize,
+    bold: style.bold,
   };
 }
 

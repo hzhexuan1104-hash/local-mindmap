@@ -9,6 +9,8 @@ export type KeyboardShortcutAction =
   | 'select-all'
   | 'find'
   | 'replace'
+  | 'add-child'
+  | 'add-sibling'
   | 'save'
   | 'open'
   | 'delete';
@@ -18,6 +20,7 @@ export type KeyboardShortcutState = {
   hasContextMenuOpen: boolean;
   isBoxSelecting: boolean;
   hasSelection: boolean;
+  isEditingNodeText?: boolean;
 };
 
 export type KeyboardShortcutEventLike = {
@@ -39,7 +42,10 @@ export function isEditableShortcutTarget(target: EventTarget | null | undefined)
   }
 
   return Boolean(
-    closest.call(target, 'input, textarea, select, [contenteditable="true"]'),
+    closest.call(
+      target,
+      'input, textarea, select, button, [contenteditable], [contenteditable="true"]',
+    ),
   );
 }
 
@@ -65,6 +71,26 @@ export function getKeyboardShortcutAction(
   }
 
   const usesCommandKey = Boolean(event.ctrlKey || event.metaKey);
+
+  if (!usesCommandKey) {
+    if (
+      state.hasModalOpen ||
+      state.hasContextMenuOpen ||
+      state.isBoxSelecting ||
+      state.isEditingNodeText ||
+      !state.hasSelection
+    ) {
+      return null;
+    }
+
+    if (event.key === 'Tab') {
+      return 'add-child';
+    }
+
+    if (event.key === 'Enter') {
+      return 'add-sibling';
+    }
+  }
 
   if (!usesCommandKey) {
     return null;
