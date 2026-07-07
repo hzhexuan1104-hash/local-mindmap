@@ -9,7 +9,7 @@ import {
   type PluginGalleryCatalogItemData,
 } from '../storage/userDataStorage';
 
-export type PluginGalleryRiskLevel = 'low' | 'medium' | 'high';
+export type PluginGalleryRiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
 export type PluginGalleryItem = Omit<
   PluginGalleryCatalogItemData,
@@ -75,7 +75,9 @@ function normalizeGalleryItem(
   const pluginType = VALID_PLUGIN_TYPES.has(item.pluginType as PluginType)
     ? (item.pluginType as PluginType)
     : 'tool';
-  const riskLevel = ['low', 'medium', 'high'].includes(item.riskLevel)
+  const riskLevel = ['low', 'medium', 'high', 'critical'].includes(
+    item.riskLevel,
+  )
     ? (item.riskLevel as PluginGalleryRiskLevel)
     : 'high';
   let manifest: PluginManifest | null = null;

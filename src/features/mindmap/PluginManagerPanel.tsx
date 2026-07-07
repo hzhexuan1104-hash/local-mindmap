@@ -191,6 +191,105 @@ function diagnosticFixActions(report: PluginDiagnosticReport | null) {
   );
 }
 
+const PLUGIN_TYPE_LABELS: Record<string, string> = {
+  'import-export': '导入导出',
+  'node-type-pack': '节点类型',
+  'template-pack': '模板',
+  'theme-pack': '主题',
+  'icon-pack': '图标',
+  tool: '工具',
+  script: '脚本',
+  'action-workflow': '工作流',
+  'external-command': '外部命令',
+  native: '原生',
+};
+
+function pluginTypeLabel(pluginType: string) {
+  return PLUGIN_TYPE_LABELS[pluginType] ?? pluginType;
+}
+
+function getRiskPillClassName(riskLevel: string) {
+  return [
+    'risk-pill',
+    riskLevel === 'critical'
+      ? 'risk-critical'
+      : riskLevel === 'high'
+        ? 'risk-high'
+        : riskLevel === 'medium'
+          ? 'risk-medium'
+          : 'risk-low',
+  ].join(' ');
+}
+
+function getPluginRiskLevel(plugin: PluginManifest) {
+  if (plugin.manifestValid === false) return 'high';
+  if (plugin.pluginType === 'external-command') return 'critical';
+  if (plugin.pluginType === 'script') return 'high';
+  if (plugin.pluginType === 'action-workflow') return 'medium';
+  return 'low';
+}
+
+function getPluginUserStatus(plugin: PluginManifest) {
+  if (plugin.source === 'manifest-missing') {
+    return '安装异常：manifest 缺失';
+  }
+  if (plugin.source === 'manifest-damaged') {
+    return '安装异常：插件损坏';
+  }
+  if (
+    plugin.source === 'registry-missing' ||
+    plugin.source === 'orphan-manifest'
+  ) {
+    return '安装异常：注册记录异常';
+  }
+  if (plugin.manifestValid === false) {
+    return '安装异常：manifest 无效';
+  }
+  return plugin.enabled ? '已启用' : '已禁用';
+}
+
+function getGalleryUserStatus(state: ReturnType<typeof getPluginGalleryState>) {
+  if (state.installed?.source === 'manifest-missing') {
+    return '安装异常：manifest 缺失';
+  }
+  if (state.installed?.source === 'manifest-damaged') {
+    return '安装异常：插件损坏';
+  }
+  if (
+    state.installed?.source === 'registry-missing' ||
+    state.installed?.source === 'orphan-manifest'
+  ) {
+    return '安装异常：注册记录异常';
+  }
+  if (state.state === 'manifest-missing') {
+    return '安装异常：manifest 缺失';
+  }
+  if (state.state === 'manifest-damaged') {
+    return '安装异常：插件损坏';
+  }
+  return getPluginGalleryStateLabel(state);
+}
+
+function isPluginAbnormal(plugin: PluginManifest) {
+  return (
+    plugin.manifestValid === false ||
+    plugin.source === 'manifest-missing' ||
+    plugin.source === 'manifest-damaged' ||
+    plugin.source === 'registry-missing' ||
+    plugin.source === 'orphan-manifest'
+  );
+}
+
+function isGalleryStateAbnormal(state: ReturnType<typeof getPluginGalleryState>) {
+  return (
+    Boolean(state.installed) &&
+    (state.state === 'manifest-missing' ||
+      state.state === 'manifest-damaged' ||
+      state.installed?.source === 'registry-missing' ||
+      state.installed?.source === 'orphan-manifest')
+  );
+}
+
 function countContributions(plugin: PluginManifest) {
   if (!plugin.contributions) {
     return 0;
@@ -230,10 +329,10 @@ const SOURCE_LABELS: Record<
 > = {
   'built-in': '内置',
   external: '外部安装',
-  'orphan-manifest': '孤儿 manifest',
-  'registry-missing': 'registry 记录缺失',
-  'manifest-missing': '插件文件缺失',
-  'manifest-damaged': 'manifest 损坏',
+  'orphan-manifest': '安装异常：注册记录异常',
+  'registry-missing': '安装异常：注册记录异常',
+  'manifest-missing': '安装异常：manifest 缺失',
+  'manifest-damaged': '安装异常：插件损坏',
 };
 
 function countTemplateNodes(node: {
@@ -1066,6 +1165,9 @@ export function PluginManagerPanel({
                 const summary = manifest
                   ? contributionSummary(manifest)
                   : null;
+                const statusText = getGalleryUserStatus(state);
+                const abnormalState = isGalleryStateAbnormal(state);
+                const installedPlugin = state.installed;
                 return (
                   <article
                     className={`plugin-gallery-card gallery-risk-${item.riskLevel}`}
@@ -1074,17 +1176,24 @@ export function PluginManagerPanel({
                     <div className="plugin-item-title">
                       <strong>{item.title}</strong>
                       {item.recommended ? <span>推荐</span> : null}
-                      <span>风险：{item.riskLevel}</span>
+                      <span className="plugin-type-pill">
+                        {pluginTypeLabel(item.pluginType)}
+                      </span>
+                      <span className={getRiskPillClassName(item.riskLevel)}>
+                        风险：{item.riskLevel}
+                      </span>
                       <span
                         className={
-                          state.state === 'installed'
+                          abnormalState
+                            ? 'status-invalid'
+                            : state.state === 'installed'
                             ? 'status-on'
                             : state.state === 'not-installed'
                               ? 'status-off'
                               : 'status-invalid'
                         }
                       >
-                        {getPluginGalleryStateLabel(state)}
+                        {statusText}
                       </span>
                       {state.installed && !state.enabled ? (
                         <span className="status-off">已禁用</span>
@@ -1094,40 +1203,41 @@ export function PluginManagerPanel({
                       ) : null}
                     </div>
                     <p>{item.description}</p>
-                    <dl className="plugin-meta">
-                      <div>
-                        <dt>pluginId</dt>
-                        <dd>{item.id}</dd>
-                      </div>
-                      <div>
-                        <dt>pluginType</dt>
-                        <dd>{item.pluginType}</dd>
-                      </div>
-                      <div>
-                        <dt>runtime</dt>
-                        <dd>{item.runtime ?? '无'}</dd>
-                      </div>
-                      <div>
-                        <dt>版本</dt>
-                        <dd>{manifest?.version ?? '不可用'}</dd>
-                      </div>
-                      <div>
-                        <dt>作者</dt>
-                        <dd>{manifest?.author ?? '未知'}</dd>
-                      </div>
-                      <div>
-                        <dt>分类</dt>
-                        <dd>{item.category}</dd>
-                      </div>
-                    </dl>
-                    <div className="plugin-capability-list">
-                      {item.tags.map((tag) => (
-                        <span key={tag}>{tag}</span>
-                      ))}
-                    </div>
                     <p className="plugin-gallery-safety">
                       {getPluginGallerySafetyText(item.pluginType)}
                     </p>
+                    {abnormalState ? (
+                      <div className="plugin-next-steps" role="group" aria-label="异常插件下一步操作">
+                        <span>{statusText}</span>
+                        <button
+                          type="button"
+                          className="primary-action"
+                          onClick={() => onInstallGallery?.(item)}
+                          disabled={!item.installable || !onInstallGallery}
+                        >
+                          重新安装
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() => void runDiagnostics('all')}
+                          disabled={!isDesktopApp}
+                        >
+                          打开诊断中心
+                        </button>
+                        {installedPlugin && isDesktopApp ? (
+                          <button
+                            type="button"
+                            className="text-action"
+                            onClick={() =>
+                              onOpenManifestDir(installedPlugin.pluginId)
+                            }
+                          >
+                            打开插件目录
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {!item.installable ? (
                       <div className="plugin-install-error" role="alert">
                         <strong>不可安装</strong>
@@ -1137,23 +1247,58 @@ export function PluginManagerPanel({
                     <div className="plugin-item-actions">
                       <button
                         type="button"
+                        className="primary-action"
                         onClick={() => onInstallGallery?.(item)}
                         disabled={!item.installable || !onInstallGallery}
                       >
                         {getPluginGalleryInstallLabel(state)}
                       </button>
+                      {installedPlugin ? (
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          disabled={installedPlugin.manifestValid === false}
+                          title={
+                            installedPlugin.manifestValid === false
+                              ? '异常插件需先重新安装或清理'
+                              : undefined
+                          }
+                          onClick={() =>
+                            onToggle(item.id, !installedPlugin.enabled)
+                          }
+                        >
+                          {installedPlugin.enabled ? '禁用' : '启用'}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        className="secondary-action"
+                        className="text-action"
                         onClick={() => onOpenGalleryPluginDir?.(item.id)}
                         disabled={!item.installable || !onOpenGalleryPluginDir}
                       >
                         打开示例目录
                       </button>
+                      {abnormalState && installedPlugin ? (
+                        <button
+                          type="button"
+                          className="secondary-action danger-action"
+                          onClick={() => onCleanRecord(installedPlugin.pluginId)}
+                        >
+                          清理异常
+                        </button>
+                      ) : null}
                     </div>
                     <details className="plugin-gallery-details">
                       <summary>查看详情</summary>
                       <dl className="plugin-paths">
+                        <div><dt>pluginId</dt><dd>{item.id}</dd></div>
+                        <div><dt>pluginType 原始值</dt><dd>{item.pluginType}</dd></div>
+                        <div><dt>runtime</dt><dd>{item.runtime ?? '无'}</dd></div>
+                        <div><dt>version</dt><dd>{manifest?.version ?? '不可用'}</dd></div>
+                        <div><dt>author</dt><dd>{manifest?.author ?? '未知'}</dd></div>
+                        <div><dt>tags</dt><dd>{item.tags.join(', ') || '无'}</dd></div>
+                        <div><dt>manifest 状态</dt><dd>{manifest ? '可用' : '不可用'}</dd></div>
+                        <div><dt>registry 状态</dt><dd>{statusText}</dd></div>
                         <div><dt>描述</dt><dd>{manifest?.description ?? item.description}</dd></div>
                         <div><dt>permissions</dt><dd>{manifest?.permissions?.join(', ') || '无'}</dd></div>
                         <div><dt>capabilities</dt><dd>{manifest?.capabilities.join(', ') || '无'}</dd></div>
@@ -1237,19 +1382,67 @@ export function PluginManagerPanel({
               {visiblePlugins.length === 0 ? (
                 <p className="empty-note">没有匹配的插件</p>
               ) : (
-                visiblePlugins.map((plugin) => (
+                visiblePlugins.map((plugin) => {
+                  const riskLevel = getPluginRiskLevel(plugin);
+                  const statusText = getPluginUserStatus(plugin);
+                  const abnormalPlugin = isPluginAbnormal(plugin);
+
+                  return (
                   <article className="plugin-item" key={plugin.pluginId}>
                     <div className="plugin-item-main">
                       <div className="plugin-item-title">
                         <strong>{plugin.name}</strong>
                         {plugin.builtIn ? <span>内置</span> : null}
+                        <span className="plugin-type-pill">
+                          {pluginTypeLabel(plugin.pluginType)}
+                        </span>
+                        <span className={getRiskPillClassName(riskLevel)}>
+                          风险：{riskLevel}
+                        </span>
                         <span
-                          className={plugin.enabled ? 'status-on' : 'status-off'}
+                          className={
+                            abnormalPlugin
+                              ? 'status-invalid'
+                              : plugin.enabled
+                                ? 'status-on'
+                                : 'status-off'
+                          }
                         >
-                          {plugin.enabled ? '已启用' : '已禁用'}
+                          {statusText}
                         </span>
                       </div>
                       <p>{plugin.description || '暂无描述'}</p>
+                      {abnormalPlugin ? (
+                        <div className="plugin-next-steps" role="group" aria-label="异常插件下一步操作">
+                          <span>{statusText}</span>
+                          <button
+                            type="button"
+                            className="primary-action"
+                            onClick={onInstall}
+                          >
+                            重新安装
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-action"
+                            onClick={() => void runDiagnostics('all')}
+                            disabled={!isDesktopApp}
+                          >
+                            打开诊断中心
+                          </button>
+                          {isDesktopApp ? (
+                            <button
+                              type="button"
+                              className="text-action"
+                              onClick={() => onOpenManifestDir(plugin.pluginId)}
+                            >
+                              打开插件目录
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <details className="plugin-gallery-details plugin-detail-panel">
+                        <summary>查看详情</summary>
                       <dl className="plugin-meta">
                         <div>
                           <dt>pluginId</dt>
@@ -1685,6 +1878,7 @@ export function PluginManagerPanel({
                         </div>
                       ) : null}
                       <ContributionDetails plugin={plugin} />
+                      </details>
                     </div>
                     <div className="plugin-item-actions">
                       {plugin.pluginType === 'script' ||
@@ -1705,7 +1899,7 @@ export function PluginManagerPanel({
                       ) : null}
                       <button
                         type="button"
-                        className="secondary-action"
+                        className="text-action"
                         onClick={() => onCopyPluginId(plugin.pluginId)}
                       >
                         复制 pluginId
@@ -1754,7 +1948,7 @@ export function PluginManagerPanel({
                       {!plugin.builtIn ? (
                         <button
                           type="button"
-                          className="secondary-action"
+                          className="text-action"
                           onClick={() =>
                             onCopyPath(
                               plugin.manifestPath ??
@@ -1768,7 +1962,7 @@ export function PluginManagerPanel({
                       ) : null}
                       <button
                         type="button"
-                        className="secondary-action"
+                        className="text-action"
                         onClick={() =>
                           onCopyPath(
                             'plugins/plugin-registry.json',
@@ -1781,7 +1975,7 @@ export function PluginManagerPanel({
                       {!plugin.builtIn ? (
                         <button
                           type="button"
-                          className="secondary-action"
+                          className="text-action"
                           onClick={() =>
                             onCopyPath(
                               plugin.installedDirPath ??
@@ -1795,17 +1989,17 @@ export function PluginManagerPanel({
                       ) : null}
                       {isDesktopApp ? (
                         <button
-                          type="button"
-                          className="secondary-action"
-                          onClick={onOpenPluginDir}
-                        >
+                        type="button"
+                        className="text-action"
+                        onClick={onOpenPluginDir}
+                      >
                           打开插件目录
                         </button>
                       ) : null}
                       {isDesktopApp && !plugin.builtIn ? (
                         <button
                           type="button"
-                          className="secondary-action"
+                          className="text-action"
                           onClick={() => onOpenManifestDir(plugin.pluginId)}
                         >
                           打开 manifest 所在目录
@@ -1860,7 +2054,8 @@ export function PluginManagerPanel({
                       </button>
                     </div>
                   </article>
-                ))
+                  );
+                })
               )}
             </div>
           </section>

@@ -275,6 +275,8 @@ const createCenterNode = (): MindmapNode => ({
   children: [],
 });
 
+const CANVAS_GUIDE_DISMISSED_KEY = 'local-mindmap.canvasGuideDismissed';
+
 const setAllNodesCollapsed = (
   node: MindmapNode,
   collapsed: boolean,
@@ -701,6 +703,15 @@ export function App() {
   const [boxSelection, setBoxSelection] = useState<BoxSelectionState | null>(null);
   const [boxSelectionPreviewIds, setBoxSelectionPreviewIds] = useState<string[]>([]);
   const [isShortcutHelpVisible, setIsShortcutHelpVisible] = useState(false);
+  const [isCanvasGuideDismissed, setIsCanvasGuideDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(CANVAS_GUIDE_DISMISSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [hasUsedShortcutCreation, setHasUsedShortcutCreation] = useState(false);
+  const [hasEditedNode, setHasEditedNode] = useState(false);
   const messageTimerRef = useRef<number | undefined>(undefined);
   const exportTreeRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
@@ -725,7 +736,11 @@ export function App() {
     [boxSelectionPreviewIds],
   );
   const allNodeIds = useMemo(() => Array.from(collectNodeIds(mindmap)), [mindmap]);
-  const shouldShowCanvasGuide = allNodeIds.length <= 1;
+  const shouldShowCanvasGuide =
+    !isCanvasGuideDismissed &&
+    allNodeIds.length < 3 &&
+    !hasUsedShortcutCreation &&
+    !hasEditedNode;
   const pluginThemes = useMemo(() => getPluginThemes(plugins), [plugins]);
   const availableThemes = useMemo(
     () =>
@@ -1130,9 +1145,11 @@ export function App() {
           showMessage('已打开替换');
           return;
         case 'add-child':
+          setHasUsedShortcutCreation(true);
           handleAddChild(childNodeTypeId, { startEditing: true });
           return;
         case 'add-sibling':
+          setHasUsedShortcutCreation(true);
           handleAddSibling(childNodeTypeId, { startEditing: true });
           return;
         case 'save':
@@ -1169,6 +1186,16 @@ export function App() {
       setMessage('');
       setMessageKind('info');
     }, 2400);
+  };
+
+  const dismissCanvasGuide = () => {
+    setIsCanvasGuideDismissed(true);
+    try {
+      localStorage.setItem(CANVAS_GUIDE_DISMISSED_KEY, 'true');
+    } catch {
+      // localStorage can be unavailable in restricted WebViews.
+    }
+    showMessage('已关闭新手引导');
   };
 
   const recordHistory = () => {
@@ -2786,6 +2813,7 @@ export function App() {
   };
 
   const handleStartEdit = (node: MindmapNode) => {
+    setHasEditedNode(true);
     setSelectedNodeId(node.id);
     setSelectedNodeIds([node.id]);
     setEditingNodeId(node.id);
@@ -3098,6 +3126,14 @@ export function App() {
 
     if (!targetNodeType) {
       showMessage('插件或文件内置节点类型不能在此处直接修改');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `这会更新「${targetNodeType.name}」的全局样式，并影响所有使用该节点类型的节点。是否继续？`,
+    );
+
+    if (!confirmed) {
       return;
     }
 
@@ -4672,6 +4708,10 @@ export function App() {
           onSelect: () => setIsFocusMode(true),
           dividerBefore: true,
         },
+        {
+          label: '性能测试',
+          onSelect: () => setActiveDrawer('performance'),
+        },
       ],
     },
     {
@@ -4725,16 +4765,26 @@ export function App() {
       ],
     },
     {
-      id: 'more',
-      label: '更多',
+      id: 'help',
+      label: '帮助',
       items: [
         {
-          label: '性能测试',
-          onSelect: () => setActiveDrawer('performance'),
+          label: '快捷键',
+          onSelect: () => setIsShortcutHelpVisible(true),
         },
         {
-          label: '快捷键帮助',
-          onSelect: () => setIsShortcutHelpVisible(true),
+          label: '使用指南',
+          onSelect: () =>
+            showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
+        },
+        {
+          label: '插件开发文档',
+          onSelect: () => void handleOpenPluginDevelopmentDocs(),
+        },
+        {
+          label: '关于 Local Mindmap',
+          onSelect: () =>
+            showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
         },
       ],
     },
@@ -4905,8 +4955,9 @@ export function App() {
                                   用于快速创建常用思维导图结构。
                                 </p>
                               )}
-                              <span>共 {countMindmapNodes(template.rootNode)} 个节点</span>
-                              <span>标签：{template.category}</span>
+                              <span>
+                                共 {countMindmapNodes(template.rootNode)} 个节点 · {template.category}
+                              </span>
                               {template.description ? (
                                 null
                               ) : null}
@@ -4951,8 +5002,9 @@ export function App() {
                                   自定义模板。
                                 </p>
                               )}
-                              <span>共 {countMindmapNodes(template.rootNode)} 个节点</span>
-                              <span>标签：{template.category}</span>
+                              <span>
+                                共 {countMindmapNodes(template.rootNode)} 个节点 · {template.category}
+                              </span>
                               <span>
                                 {new Date(template.createTime).toLocaleString()}
                               </span>
@@ -5408,6 +5460,13 @@ export function App() {
               <span>Enter 新建同级节点</span>
               <span>拖拽节点调整结构</span>
               <span>Ctrl+F 查找节点</span>
+              <button
+                type="button"
+                className="ghost-action"
+                onClick={dismissCanvasGuide}
+              >
+                不再提示
+              </button>
             </aside>
           ) : null}
           <CanvasControls
@@ -5499,9 +5558,10 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setIsRemarkPanelCollapsed(false)}
-                aria-label="展开属性面板"
+                aria-label="打开右侧属性面板"
+                title="打开右侧属性面板"
               >
-                ‹ 属性
+                ‹ {selectedNodeId ? '当前节点' : '属性'}
               </button>
             </aside>
           ) : (
@@ -5509,6 +5569,7 @@ export function App() {
               selectedNode={selectedNode}
               selectedCount={selectedNodeIds.length}
               nodeTypes={availableNodeTypes}
+              editableNodeTypeIds={nodeTypes.map((nodeType) => nodeType.id)}
               childNodeTypeId={childNodeTypeId}
               themeId={themeId}
               themes={availableThemes}

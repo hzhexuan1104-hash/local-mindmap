@@ -293,7 +293,10 @@ describe('PluginManagerPanel installation errors', () => {
     );
 
     expect(html).toContain('<dd>false</dd>');
-    expect(html).toContain('插件文件缺失');
+    expect(html).toContain('安装异常：manifest 缺失');
+    expect(html).toContain('重新安装');
+    expect(html).toContain('打开诊断中心');
+    expect(html).toContain('查看详情');
     expect(html).toContain('Schema errors');
     expect(html).toContain('manifest.json 缺失');
     for (const contribution of [
@@ -445,6 +448,10 @@ describe('PluginManagerPanel installation errors', () => {
     expect(html).toContain('已禁用');
     expect(html).toContain('已信任');
     expect(html).toContain('重新安装');
+    expect(html).toContain('风险：medium');
+    expect(html).toContain('pluginType 原始值');
+    expect(html).toContain('runtime');
+    expect(html).toContain('version');
     expect(html).toContain('实验性脚本插件');
     expect(html).toContain('打开示例目录');
     expect(html).toContain('查看 README');
