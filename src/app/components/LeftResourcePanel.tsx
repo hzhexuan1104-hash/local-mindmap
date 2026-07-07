@@ -31,7 +31,7 @@ const resourceItems: Array<{
   },
   {
     id: 'node-types',
-    icon: '◇',
+    icon: '◒',
     label: '节点类型',
     tooltip: '节点类型：管理全局样式模板',
     group: '工具',
@@ -45,7 +45,7 @@ const resourceItems: Array<{
   },
   {
     id: 'plugins',
-    icon: '♢',
+    icon: '🧩',
     label: '插件',
     tooltip: '插件：打开插件管理、中心、工作台和诊断',
     group: '扩展',

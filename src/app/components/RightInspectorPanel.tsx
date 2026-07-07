@@ -20,6 +20,7 @@ type RightInspectorPanelProps = {
   selectedNode: MindmapNode;
   selectedCount: number;
   nodeTypes: MindmapNodeType[];
+  editableNodeTypeIds?: string[];
   childNodeTypeId: string;
   themeId: string;
   themes: ThemeOption[];
@@ -38,10 +39,91 @@ type RightInspectorPanelProps = {
   onCollapse: () => void;
 };
 
+export function normalizeHexColorInput(value: string) {
+  const normalized = value.trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(normalized)) {
+    return normalized;
+  }
+  if (/^[0-9A-F]{6}$/.test(normalized)) {
+    return `#${normalized}`;
+  }
+  return null;
+}
+
+function ColorControl({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value.toUpperCase());
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setDraft(value.toUpperCase());
+    setError('');
+  }, [value]);
+
+  const updateFromHex = (nextValue: string) => {
+    setDraft(nextValue);
+    const normalized = normalizeHexColorInput(nextValue);
+    if (!normalized) {
+      setError('请输入 #RRGGBB 格式');
+      return;
+    }
+
+    setError('');
+    onChange(normalized);
+  };
+
+  return (
+    <div className="color-control">
+      <span className="color-control-label">{label}</span>
+      <label
+        className="color-swatch-button"
+        title={`选择${label}`}
+        style={{ backgroundColor: value }}
+      >
+        <span className="sr-only">选择{label}</span>
+        <input
+          type="color"
+          value={value}
+          aria-label={`选择${label}`}
+          onChange={(event) => {
+            const nextValue = event.target.value.toUpperCase();
+            setDraft(nextValue);
+            setError('');
+            onChange(nextValue);
+          }}
+        />
+      </label>
+      <input
+        className={error ? 'hex-color-input is-invalid' : 'hex-color-input'}
+        type="text"
+        value={draft}
+        aria-label={`${label} Hex 值`}
+        spellCheck={false}
+        onChange={(event) => updateFromHex(event.target.value)}
+        onBlur={() => {
+          if (error) {
+            setDraft(value.toUpperCase());
+            setError('');
+          }
+        }}
+      />
+      {error ? <span className="field-error">{error}</span> : null}
+    </div>
+  );
+}
+
 export function RightInspectorPanel({
   selectedNode,
   selectedCount,
   nodeTypes,
+  editableNodeTypeIds,
   childNodeTypeId,
   themeId,
   themes,
@@ -64,6 +146,16 @@ export function RightInspectorPanel({
   const selectedNodeType =
     nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
   const effectiveStyle = getEffectiveNodeStyle(selectedNode, selectedNodeType);
+  const canApplyToSelectedNodeType = Boolean(
+    selectedNodeType &&
+      (!editableNodeTypeIds ||
+        editableNodeTypeIds.includes(selectedNodeType.id)),
+  );
+  const applyNodeTypeTooltip = !selectedNodeType
+    ? '当前节点未绑定有效节点类型'
+    : !canApplyToSelectedNodeType
+      ? '插件或文件内置节点类型不能在此处直接修改'
+      : '更新当前节点类型的全局样式';
 
   useEffect(() => {
     if (activeRemarkMatch?.nodeId === selectedNode.id) {
@@ -142,11 +234,21 @@ export function RightInspectorPanel({
             </section>
 
             <section className="inspector-control-group">
-              <h3>节点类型</h3>
-              <p className="control-help">节点类型是全局样式模板；下方节点样式只影响当前节点。</p>
+              <div className="inspector-section-heading">
+                <h3>类型</h3>
+                <button
+                  type="button"
+                  className="ghost-action"
+                  onClick={onManageNodeTypes}
+                  title="打开节点类型面板，管理全局样式模板。"
+                >
+                  管理全局节点类型
+                </button>
+              </div>
+              <p className="control-help">节点类型是全局样式模板，可被多个节点复用。</p>
               <label className="stacked-control">
                 <span>
-                  节点类型
+                  当前节点类型
                   {selectedCount > 1 ? `（应用到 ${selectedCount} 个节点）` : ''}
                 </span>
                 <select
@@ -190,7 +292,8 @@ export function RightInspectorPanel({
             </section>
 
             <section className="inspector-control-group">
-              <h3>节点样式</h3>
+              <h3>当前节点样式</h3>
+              <p className="control-help">下方样式默认只影响当前节点。</p>
               <div className="aligned-form node-style-form">
                 <label>
                   <span>形状</span>
@@ -209,36 +312,25 @@ export function RightInspectorPanel({
                     ))}
                   </select>
                 </label>
-                <label>
-                  <span>背景色</span>
-                  <input
-                    type="color"
-                    value={effectiveStyle.backgroundColor}
-                    onChange={(event) =>
-                      onNodeStyleChange({ backgroundColor: event.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  <span>边框色</span>
-                  <input
-                    type="color"
-                    value={effectiveStyle.borderColor}
-                    onChange={(event) =>
-                      onNodeStyleChange({ borderColor: event.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  <span>文本色</span>
-                  <input
-                    type="color"
-                    value={effectiveStyle.textColor}
-                    onChange={(event) =>
-                      onNodeStyleChange({ textColor: event.target.value })
-                    }
-                  />
-                </label>
+                <ColorControl
+                  label="背景色"
+                  value={effectiveStyle.backgroundColor}
+                  onChange={(backgroundColor) =>
+                    onNodeStyleChange({ backgroundColor })
+                  }
+                />
+                <ColorControl
+                  label="边框色"
+                  value={effectiveStyle.borderColor}
+                  onChange={(borderColor) =>
+                    onNodeStyleChange({ borderColor })
+                  }
+                />
+                <ColorControl
+                  label="文本色"
+                  value={effectiveStyle.textColor}
+                  onChange={(textColor) => onNodeStyleChange({ textColor })}
+                />
                 <label>
                   <span>字号</span>
                   <input
@@ -279,7 +371,8 @@ export function RightInspectorPanel({
                 <button
                   type="button"
                   className="secondary-action"
-                  disabled={!selectedNodeType}
+                  disabled={!canApplyToSelectedNodeType}
+                  title={applyNodeTypeTooltip}
                   onClick={onApplyStyleToNodeType}
                 >
                   应用到当前节点类型
@@ -297,14 +390,6 @@ export function RightInspectorPanel({
             <section className="style-summary inspector-control-group">
               <div className="inspector-section-heading">
                 <h3>全局样式模板</h3>
-                <button
-                  type="button"
-                  className="ghost-action"
-                  onClick={onManageNodeTypes}
-                  title="打开节点类型面板，管理全局样式模板。"
-                >
-                  管理全局节点类型
-                </button>
               </div>
               {selectedNodeType ? (
                 <dl>
