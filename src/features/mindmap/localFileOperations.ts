@@ -7,6 +7,7 @@ export const LOCAL_FILE_COMMANDS = {
   openWithDialog: 'open_local_file_with_dialog',
   read: 'read_local_file',
   openLocation: 'open_file_location',
+  checkHealth: 'check_local_file_health',
 } as const;
 
 export type LocalFileResult =
@@ -17,6 +18,19 @@ export type OpenedLocalTextFile = {
   content: string;
   fileName: string;
   path: string | null;
+};
+
+export type SaveBackupOptions = {
+  enabled: boolean;
+  maxBackupsPerFile?: number;
+  throttleMs?: number;
+};
+
+export type LocalFileHealth = {
+  exists: boolean;
+  isFile: boolean;
+  sizeBytes?: number;
+  modifiedAtMs?: number;
 };
 
 type LocalFileInvoker = <T>(
@@ -76,6 +90,7 @@ export async function saveLocalFile(options: {
   extensions: string[];
   currentPath?: string | null;
   forceDialog?: boolean;
+  backupOptions?: SaveBackupOptions;
 }): Promise<LocalFileResult | null> {
   const bytes = Array.from(toBytes(options.content));
 
@@ -84,6 +99,7 @@ export async function saveLocalFile(options: {
       const path = await invokeLocalFile<string>(LOCAL_FILE_COMMANDS.write, {
         path: options.currentPath,
         bytes,
+        backupOptions: options.backupOptions,
       });
       return { kind: 'desktop', path, fileName: fileNameFromPath(path) };
     }
@@ -95,6 +111,7 @@ export async function saveLocalFile(options: {
         filterName: options.filterName,
         extensions: options.extensions,
         bytes,
+        backupOptions: options.backupOptions,
       },
     );
     return path
@@ -152,4 +169,13 @@ export async function readLocalTextFile(path: string) {
     path,
   });
   return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+export async function checkLocalFileHealth(path: string) {
+  if (!isDesktopRuntime()) {
+    return { exists: true, isFile: true } satisfies LocalFileHealth;
+  }
+  return invokeLocalFile<LocalFileHealth>(LOCAL_FILE_COMMANDS.checkHealth, {
+    path,
+  });
 }

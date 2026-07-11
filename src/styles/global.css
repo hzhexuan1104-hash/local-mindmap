@@ -2243,6 +2243,120 @@ h3 {
   opacity: 0.55;
 }
 
+.file-reliability-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 180;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(15 23 42 / 34%);
+}
+
+.file-reliability-dialog {
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  display: grid;
+  gap: 16px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 72px rgb(15 23 42 / 24%);
+}
+
+.file-reliability-dialog.is-wide {
+  width: min(1040px, 100%);
+}
+
+.file-reliability-header,
+.dialog-actions,
+.version-actions,
+.settings-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-reliability-header {
+  justify-content: space-between;
+}
+
+.file-reliability-header h2,
+.file-reliability-header p {
+  margin: 0;
+}
+
+.file-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.file-status-grid div,
+.version-item,
+.version-preview {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dce3ee;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.file-status-grid dt {
+  color: #6b778c;
+  font-size: 12px;
+}
+
+.file-status-grid dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.version-history-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
+  gap: 14px;
+}
+
+.version-list {
+  display: grid;
+  gap: 10px;
+}
+
+.version-item {
+  display: grid;
+  gap: 10px;
+}
+
+.version-item p {
+  margin: 4px 0 0;
+  color: #526173;
+  line-height: 1.45;
+}
+
+.version-preview pre {
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f6f8fb;
+  white-space: pre-wrap;
+}
+
+.danger-action {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #991b1b;
+  background: #fff1f2;
+  cursor: pointer;
+}
+
 @media (max-width: 640px) {
   .app-shell {
     padding: 12px;
@@ -3957,7 +4071,10 @@ textarea::placeholder {
   justify-content: center;
   gap: 7px;
   padding: 0 10px;
+  border: 0;
   color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
 }
 
 .top-document-title strong {
@@ -3976,6 +4093,34 @@ textarea::placeholder {
   border-radius: 999px;
   background: #71b88a;
   box-shadow: 0 0 0 3px rgb(113 184 138 / 12%);
+}
+
+.document-status-dot.is-dirty,
+.document-status-dot.is-draft {
+  background: #d97706;
+  box-shadow: 0 0 0 3px rgb(217 119 6 / 14%);
+}
+
+.document-status-dot.is-autosaving {
+  background: #2563eb;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 14%);
+}
+
+.document-status-dot.is-autosaved {
+  background: #0f766e;
+  box-shadow: 0 0 0 3px rgb(15 118 110 / 14%);
+}
+
+.document-status-dot.is-autosave-failed,
+.document-status-dot.is-save-failed {
+  background: #dc2626;
+  box-shadow: 0 0 0 3px rgb(220 38 38 / 14%);
+}
+
+.document-status-label {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .top-menu-nav {

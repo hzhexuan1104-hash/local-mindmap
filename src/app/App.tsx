@@ -180,6 +180,7 @@ import {
 } from '../features/plugins/pluginSettings';
 import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
+  checkLocalFileHealth,
   openFileLocation,
   openLocalTextFile,
   readLocalTextFile,
@@ -187,6 +188,32 @@ import {
   saveLocalFile,
   type LocalFileResult,
 } from '../features/mindmap/localFileOperations';
+import {
+  AUTO_SAVE_INTERVAL_OPTIONS,
+  DEFAULT_FILE_RELIABILITY_SETTINGS,
+  createDraftId,
+  createVersionSnapshot,
+  deleteRecoveryDraft,
+  deleteVersionSnapshot,
+  getAutoSaveDelayMs,
+  loadFileReliabilitySettings,
+  loadRecoveryDrafts,
+  loadVersionHistory,
+  maskUserDataPath,
+  previewVersionSnapshot,
+  readUserLmindProject,
+  saveAutosaveDraft,
+  saveFileReliabilitySettings,
+  versionSourceLabel,
+  type FileReliabilitySettings,
+  type RecoveryDraftEntry,
+  type VersionHistoryEntry,
+  type VersionPreview,
+} from '../features/mindmap/fileReliability';
+import {
+  formatLocalDateTime,
+  formatRelativeLocalTime,
+} from '../features/mindmap/timeFormat';
 import {
   loadRecentFileEntries,
   updateRecentFile,
@@ -258,7 +285,10 @@ import {
   openPluginManifestDir,
   readUserText,
   resolveUserDataPath,
+  openUserDataSubdir,
   uninstallPluginFromUserDir,
+  USER_DATA_PATHS,
+  writeUserJson,
   type PluginDiagnosticFixResult,
 } from '../features/storage/userDataStorage';
 import type {
@@ -294,6 +324,14 @@ const getErrorMessage = (error: unknown, fallback: string) =>
       : fallback;
 
 type ToastKind = 'info' | 'success' | 'warning' | 'error';
+type FileSaveStatus =
+  | 'saved'
+  | 'dirty'
+  | 'autosaving'
+  | 'autosaved'
+  | 'autosave-failed'
+  | 'save-failed'
+  | 'draft';
 
 const inferToastKind = (text: string): ToastKind => {
   if (/失败|错误|异常|无效/.test(text)) {
@@ -639,6 +677,24 @@ export function App() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
   const [isDocumentDirty, setIsDocumentDirty] = useState(true);
+  const [fileSaveStatus, setFileSaveStatus] = useState<FileSaveStatus>('draft');
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
+  const [draftId, setDraftId] = useState(createDraftId);
+  const [fileReliabilitySettings, setFileReliabilitySettings] =
+    useState<FileReliabilitySettings>(DEFAULT_FILE_RELIABILITY_SETTINGS);
+  const [recoveryDrafts, setRecoveryDrafts] = useState<RecoveryDraftEntry[]>([]);
+  const [isRecoveryCenterVisible, setIsRecoveryCenterVisible] = useState(false);
+  const [versionHistory, setVersionHistory] = useState<VersionHistoryEntry[]>([]);
+  const [isVersionHistoryVisible, setIsVersionHistoryVisible] = useState(false);
+  const [versionPreview, setVersionPreview] = useState<{
+    entry: VersionHistoryEntry;
+    preview: VersionPreview;
+  } | null>(null);
+  const [isFileStatusVisible, setIsFileStatusVisible] = useState(false);
+  const [recentFileHealth, setRecentFileHealth] = useState<
+    Record<string, 'ok' | 'missing'>
+  >({});
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([]);
   const [excelImportPreview, setExcelImportPreview] =
     useState<ExcelImportPreview | null>(null);
@@ -695,8 +751,6 @@ export function App() {
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [showCanvasGrid, setShowCanvasGrid] = useState(true);
-  const [isAutoSaveEnabled, setIsAutoSaveEnabled] = useState(false);
-  const [autoSaveIntervalMinutes, setAutoSaveIntervalMinutes] = useState(5);
   const [openCentered, setOpenCentered] = useState(true);
   const [internalClipboard, setInternalClipboard] =
     useState<InternalClipboardState | null>(null);
@@ -721,6 +775,9 @@ export function App() {
   const canvasPanStateRef = useRef<CanvasPanState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const pluginReloadRequestRef = useRef(0);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const isSavingRef = useRef(false);
+  const lastAutoSaveSignatureRef = useRef('');
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -819,6 +876,24 @@ export function App() {
     () => ({ rootNode: mindmap, nodeTypes, themeId }),
     [mindmap, nodeTypes, themeId],
   );
+  const currentDocumentTitle = currentFileName ?? mindmap.text ?? '未命名导图';
+  const currentMaskedPath = maskUserDataPath(currentFilePath, userDataDir);
+  const effectiveFileSaveStatus: FileSaveStatus = currentFilePath
+    ? fileSaveStatus
+    : fileSaveStatus === 'autosaved'
+      ? 'autosaved'
+      : isDocumentDirty
+        ? 'draft'
+        : fileSaveStatus;
+  const fileStatusLabel: Record<FileSaveStatus, string> = {
+    saved: '已保存',
+    dirty: '未保存',
+    autosaving: '自动保存中',
+    autosaved: '已自动保存',
+    'autosave-failed': '自动保存失败',
+    'save-failed': '保存失败',
+    draft: '草稿',
+  };
   const themeStyle = createThemeStyle(themeId, availableThemes);
   const panLayerStyle = {
     width: mindmapLayout.width,
@@ -916,6 +991,9 @@ export function App() {
           nodeTypesResult,
           userDataDirResult,
           recentFilesResult,
+          fileReliabilitySettingsResult,
+          recoveryDraftsResult,
+          versionHistoryResult,
         ] = await Promise.allSettled([
             loadAllUserTemplates(),
             loadPluginRegistry({
@@ -924,6 +1002,9 @@ export function App() {
             loadAllUserNodeTypes(),
             getUserDataDir(),
             loadRecentFileEntries(),
+            loadFileReliabilitySettings(),
+            loadRecoveryDrafts(),
+            loadVersionHistory(),
         ]);
         let pluginsResult = initialPluginsResult;
         let pluginStorageSyncFailed = false;
@@ -1008,6 +1089,37 @@ export function App() {
             recentFilesResult.reason,
           );
         }
+        if (fileReliabilitySettingsResult.status === 'fulfilled') {
+          setFileReliabilitySettings(fileReliabilitySettingsResult.value);
+        } else {
+          loadFailures.push('fileReliabilitySettings');
+          console.error(
+            '[user-data][file-reliability] settings load failed',
+            fileReliabilitySettingsResult.reason,
+          );
+        }
+        if (recoveryDraftsResult.status === 'fulfilled') {
+          setRecoveryDrafts(recoveryDraftsResult.value);
+          if (recoveryDraftsResult.value.length > 0) {
+            setIsRecoveryCenterVisible(true);
+            showMessage('发现未恢复的自动保存草稿', 'warning');
+          }
+        } else {
+          loadFailures.push('recoveryDrafts');
+          console.error(
+            '[user-data][file-reliability] recovery drafts load failed',
+            recoveryDraftsResult.reason,
+          );
+        }
+        if (versionHistoryResult.status === 'fulfilled') {
+          setVersionHistory(versionHistoryResult.value);
+        } else {
+          loadFailures.push('versionHistory');
+          console.error(
+            '[user-data][file-reliability] version history load failed',
+            versionHistoryResult.reason,
+          );
+        }
 
         if (migration.migrated) {
           showMessage(`已迁移 ${migration.migratedKeys.length} 项旧版用户数据`);
@@ -1061,6 +1173,38 @@ export function App() {
       showMessage('当前主题来自已禁用或未安装插件，已切回默认主题');
     }
   }, [availableThemes, themeId]);
+
+  useEffect(() => {
+    if (isDocumentDirty && ['saved', 'autosaved'].includes(fileSaveStatus)) {
+      setFileSaveStatus(currentFilePath ? 'dirty' : 'draft');
+    }
+  }, [currentFilePath, fileSaveStatus, isDocumentDirty]);
+
+  useEffect(() => {
+    if (!isDesktopApp || recentFiles.length === 0) {
+      return;
+    }
+
+    let active = true;
+    void Promise.all(
+      recentFiles.map(async (entry) => {
+        try {
+          const health = await checkLocalFileHealth(entry.path);
+          return [entry.path, health.exists && health.isFile ? 'ok' : 'missing'] as const;
+        } catch {
+          return [entry.path, 'missing'] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (active) {
+        setRecentFileHealth(Object.fromEntries(entries));
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isDesktopApp, recentFiles]);
 
   useEffect(() => {
     setActiveMatchIndex(0);
@@ -1201,6 +1345,7 @@ export function App() {
   const recordHistory = () => {
     setHistory((currentHistory) => pushHistory(currentHistory, currentProject));
     setIsDocumentDirty(true);
+    setFileSaveStatus(currentFilePath ? 'dirty' : 'draft');
   };
 
   const selectNode = (nodeId: string, append: boolean) => {
@@ -1348,6 +1493,11 @@ export function App() {
     setCurrentFilePath(null);
     setCurrentFileName(null);
     setIsDocumentDirty(true);
+    setFileSaveStatus('draft');
+    setLastSavedAt(null);
+    setLastAutoSavedAt(null);
+    setDraftId(createDraftId());
+    lastAutoSaveSignatureRef.current = '';
     showMessage('已新建空白思维导图');
   };
 
@@ -1368,6 +1518,10 @@ export function App() {
   ) => {
     const next = await updateRecentFile(recentFiles, path, action);
     setRecentFiles(next);
+  };
+
+  const refreshVersionHistory = async () => {
+    setVersionHistory(await loadVersionHistory());
   };
 
   const saveMindmap = async (saveAs: boolean) => {
@@ -1400,8 +1554,169 @@ export function App() {
     }
   };
 
-  const handleSaveMindmap = () => void saveMindmap(false);
-  const handleSaveMindmapAs = () => void saveMindmap(true);
+  const saveMindmapReliable = async (saveAs: boolean) => {
+    if (isSavingRef.current) {
+      showMessage('正在保存，请稍候', 'warning');
+      return;
+    }
+
+    isSavingRef.current = true;
+    try {
+      const documentText = serializeLmindDocument(mindmap, nodeTypes, themeId);
+      if (
+        currentFilePath &&
+        fileReliabilitySettings.backupBeforeSaveEnabled &&
+        !saveAs
+      ) {
+        await createVersionSnapshot({
+          documentText,
+          source: 'before-save',
+          title: '保存前备份',
+          currentFilePath,
+          currentFileName,
+        });
+        await refreshVersionHistory();
+      }
+
+      const result = await saveLocalFile({
+        content: documentText,
+        defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
+        mimeType: 'application/json;charset=utf-8',
+        filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
+        extensions: ['lmind'],
+        currentPath: currentFilePath,
+        forceDialog: saveAs,
+        backupOptions: {
+          enabled: fileReliabilitySettings.backupBeforeSaveEnabled,
+          maxBackupsPerFile: fileReliabilitySettings.maxBackupsPerFile,
+        },
+      });
+
+      if (!result) {
+        showMessage('保存已取消。');
+        return;
+      }
+      if (result.kind === 'desktop') {
+        setCurrentFilePath(result.path);
+        setCurrentFileName(result.fileName);
+        await rememberRecentFile(result.path, 'save');
+      } else {
+        setCurrentFileName(result.fileName);
+      }
+      const savedAt = new Date().toISOString();
+      setIsDocumentDirty(false);
+      setFileSaveStatus('saved');
+      setLastSavedAt(savedAt);
+      lastAutoSaveSignatureRef.current = documentText;
+      if (!currentFilePath && result.kind === 'desktop') {
+        await deleteRecoveryDraft(draftId);
+        setRecoveryDrafts(await loadRecoveryDrafts());
+      }
+      showFileResult(result, saveAs ? '已另存为' : '已保存');
+    } catch (error) {
+      setFileSaveStatus('save-failed');
+      setIsDocumentDirty(true);
+      showMessage(`保存失败：${getErrorMessage(error, '未知错误')}`, 'error');
+    } finally {
+      isSavingRef.current = false;
+    }
+  };
+
+  const runAutoSave = async () => {
+    if (!fileReliabilitySettings.autoSaveEnabled || isSavingRef.current) {
+      return;
+    }
+
+    const documentText = serializeLmindDocument(mindmap, nodeTypes, themeId);
+    if (documentText === lastAutoSaveSignatureRef.current) {
+      return;
+    }
+
+    isSavingRef.current = true;
+    setFileSaveStatus('autosaving');
+    try {
+      if (currentFilePath) {
+        const result = await saveLocalFile({
+          content: documentText,
+          defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
+          mimeType: 'application/json;charset=utf-8',
+          filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
+          extensions: ['lmind'],
+          currentPath: currentFilePath,
+          backupOptions: {
+            enabled: fileReliabilitySettings.backupBeforeSaveEnabled,
+            maxBackupsPerFile: fileReliabilitySettings.maxBackupsPerFile,
+            throttleMs: 5 * 60 * 1000,
+          },
+        });
+        if (result?.kind === 'desktop') {
+          await rememberRecentFile(result.path, 'save');
+        }
+        setIsDocumentDirty(false);
+      } else {
+        await saveAutosaveDraft({
+          draftId,
+          documentText,
+          title: mindmap.text,
+          currentFileName,
+          currentFilePath,
+        });
+        setRecoveryDrafts(await loadRecoveryDrafts());
+      }
+
+      await createVersionSnapshot({
+        documentText,
+        source: 'autosave',
+        title: currentFilePath ? '自动保存快照' : '草稿自动保存',
+        currentFilePath,
+        currentFileName,
+      });
+      await refreshVersionHistory();
+
+      const savedAt = new Date().toISOString();
+      setLastAutoSavedAt(savedAt);
+      setFileSaveStatus('autosaved');
+      lastAutoSaveSignatureRef.current = documentText;
+    } catch (error) {
+      setFileSaveStatus('autosave-failed');
+      setIsDocumentDirty(true);
+      showMessage(`自动保存失败：${getErrorMessage(error, '未知错误')}`, 'error');
+    } finally {
+      isSavingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (!fileReliabilitySettings.autoSaveEnabled || !isDocumentDirty) {
+      return;
+    }
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      void runAutoSave();
+    }, getAutoSaveDelayMs(fileReliabilitySettings));
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    currentFilePath,
+    draftId,
+    fileReliabilitySettings,
+    isDocumentDirty,
+    mindmap,
+    nodeTypes,
+    themeId,
+  ]);
+
+  const handleSaveMindmap = () => void saveMindmapReliable(false);
+  const handleSaveMindmapAs = () => void saveMindmapReliable(true);
 
   const handleOpenMindmap = async () => {
     try {
@@ -1421,6 +1736,11 @@ export function App() {
       setCurrentFilePath(opened.path);
       setCurrentFileName(opened.fileName);
       setIsDocumentDirty(false);
+      setFileSaveStatus('saved');
+      setLastSavedAt(new Date().toISOString());
+      setLastAutoSavedAt(null);
+      setDraftId(createDraftId());
+      lastAutoSaveSignatureRef.current = opened.content;
       if (openCentered) {
         setCanvasView(centerCanvasView());
       }
@@ -1437,14 +1757,18 @@ export function App() {
       return;
     }
     try {
-      const openedProject = parseLmindProject(
-        await readLocalTextFile(entry.path),
-      );
+      const content = await readLocalTextFile(entry.path);
+      const openedProject = parseLmindProject(content);
       recordHistory();
       applyProject(openedProject);
       setCurrentFilePath(entry.path);
       setCurrentFileName(entry.name);
       setIsDocumentDirty(false);
+      setFileSaveStatus('saved');
+      setLastSavedAt(new Date().toISOString());
+      setLastAutoSavedAt(null);
+      setDraftId(createDraftId());
+      lastAutoSaveSignatureRef.current = content;
       if (openCentered) {
         setCanvasView(centerCanvasView());
       }
@@ -1454,6 +1778,48 @@ export function App() {
       showMessage(
         `打开失败：${getErrorMessage(error, '文件不存在或格式不正确')}`,
       );
+    }
+  };
+
+  const handleRemoveRecentFile = async (entry: RecentFileEntry) => {
+    const next = recentFiles.filter((item) => item.path !== entry.path);
+    setRecentFiles(next);
+    setRecentFileHealth((current) => {
+      const { [entry.path]: _removed, ...rest } = current;
+      return rest;
+    });
+    await writeUserJson(USER_DATA_PATHS.recentFiles, next);
+    showMessage('已从最近文件移除');
+  };
+
+  const handleRelocateRecentFile = async (entry: RecentFileEntry) => {
+    try {
+      const opened = await openLocalTextFile({
+        accept: '.lmind,application/json',
+        filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
+        extensions: ['lmind'],
+      });
+      if (!opened?.path) {
+        return;
+      }
+      const openedProject = parseLmindProject(opened.content);
+      recordHistory();
+      applyProject(openedProject);
+      setCurrentFilePath(opened.path);
+      setCurrentFileName(opened.fileName);
+      setIsDocumentDirty(false);
+      setFileSaveStatus('saved');
+      setLastSavedAt(new Date().toISOString());
+      lastAutoSaveSignatureRef.current = opened.content;
+      const next = await updateRecentFile(
+        recentFiles.filter((item) => item.path !== entry.path),
+        opened.path,
+        'open',
+      );
+      setRecentFiles(next);
+      showMessage('已重新定位最近文件');
+    } catch (error) {
+      showMessage(`重新定位失败：${getErrorMessage(error, '无法打开文件')}`, 'error');
     }
   };
 
@@ -1482,6 +1848,158 @@ export function App() {
     } catch (error) {
       showMessage(`复制路径失败：${getErrorMessage(error, '剪贴板不可用')}`);
     }
+  };
+
+  const handleCreateVersionSnapshot = async () => {
+    const note = window.prompt('快照备注（可选）', '手动快照')?.trim() || '手动快照';
+    try {
+      await createVersionSnapshot({
+        documentText: serializeLmindDocument(mindmap, nodeTypes, themeId),
+        source: 'manual',
+        note,
+        title: note,
+        currentFilePath,
+        currentFileName,
+      });
+      await refreshVersionHistory();
+      showMessage('已创建版本快照', 'success');
+    } catch (error) {
+      showMessage(`创建版本快照失败：${getErrorMessage(error, '未知错误')}`, 'error');
+    }
+  };
+
+  const handleOpenVersionHistory = async () => {
+    await refreshVersionHistory();
+    setIsVersionHistoryVisible(true);
+  };
+
+  const handlePreviewVersion = async (entry: VersionHistoryEntry) => {
+    try {
+      setVersionPreview({
+        entry,
+        preview: await previewVersionSnapshot(entry),
+      });
+    } catch (error) {
+      showMessage(`预览历史版本失败：${getErrorMessage(error, '无法读取版本')}`, 'error');
+    }
+  };
+
+  const handleRestoreVersion = async (entry: VersionHistoryEntry) => {
+    const confirmed = window.confirm(
+      '这会用所选历史版本替换当前导图内容。当前状态会先自动创建一个恢复前快照。是否继续？',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const currentDocumentText = serializeLmindDocument(mindmap, nodeTypes, themeId);
+      await createVersionSnapshot({
+        documentText: currentDocumentText,
+        source: 'recovery-before-restore',
+        title: '恢复前快照',
+        currentFilePath,
+        currentFileName,
+      });
+      const restoredProject = await readUserLmindProject(entry.path);
+      recordHistory();
+      applyProject(restoredProject);
+      setIsDocumentDirty(true);
+      setFileSaveStatus(currentFilePath ? 'dirty' : 'draft');
+      await refreshVersionHistory();
+      showMessage('已恢复历史版本，请保存以写入文件', 'success');
+    } catch (error) {
+      showMessage(`恢复历史版本失败：${getErrorMessage(error, '未知错误')}`, 'error');
+    }
+  };
+
+  const handleSaveVersionAs = async (entry: VersionHistoryEntry) => {
+    try {
+      const content = await readUserText(entry.path);
+      const result = await saveLocalFile({
+        content,
+        defaultFileName: `${sanitizeFileName(entry.rootText || entry.title)}.lmind`,
+        mimeType: 'application/json;charset=utf-8',
+        filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
+        extensions: ['lmind'],
+        forceDialog: true,
+      });
+      if (result) {
+        showFileResult(result, '已另存历史版本为');
+      }
+    } catch (error) {
+      showMessage(`另存历史版本失败：${getErrorMessage(error, '未知错误')}`, 'error');
+    }
+  };
+
+  const handleDeleteVersion = async (entry: VersionHistoryEntry) => {
+    if (!window.confirm('删除该历史版本？此操作不会删除当前导图。')) {
+      return;
+    }
+    await deleteVersionSnapshot(entry.id);
+    await refreshVersionHistory();
+    setVersionPreview(null);
+    showMessage('已删除历史版本');
+  };
+
+  const handleRestoreDraft = async (draft: RecoveryDraftEntry) => {
+    try {
+      const project = await readUserLmindProject(draft.path);
+      recordHistory();
+      applyProject(project);
+      setCurrentFilePath(null);
+      setCurrentFileName(null);
+      setDraftId(draft.draftId);
+      setIsDocumentDirty(true);
+      setFileSaveStatus('draft');
+      setIsRecoveryCenterVisible(false);
+      showMessage('已恢复自动保存草稿，请保存以写入文件', 'success');
+    } catch (error) {
+      showMessage(`恢复草稿失败：${getErrorMessage(error, '无法读取草稿')}`, 'error');
+    }
+  };
+
+  const handleDeleteDraft = async (draft: RecoveryDraftEntry) => {
+    if (!window.confirm('删除该自动保存草稿？')) {
+      return;
+    }
+    await deleteRecoveryDraft(draft.draftId);
+    const drafts = await loadRecoveryDrafts();
+    setRecoveryDrafts(drafts);
+    if (drafts.length === 0) {
+      setIsRecoveryCenterVisible(false);
+    }
+    showMessage('已删除自动保存草稿');
+  };
+
+  const updateFileReliabilitySettings = async (
+    patch: Partial<FileReliabilitySettings>,
+  ) => {
+    const next = {
+      ...fileReliabilitySettings,
+      ...patch,
+    };
+    setFileReliabilitySettings(next);
+    await saveFileReliabilitySettings(next);
+  };
+
+  const handleCleanAutosaveDrafts = async () => {
+    if (!window.confirm('清理当前列出的自动保存草稿？')) {
+      return;
+    }
+    for (const draft of recoveryDrafts) {
+      await deleteRecoveryDraft(draft.draftId);
+    }
+    setRecoveryDrafts(await loadRecoveryDrafts());
+    showMessage('已清理自动保存草稿');
+  };
+
+  const isAutoSaveEnabled = fileReliabilitySettings.autoSaveEnabled;
+  const setIsAutoSaveEnabled = (enabled: boolean) => {
+    void updateFileReliabilitySettings({ autoSaveEnabled: enabled });
+  };
+  const setAutoSaveInterval = (intervalMs: number) => {
+    void updateFileReliabilitySettings({ autoSaveIntervalMs: intervalMs });
   };
 
   const exportFile = async (options: {
@@ -4582,12 +5100,46 @@ export function App() {
     hasSelectedNode: contextMenu?.type === 'node',
     location: 'node-context',
   });
+  const missingRecentFiles = recentFiles.filter(
+    (entry) => recentFileHealth[entry.path] === 'missing',
+  );
 
   const topMenus: TopMenuGroup[] = [
     {
       id: 'file',
       label: '文件',
       items: [
+        {
+          label:
+            missingRecentFiles.length > 0
+              ? `最近文件健康检查（${missingRecentFiles.length} 个异常）`
+              : '最近文件健康检查',
+          disabled: missingRecentFiles.length === 0,
+          children: missingRecentFiles.flatMap((entry) => [
+            {
+              label: `${entry.name}：重新定位文件`,
+              onSelect: () => void handleRelocateRecentFile(entry),
+            },
+            {
+              label: `${entry.name}：从最近文件移除`,
+              onSelect: () => void handleRemoveRecentFile(entry),
+            },
+          ]),
+        },
+        {
+          label: '创建版本快照',
+          onSelect: () => void handleCreateVersionSnapshot(),
+        },
+        {
+          label: '版本历史',
+          onSelect: () => void handleOpenVersionHistory(),
+        },
+        {
+          label: '恢复自动保存草稿',
+          onSelect: () => setIsRecoveryCenterVisible(true),
+          disabled: recoveryDrafts.length === 0,
+          dividerBefore: true,
+        },
         { label: '新建思维导图', onSelect: handleCreateMindmap },
         {
           label: '打开 .lmind',
@@ -4810,6 +5362,9 @@ export function App() {
           message={message}
           messageKind={messageKind}
           isDirty={isDocumentDirty}
+          saveStatus={effectiveFileSaveStatus}
+          saveStatusLabel={fileStatusLabel[effectiveFileSaveStatus]}
+          onOpenFileStatus={() => setIsFileStatusVisible(true)}
           onUndo={handleUndo}
           onRedo={handleRedo}
           onQuickSave={handleSaveMindmap}
@@ -5398,18 +5953,61 @@ export function App() {
                     <span>自动保存</span>
                   </label>
                   <label className="stacked-control">
-                    <span>自动保存间隔（分钟）</span>
+                    <span>自动保存间隔</span>
+                    <select
+                      value={fileReliabilitySettings.autoSaveIntervalMs}
+                      disabled={!isAutoSaveEnabled}
+                      onChange={(event) =>
+                        setAutoSaveInterval(Number(event.target.value))
+                      }
+                    >
+                      {AUTO_SAVE_INTERVAL_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="toggle-control">
+                    <input
+                      type="checkbox"
+                      checked={fileReliabilitySettings.backupBeforeSaveEnabled}
+                      onChange={(event) =>
+                        void updateFileReliabilitySettings({
+                          backupBeforeSaveEnabled: event.target.checked,
+                        })
+                      }
+                    />
+                    <span>保存前自动备份</span>
+                  </label>
+                  <label className="stacked-control">
+                    <span>每个文件最大备份数</span>
                     <input
                       type="number"
                       min={1}
-                      max={60}
-                      value={autoSaveIntervalMinutes}
-                      disabled={!isAutoSaveEnabled}
+                      max={200}
+                      value={fileReliabilitySettings.maxBackupsPerFile}
                       onChange={(event) =>
-                        setAutoSaveIntervalMinutes(Number(event.target.value))
+                        void updateFileReliabilitySettings({
+                          maxBackupsPerFile: Number(event.target.value),
+                        })
                       }
                     />
                   </label>
+                  <div className="settings-actions">
+                    <button type="button" className="secondary-action" onClick={() => void handleOpenVersionHistory()}>
+                      打开版本历史
+                    </button>
+                    <button type="button" className="secondary-action" onClick={() => setIsRecoveryCenterVisible(true)}>
+                      打开恢复中心
+                    </button>
+                    <button type="button" className="secondary-action" onClick={() => void openUserDataSubdir(USER_DATA_PATHS.fileBackups)}>
+                      打开备份目录
+                    </button>
+                    <button type="button" className="ghost-action" onClick={() => void handleCleanAutosaveDrafts()}>
+                      清理自动保存草稿
+                    </button>
+                  </div>
                 </section>
                 <section className="settings-group">
                   <h3>插件设置</h3>
@@ -5593,6 +6191,121 @@ export function App() {
         ) : null}
       </div>
       </div>
+
+      {isFileStatusVisible ? (
+        <div className="file-reliability-backdrop" role="presentation">
+          <section className="file-reliability-dialog" role="dialog" aria-modal="true">
+            <header className="file-reliability-header">
+              <div>
+                <p className="eyebrow">File</p>
+                <h2>文件状态</h2>
+              </div>
+              <button type="button" className="secondary-action" onClick={() => setIsFileStatusVisible(false)}>
+                关闭
+              </button>
+            </header>
+            <dl className="file-status-grid">
+              <div><dt>当前文件名</dt><dd>{currentDocumentTitle}</dd></div>
+              <div><dt>文件路径</dt><dd>{currentMaskedPath}</dd></div>
+              <div><dt>保存状态</dt><dd>{fileStatusLabel[effectiveFileSaveStatus]}</dd></div>
+              <div><dt>最近保存时间</dt><dd>{formatRelativeLocalTime(lastSavedAt)}</dd></div>
+              <div><dt>最近自动保存时间</dt><dd>{formatRelativeLocalTime(lastAutoSavedAt)}</dd></div>
+            </dl>
+            <div className="dialog-actions">
+              <button type="button" className="secondary-action" onClick={() => void handleOpenVersionHistory()}>
+                版本历史
+              </button>
+              <button type="button" className="primary-action" onClick={() => void handleCreateVersionSnapshot()}>
+                创建快照
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isRecoveryCenterVisible ? (
+        <div className="file-reliability-backdrop" role="presentation">
+          <section className="file-reliability-dialog" role="dialog" aria-modal="true">
+            <header className="file-reliability-header">
+              <div>
+                <p className="eyebrow">Recovery</p>
+                <h2>恢复自动保存草稿</h2>
+              </div>
+              <button type="button" className="secondary-action" onClick={() => setIsRecoveryCenterVisible(false)}>
+                忽略
+              </button>
+            </header>
+            <div className="version-list">
+              {recoveryDrafts.length === 0 ? (
+                <p className="empty-state">暂无未恢复草稿。</p>
+              ) : recoveryDrafts.map((draft) => (
+                <article className="version-item" key={draft.draftId}>
+                  <div>
+                    <strong>{draft.title}</strong>
+                    <p>{formatRelativeLocalTime(draft.updatedAt)} · {draft.rootText} · {draft.nodeCount} 节点</p>
+                  </div>
+                  <div className="version-actions">
+                    <button type="button" className="primary-action" onClick={() => void handleRestoreDraft(draft)}>
+                      恢复
+                    </button>
+                    <button type="button" className="danger-action" onClick={() => void handleDeleteDraft(draft)}>
+                      删除草稿
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isVersionHistoryVisible ? (
+        <div className="file-reliability-backdrop" role="presentation">
+          <section className="file-reliability-dialog is-wide" role="dialog" aria-modal="true">
+            <header className="file-reliability-header">
+              <div>
+                <p className="eyebrow">{currentDocumentTitle}</p>
+                <h2>版本历史</h2>
+              </div>
+              <button type="button" className="secondary-action" onClick={() => setIsVersionHistoryVisible(false)}>
+                关闭
+              </button>
+            </header>
+            <div className="version-history-layout">
+              <div className="version-list">
+                {versionHistory.length === 0 ? (
+                  <p className="empty-state">暂无历史版本。</p>
+                ) : versionHistory.map((entry) => (
+                  <article className="version-item" key={entry.id}>
+                    <div>
+                      <strong>{entry.title}</strong>
+                      <p>{formatLocalDateTime(entry.createdAt)} · {versionSourceLabel(entry.source)} · {entry.rootText} · {entry.nodeCount} 节点 · {Math.ceil(entry.sizeBytes / 1024)} KB</p>
+                      {entry.note ? <p>{entry.note}</p> : null}
+                    </div>
+                    <div className="version-actions">
+                      <button type="button" className="secondary-action" onClick={() => void handlePreviewVersion(entry)}>预览</button>
+                      <button type="button" className="primary-action" onClick={() => void handleRestoreVersion(entry)}>恢复为当前导图</button>
+                      <button type="button" className="secondary-action" onClick={() => void handleSaveVersionAs(entry)}>另存为</button>
+                      <button type="button" className="danger-action" onClick={() => void handleDeleteVersion(entry)}>删除</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <aside className="version-preview">
+                <h3>预览</h3>
+                {versionPreview ? (
+                  <>
+                    <p>{formatLocalDateTime(versionPreview.entry.createdAt)} · {versionPreview.preview.nodeCount} 节点</p>
+                    <pre>{versionPreview.preview.treeText}</pre>
+                  </>
+                ) : (
+                  <p className="empty-state">选择一个历史版本预览。</p>
+                )}
+              </aside>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {excelImportPreview ? (
         <ExcelImportMappingDialog
