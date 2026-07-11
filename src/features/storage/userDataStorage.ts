@@ -8,6 +8,7 @@ export const USER_DATA_COMMANDS = {
   readUserJson: 'read_user_json',
   writeUserJson: 'write_user_json',
   readUserText: 'read_user_text',
+  deleteUserFile: 'delete_user_file',
   listUserFiles: 'list_user_files',
   installPluginToUserDir: 'install_plugin_to_user_dir',
   getPluginGalleryCatalog: 'get_plugin_gallery_catalog',
@@ -19,6 +20,7 @@ export const USER_DATA_COMMANDS = {
   exportPluginPackage: 'export_plugin_package',
   uninstallPluginFromUserDir: 'uninstall_plugin_from_user_dir',
   openUserDataDir: 'open_user_data_dir',
+  openUserDataSubdir: 'open_user_data_subdir',
   openPluginDir: 'open_plugin_dir',
   openPluginDevDir: 'open_plugin_dev_dir',
   createSamplePlugin: 'create_sample_plugin',
@@ -47,10 +49,14 @@ export const USER_DATA_PATHS = {
   installedPlugins: 'plugins/installed',
   pluginDev: 'plugins/dev',
   appSettings: 'config/app-settings.json',
+  fileReliabilitySettings: 'config/file-reliability-settings.json',
   recentFiles: 'config/recent-files.json',
   userPreferences: 'config/user-preferences.json',
   migrationFlag: 'config/migration-state.json',
   backups: 'backups',
+  fileBackups: 'backups/files',
+  autosaves: 'autosaves',
+  versions: 'versions',
 } as const;
 
 export type InstalledPluginScanEntry = {
@@ -397,6 +403,22 @@ export async function readUserText(relativePath: string): Promise<string> {
   return value;
 }
 
+export async function deleteUserFile(relativePath: string) {
+  if (isDesktopRuntime()) {
+    return invokeUserDataCommand<boolean>(USER_DATA_COMMANDS.deleteUserFile, {
+      relativePath,
+    });
+  }
+
+  const storage = getStorage();
+  const key = webStorageKeyForPath(relativePath);
+  const existed = storage?.getItem(key) !== null;
+  storage?.removeItem(key);
+  const nextPaths = readWebPathIndex().filter((item) => item !== relativePath);
+  storage?.setItem(WEB_PATH_INDEX_KEY, JSON.stringify(nextPaths));
+  return existed;
+}
+
 function writeWebText(relativePath: string, value: string) {
   const storage = getStorage();
   if (!storage) {
@@ -692,6 +714,17 @@ export async function openUserDataDir() {
   }
 
   await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openUserDataDir);
+  return true;
+}
+
+export async function openUserDataSubdir(relativeDir: string) {
+  if (!isDesktopRuntime()) {
+    return false;
+  }
+
+  await invokeUserDataCommand<void>(USER_DATA_COMMANDS.openUserDataSubdir, {
+    relativeDir,
+  });
   return true;
 }
 

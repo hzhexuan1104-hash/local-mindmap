@@ -6,8 +6,10 @@ use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::hash_map::DefaultHasher,
     collections::{BTreeMap, HashMap, HashSet},
     fs,
+    hash::{Hash, Hasher},
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -32,6 +34,7 @@ const USER_PLUGIN_DEV_DIR: &str = "plugins/dev";
 const USER_PLUGIN_QUARANTINE_DIR: &str = "plugins/quarantine";
 const USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR: &str = "plugins/backups/diagnostics";
 const USER_PLUGIN_DIAGNOSTIC_REPORT_DIR: &str = "plugins/reports";
+const FILE_BACKUP_DIR: &str = "backups/files";
 const SAMPLE_PLUGIN_DIR_NAME: &str = "sample-json-plugin";
 const SAMPLE_PLUGIN_ID: &str = "localmindmap.dev.sample-json-plugin";
 const SAMPLE_PLUGIN_MANIFEST: &str =
@@ -145,6 +148,8 @@ const PLUGIN_COMMAND_WHITELIST: &[&str] = &[
 const USER_DATA_DIRS: &[&str] = &[
     "mindmaps",
     "autosave",
+    "autosaves",
+    "versions",
     "node-types",
     "node-types/packs",
     "templates",
@@ -156,6 +161,7 @@ const USER_DATA_DIRS: &[&str] = &[
     PLUGIN_GALLERY_CACHE_DIR,
     CONFIG_DIR_NAME,
     "backups",
+    FILE_BACKUP_DIR,
     "plugins/backups",
     USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR,
     USER_PLUGIN_DIAGNOSTIC_REPORT_DIR,
@@ -478,7 +484,168 @@ fn read_user_text_at(root: &Path, relative_path: &str) -> Result<String, String>
         .map_err(|error| format!("Failed to read user text `{relative_path}`: {error}"))
 }
 
-fn write_local_file_at(path: &Path, bytes: &[u8]) -> Result<String, String> {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveBackupOptions {
+    enabled: bool,
+    max_backups_per_file: Option<usize>,
+    throttle_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalFileHealth {
+    exists: bool,
+    is_file: bool,
+    size_bytes: Option<u64>,
+    modified_at_ms: Option<u128>,
+}
+
+fn safe_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn short_hash(value: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn backup_file_name(source_path: &Path, path_hash: &str) -> String {
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mindmap")
+        .chars()
+        .map(|character| {
+            if matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("lmind");
+    format!(
+        "{}-{}-{}.{}",
+        stem,
+        safe_timestamp(),
+        &path_hash[..8.min(path_hash.len())],
+        extension
+    )
+}
+
+fn backup_dir_for_file(root: &Path, source_path: &Path) -> PathBuf {
+    let path_hash = short_hash(&source_path.to_string_lossy());
+    root.join(FILE_BACKUP_DIR).join(path_hash)
+}
+
+fn newest_backup_age_ms(backup_dir: &Path) -> Result<Option<u128>, String> {
+    if !backup_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in fs::read_dir(backup_dir)
+        .map_err(|error| format!("Failed to inspect backup directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to inspect backup entry: {error}"))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Failed to inspect backup metadata: {error}"))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let modified = metadata
+            .modified()
+            .map_err(|error| format!("Failed to inspect backup modified time: {error}"))?;
+        if newest.map(|current| modified > current).unwrap_or(true) {
+            newest = Some(modified);
+        }
+    }
+
+    let Some(newest) = newest else {
+        return Ok(None);
+    };
+    Ok(newest.elapsed().ok().map(|duration| duration.as_millis()))
+}
+
+fn prune_file_backups(backup_dir: &Path, max_backups: usize) -> Result<(), String> {
+    if max_backups == 0 || !backup_dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(backup_dir)
+        .map_err(|error| format!("Failed to list backup directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to read backup entry: {error}"))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Failed to read backup metadata: {error}"))?;
+        if metadata.is_file() {
+            backups.push((
+                entry.path(),
+                metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            ));
+        }
+    }
+
+    backups.sort_by_key(|(_, modified)| *modified);
+    let remove_count = backups.len().saturating_sub(max_backups);
+    for (path, _) in backups.into_iter().take(remove_count) {
+        fs::remove_file(&path)
+            .map_err(|error| format!("Failed to prune backup `{}`: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn create_file_backup_at(
+    root: &Path,
+    source_path: &Path,
+    options: &SaveBackupOptions,
+) -> Result<Option<PathBuf>, String> {
+    if !options.enabled || !source_path.is_file() {
+        return Ok(None);
+    }
+
+    let backup_dir = backup_dir_for_file(root, source_path);
+    if let Some(throttle_ms) = options.throttle_ms {
+        if newest_backup_age_ms(&backup_dir)?
+            .map(|age| age < u128::from(throttle_ms))
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+    }
+
+    fs::create_dir_all(&backup_dir)
+        .map_err(|error| format!("Failed to create backup directory: {error}"))?;
+    let path_hash = short_hash(&source_path.to_string_lossy());
+    let backup_path = backup_dir.join(backup_file_name(source_path, &path_hash));
+    fs::copy(source_path, &backup_path).map_err(|error| {
+        format!(
+            "Failed to create backup for `{}`: {error}",
+            source_path.display()
+        )
+    })?;
+    prune_file_backups(
+        &backup_dir,
+        options.max_backups_per_file.unwrap_or(20).clamp(1, 200),
+    )?;
+    Ok(Some(backup_path))
+}
+
+fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Selected file path has no parent directory.".to_string())?;
@@ -488,9 +655,105 @@ fn write_local_file_at(path: &Path, bytes: &[u8]) -> Result<String, String> {
             parent.display()
         ));
     }
-    fs::write(path, bytes)
-        .map_err(|error| format!("Failed to write `{}`: {error}", path.display()))?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mindmap.lmind");
+    let suffix = safe_timestamp();
+    let temp_path = parent.join(format!(".{file_name}.{suffix}.tmp"));
+    let restore_path = parent.join(format!(".{file_name}.{suffix}.restore"));
+
+    {
+        let mut file = fs::File::create(&temp_path).map_err(|error| {
+            format!("Failed to create temporary file `{}`: {error}", temp_path.display())
+        })?;
+        file.write_all(bytes).map_err(|error| {
+            format!("Failed to write temporary file `{}`: {error}", temp_path.display())
+        })?;
+        file.sync_all().map_err(|error| {
+            format!("Failed to flush temporary file `{}`: {error}", temp_path.display())
+        })?;
+    }
+
+    if path.is_file() {
+        fs::copy(path, &restore_path).map_err(|error| {
+            let _ = fs::remove_file(&temp_path);
+            format!("Failed to prepare restore copy `{}`: {error}", restore_path.display())
+        })?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if path.exists() {
+            fs::remove_file(path).map_err(|error| {
+                let _ = fs::remove_file(&temp_path);
+                let _ = fs::remove_file(&restore_path);
+                format!("Failed to replace existing file `{}`: {error}", path.display())
+            })?;
+        }
+    }
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        if restore_path.is_file() {
+            let _ = fs::copy(&restore_path, path);
+        }
+        let _ = fs::remove_file(&temp_path);
+        let _ = fs::remove_file(&restore_path);
+        return Err(format!("Failed to atomically replace `{}`: {error}", path.display()));
+    }
+
+    let _ = fs::remove_file(&restore_path);
+    Ok(())
+}
+
+fn write_local_file_reliable_at(
+    root: Option<&Path>,
+    path: &Path,
+    bytes: &[u8],
+    backup_options: Option<&SaveBackupOptions>,
+) -> Result<String, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Selected file path has no parent directory.".to_string())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "Selected file directory does not exist: {}",
+            parent.display()
+        ));
+    }
+
+    if let (Some(root), Some(options)) = (root, backup_options) {
+        create_file_backup_at(root, path, options)?;
+    }
+
+    atomic_write_file(path, bytes)?;
     Ok(path.to_string_lossy().to_string())
+}
+
+fn write_local_file_at(path: &Path, bytes: &[u8]) -> Result<String, String> {
+    write_local_file_reliable_at(None, path, bytes, None)
+}
+
+fn local_file_health_at(path: &Path) -> LocalFileHealth {
+    match fs::metadata(path) {
+        Ok(metadata) => LocalFileHealth {
+            exists: true,
+            is_file: metadata.is_file(),
+            size_bytes: Some(metadata.len()),
+            modified_at_ms: metadata.modified().ok().and_then(|time| {
+                time.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_millis())
+            }),
+        },
+        Err(_) => LocalFileHealth {
+            exists: false,
+            is_file: false,
+            size_bytes: None,
+            modified_at_ms: None,
+        },
+    }
 }
 
 fn contains_forbidden_declarative_field(value: &Value) -> Option<String> {
@@ -1676,6 +1939,21 @@ fn read_user_text(app: AppHandle, relative_path: String) -> Result<String, Strin
 }
 
 #[tauri::command]
+fn delete_user_file(app: AppHandle, relative_path: String) -> Result<bool, String> {
+    let root = ensure_user_data_root(&app)?;
+    let target = resolve_user_relative_path(&root, &relative_path)?;
+    if !target.exists() {
+        return Ok(false);
+    }
+    if !target.is_file() {
+        return Err(format!("User path is not a file: {relative_path}"));
+    }
+    fs::remove_file(&target)
+        .map_err(|error| format!("Failed to delete user file `{relative_path}`: {error}"))?;
+    Ok(true)
+}
+
+#[tauri::command]
 fn list_user_files(app: AppHandle, relative_dir: String) -> Result<Vec<String>, String> {
     let root = ensure_user_data_root(&app)?;
     let mut directory = resolve_user_relative_path(&root, &relative_dir)?;
@@ -1948,19 +2226,16 @@ fn uninstall_plugin_from_user_dir(app: AppHandle, plugin_id: String) -> Result<(
 #[tauri::command]
 fn open_user_data_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
+    open_directory_path(&root)
+}
 
-    #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer");
-    #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = Command::new("xdg-open");
-
-    command
-        .arg(&root)
-        .spawn()
-        .map_err(|error| format!("Failed to open user data directory: {error}"))?;
-    Ok(())
+#[tauri::command]
+fn open_user_data_subdir(app: AppHandle, relative_dir: String) -> Result<(), String> {
+    let root = ensure_user_data_root(&app)?;
+    let directory = resolve_user_relative_path(&root, &relative_dir)?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Failed to create user subdirectory `{relative_dir}`: {error}"))?;
+    open_directory_path(&directory)
 }
 
 #[tauri::command]
@@ -5512,10 +5787,12 @@ fn export_plugin_package(app: AppHandle, plugin_id: String) -> Result<Option<Str
 
 #[tauri::command]
 fn save_local_file_with_dialog(
+    app: AppHandle,
     default_file_name: String,
     filter_name: String,
     extensions: Vec<String>,
     bytes: Vec<u8>,
+    backup_options: Option<SaveBackupOptions>,
 ) -> Result<Option<String>, String> {
     let mut dialog = FileDialog::new()
         .set_title("Save file")
@@ -5526,12 +5803,24 @@ fn save_local_file_with_dialog(
     let Some(path) = dialog.save_file() else {
         return Ok(None);
     };
-    write_local_file_at(&path, &bytes).map(Some)
+    let root = ensure_user_data_root(&app)?;
+    write_local_file_reliable_at(Some(&root), &path, &bytes, backup_options.as_ref()).map(Some)
 }
 
 #[tauri::command]
-fn write_local_file(path: String, bytes: Vec<u8>) -> Result<String, String> {
-    write_local_file_at(Path::new(&path), &bytes)
+fn write_local_file(
+    app: AppHandle,
+    path: String,
+    bytes: Vec<u8>,
+    backup_options: Option<SaveBackupOptions>,
+) -> Result<String, String> {
+    let root = ensure_user_data_root(&app)?;
+    write_local_file_reliable_at(
+        Some(&root),
+        Path::new(&path),
+        &bytes,
+        backup_options.as_ref(),
+    )
 }
 
 #[tauri::command]
@@ -5597,6 +5886,11 @@ fn open_file_location(path: String) -> Result<(), String> {
         .spawn()
         .map_err(|error| format!("Failed to open file location: {error}"))?;
     Ok(())
+}
+
+#[tauri::command]
+fn check_local_file_health(path: String) -> Result<LocalFileHealth, String> {
+    Ok(local_file_health_at(Path::new(&path)))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -6395,6 +6689,7 @@ fn main() {
             read_user_json,
             write_user_json,
             read_user_text,
+            delete_user_file,
             list_user_files,
             install_plugin_to_user_dir,
             get_plugin_gallery_catalog,
@@ -6432,6 +6727,8 @@ fn main() {
             read_local_file,
             open_local_file_with_dialog,
             open_file_location,
+            check_local_file_health,
+            open_user_data_subdir,
             get_desktop_config_dir,
             ensure_desktop_config_dir,
             get_desktop_plugin_dir,
@@ -7114,6 +7411,86 @@ fn main() {
         assert_eq!(
             fs::read_to_string(&target).expect("selected file should be readable"),
             r#"{"version":"1.0"}"#
+        );
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn reliable_local_file_write_replaces_content_atomically() {
+        let root = test_root("atomic-local-file");
+        fs::create_dir_all(&root).expect("test directory should be created");
+        let target = root.join("map.lmind");
+        fs::write(&target, "old").expect("fixture should be written");
+
+        write_local_file_reliable_at(None, &target, b"new", None)
+            .expect("atomic write should succeed");
+
+        assert_eq!(
+            fs::read_to_string(&target).expect("target should be readable"),
+            "new"
+        );
+        assert!(fs::read_dir(&root)
+            .expect("root should list")
+            .all(|entry| !entry
+                .expect("entry should be readable")
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp")));
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn reliable_local_file_write_failure_keeps_original_file() {
+        let root = test_root("atomic-local-file-failure");
+        fs::create_dir_all(&root).expect("test directory should be created");
+        let target = root.join("map.lmind");
+        fs::write(&target, "old").expect("fixture should be written");
+        let missing_target = root.join("missing").join("map.lmind");
+
+        let result = write_local_file_reliable_at(None, &missing_target, b"new", None);
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(&target).expect("original should be readable"),
+            "old"
+        );
+        fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+
+    #[test]
+    fn file_backups_are_created_and_pruned_per_file() {
+        let root = test_root("file-backup-prune");
+        let documents = root.join("documents");
+        fs::create_dir_all(&documents).expect("documents directory should exist");
+        ensure_user_data_dirs_at(&root).expect("user directories should be created");
+        let target = documents.join("map.lmind");
+        fs::write(&target, "v1").expect("fixture should be written");
+        let options = SaveBackupOptions {
+            enabled: true,
+            max_backups_per_file: Some(2),
+            throttle_ms: None,
+        };
+
+        for index in 0..3 {
+            write_local_file_reliable_at(
+                Some(&root),
+                &target,
+                format!("v{}", index + 2).as_bytes(),
+                Some(&options),
+            )
+            .expect("reliable write should succeed");
+        }
+
+        let backup_dir = backup_dir_for_file(&root, &target);
+        let backups = fs::read_dir(&backup_dir)
+            .expect("backup directory should exist")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count();
+        assert_eq!(backups, 2);
+        assert_eq!(
+            fs::read_to_string(&target).expect("target should be readable"),
+            "v4"
         );
         fs::remove_dir_all(root).expect("test directory should be removable");
     }

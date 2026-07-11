@@ -21,6 +21,9 @@ type TopMenuBarProps = {
   message?: string;
   messageKind?: 'info' | 'success' | 'warning' | 'error';
   isDirty: boolean;
+  saveStatus?: string;
+  saveStatusLabel?: string;
+  onOpenFileStatus?: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onQuickSave: () => void;
@@ -33,6 +36,9 @@ export function TopMenuBar({
   message,
   messageKind = 'info',
   isDirty,
+  saveStatus = isDirty ? 'dirty' : 'saved',
+  saveStatusLabel = isDirty ? '未保存' : '已保存',
+  onOpenFileStatus,
   onUndo,
   onRedo,
   onQuickSave,
@@ -137,13 +143,25 @@ export function TopMenuBar({
         </div>
       </div>
 
-      <div className="top-document-title" title={currentPath ?? currentTitle}>
+      <button
+        type="button"
+        className="top-document-title"
+        title={currentPath ?? currentTitle}
+        onClick={onOpenFileStatus}
+      >
         <span
-          className={isDirty ? 'document-status-dot is-dirty' : 'document-status-dot'}
+          className={[
+            'document-status-dot',
+            isDirty ? 'is-dirty' : '',
+            `is-${saveStatus}`,
+          ]
+            .filter(Boolean)
+            .join(' ')}
           aria-hidden="true"
         />
         <strong>{currentTitle}</strong>
-      </div>
+        <span className="document-status-label">{saveStatusLabel}</span>
+      </button>
 
       <nav className="top-menu-nav" aria-label="顶部菜单" ref={menuBarRef}>
         {menus.map((menu) => {
