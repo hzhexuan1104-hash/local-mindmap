@@ -1,4 +1,4 @@
-import { createMindmapLayoutStyle } from './layout';
+import { createMindmapLayout } from './layout';
 import { serializeMindmapMarkdown } from './exportMarkdown';
 import { serializeLmindDocument } from './saveMindmap';
 import { serializeMindmapTxt } from './exportTxt';
@@ -116,7 +116,7 @@ export function runPerformanceBenchmarks(
       })
     : undefined;
   const layoutComputeMs = measure(() => {
-    createMindmapLayoutStyle();
+    createMindmapLayout(rootNode, nodeTypes);
   });
 
   return {

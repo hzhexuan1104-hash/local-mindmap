@@ -8,6 +8,10 @@ import {
   useState,
 } from 'react';
 import { CanvasControls } from './components/CanvasControls';
+import { OutlinePanel } from './components/OutlinePanel';
+import { MiniMap } from './components/MiniMap';
+import { PerformanceInfoPanel } from './components/PerformanceInfoPanel';
+import { CommandPalette } from './components/CommandPalette';
 import {
   LeftResourcePanel,
   type ResourceView,
@@ -17,6 +21,23 @@ import {
   TopMenuBar,
   type TopMenuGroup,
 } from './components/TopMenuBar';
+import { createBuiltinCommands } from '../features/commands/builtinCommands';
+import { createCommandRegistry } from '../features/commands/commandRegistry';
+import {
+  DEFAULT_COMMAND_PALETTE_SETTINGS,
+  loadCommandPaletteSettings,
+  saveCommandPaletteSettings,
+  type CommandPaletteSettings,
+} from '../features/commands/commandPaletteSettings';
+import { isCommandPaletteShortcut } from '../features/commands/commandPaletteShortcut';
+import { recordCommandUsage, toggleFavoriteCommand } from '../features/commands/commandHistory';
+import { createNodeSearchIndex } from '../features/commands/nodeSearchIndex';
+import { createPluginCommands } from '../features/commands/pluginCommands';
+import type {
+  CommandCategory,
+  CommandContext,
+  PaletteResult,
+} from '../features/commands/commandTypes';
 import {
   centerCanvasView,
   DEFAULT_CANVAS_VIEW,
@@ -28,6 +49,7 @@ import {
   getBoxSelectionGeometry,
   hitTestNodesInRect,
   isCanvasInteractionBlockedTarget,
+  isCanvasBlankTarget,
   isDragPastThreshold,
   screenPointToWorldPoint,
   screenToCanvasPoint,
@@ -47,6 +69,11 @@ import {
 import { ExcelImportMappingDialog } from '../features/mindmap/ExcelImportMappingDialog';
 import { createMindmapExcelBytes } from '../features/mindmap/exportExcel';
 import { createMindmapImageBytes } from '../features/mindmap/exportImage';
+import { expandAncestors, expandToDepth, setAllCollapsed, setCollapsed } from '../features/mindmap/collapseState';
+import { getFocusBreadcrumb, getFocusedRoot } from '../features/mindmap/focusMode';
+import { createMindmapIndex, isNodeInSubtree } from '../features/mindmap/mindmapIndex';
+import { EMPTY_PERFORMANCE_METRICS, type PerformanceMetrics } from '../features/mindmap/performanceMetrics';
+import { expandViewport, getVisibleNodeIds, getWorldViewport, shouldRenderEdge } from '../features/mindmap/viewportCulling';
 import { serializeMindmapMarkdown } from '../features/mindmap/exportMarkdown';
 import { serializeMindmapTxt } from '../features/mindmap/exportTxt';
 import { selectLocalFile } from '../features/mindmap/fileUtils';
@@ -94,6 +121,7 @@ import {
   mergeNodeStyle,
 } from '../features/mindmap/nodeStyles';
 import { updateNodePositionById } from '../features/mindmap/nodePositions';
+import { resolveCommittedNodeText } from '../features/mindmap/nodeEditing';
 import {
   createNodeTypePack,
   exportNodeTypesToPack,
@@ -474,15 +502,23 @@ type BoxSelectionState = {
   canvasCurrent: Point;
   append: boolean;
   isActive: boolean;
+  startedOnBlank: boolean;
 };
 
 type CanvasPanState = {
   screenStart: Point;
   lastScreenPoint: Point;
   hasMoved: boolean;
+  startedOnBlank: boolean;
+};
+
+type EditingSession = {
+  nodeId: string;
 };
 
 type ToolDrawer = ResourceView;
+
+const BUILTIN_COMMANDS = createBuiltinCommands();
 
 type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
@@ -501,6 +537,7 @@ type MindmapTreeProps = {
   onSelectNode: (nodeId: string, append: boolean) => void;
   onStartEdit: (node: MindmapNode) => void;
   onEditingTextChange: (text: string) => void;
+  onEditorRef: (element: HTMLTextAreaElement | null) => void;
   onCommitEdit: () => void;
   onStartDrag: (nodeId: string, event: MouseEvent<HTMLElement>) => void;
   onOpenContextMenu: (node: MindmapNode, event: MouseEvent<HTMLElement>) => void;
@@ -523,6 +560,7 @@ function MindmapTree({
   onSelectNode,
   onStartEdit,
   onEditingTextChange,
+  onEditorRef,
   onCommitEdit,
   onStartDrag,
   onOpenContextMenu,
@@ -605,6 +643,7 @@ function MindmapTree({
           {isEditing ? (
             <textarea
               className="node-editor"
+              ref={onEditorRef}
               value={editingText}
               rows={1}
               autoFocus
@@ -750,6 +789,13 @@ export function App() {
     useState<ToolDrawer | null>('templates');
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
+  const [focusedRootId, setFocusedRootId] = useState<string | null>(null);
+  const [autoPerformanceMode, setAutoPerformanceMode] = useState(true);
+  const [viewportCullingThreshold, setViewportCullingThreshold] = useState(300);
+  const [showMiniMap, setShowMiniMap] = useState(true);
+  const [isExportingLargeMap, setIsExportingLargeMap] = useState(false);
+  const [canvasViewport, setCanvasViewport] = useState({ width: 0, height: 0 });
+  const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics>(EMPTY_PERFORMANCE_METRICS);
   const [showCanvasGrid, setShowCanvasGrid] = useState(true);
   const [openCentered, setOpenCentered] = useState(true);
   const [internalClipboard, setInternalClipboard] =
@@ -757,6 +803,9 @@ export function App() {
   const [boxSelection, setBoxSelection] = useState<BoxSelectionState | null>(null);
   const [boxSelectionPreviewIds, setBoxSelectionPreviewIds] = useState<string[]>([]);
   const [isShortcutHelpVisible, setIsShortcutHelpVisible] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteSettings, setCommandPaletteSettings] =
+    useState<CommandPaletteSettings>(DEFAULT_COMMAND_PALETTE_SETTINGS);
   const [isCanvasGuideDismissed, setIsCanvasGuideDismissed] = useState(() => {
     try {
       return localStorage.getItem(CANVAS_GUIDE_DISMISSED_KEY) === 'true';
@@ -778,6 +827,11 @@ export function App() {
   const autoSaveTimerRef = useRef<number | null>(null);
   const isSavingRef = useRef(false);
   const lastAutoSaveSignatureRef = useRef('');
+  const cullingFrameRef = useRef<number | null>(null);
+  const editingSessionRef = useRef<EditingSession | null>(null);
+  const commandPaletteSuspendsEditingRef = useRef(false);
+  const editingTextRef = useRef('');
+  const nodeEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -834,10 +888,43 @@ export function App() {
       ),
     [nodeTypes, pluginNodeTypes],
   );
-  const mindmapLayout = useMemo(
-    () => createMindmapLayout(mindmap, availableNodeTypes),
-    [mindmap, availableNodeTypes],
+  const mindmapIndex = useMemo(() => createMindmapIndex(mindmap), [mindmap]);
+  const commandNodeSearchIndex = useMemo(
+    () => createNodeSearchIndex(mindmapIndex),
+    [mindmapIndex],
   );
+  const focusedMindmap = useMemo(
+    () => getFocusedRoot(mindmap, mindmapIndex, focusedRootId),
+    [focusedRootId, mindmap, mindmapIndex],
+  );
+  const layoutRoot = useMemo(
+    () => isExportingLargeMap ? setAllCollapsed(mindmap, false) : focusedMindmap,
+    [focusedMindmap, isExportingLargeMap, mindmap],
+  );
+  const measuredLayout = useMemo(() => {
+    const startedAt = typeof performance === 'undefined' ? Date.now() : performance.now();
+    const result = createMindmapLayout(layoutRoot, availableNodeTypes);
+    return { result, durationMs: (typeof performance === 'undefined' ? Date.now() : performance.now()) - startedAt };
+  }, [layoutRoot, availableNodeTypes]);
+  const mindmapLayout = measuredLayout.result;
+  const layoutDurationMs = measuredLayout.durationMs;
+  const isViewportCullingEnabled = autoPerformanceMode && mindmapIndex.flattenedNodeIds.length > viewportCullingThreshold;
+  const worldViewport = useMemo(
+    () => expandViewport(getWorldViewport(canvasView, canvasViewport), 220, canvasView.scale),
+    [canvasView, canvasViewport],
+  );
+  const forcedRenderNodeIds = useMemo(
+    () => [selectedNodeId, editingNodeId, draggingNodeId, dropTargetNodeId, focusedRootId].filter((id): id is string => Boolean(id)),
+    [draggingNodeId, dropTargetNodeId, editingNodeId, focusedRootId, selectedNodeId],
+  );
+  const visibleNodeIds = useMemo(
+    () => isViewportCullingEnabled ? getVisibleNodeIds(mindmapLayout.nodes, worldViewport, forcedRenderNodeIds) : new Set(mindmapLayout.nodes.map((node) => node.id)),
+    [forcedRenderNodeIds, isViewportCullingEnabled, mindmapLayout.nodes, worldViewport],
+  );
+  const renderedLayoutNodes = useMemo(() => mindmapLayout.nodes.filter((node) => visibleNodeIds.has(node.id)), [mindmapLayout.nodes, visibleNodeIds]);
+  const renderedLayoutLines = useMemo(() => mindmapLayout.lines.filter((line) =>
+    !isViewportCullingEnabled || shouldRenderEdge(line, visibleNodeIds, { fromId: '', toId: '' }, worldViewport),
+  ), [isViewportCullingEnabled, mindmapLayout.lines, visibleNodeIds, worldViewport]);
   const nodeHitboxes = useMemo(
     () =>
       mindmapLayout.nodes.map((layoutNode) => ({
@@ -922,10 +1009,12 @@ export function App() {
   }, [boxSelection, canvasView]);
   const searchRoot = useMemo(
     () =>
-      searchScope === 'branch' && selectedNodeId
+      focusedRootId
+        ? focusedMindmap
+        : searchScope === 'branch' && selectedNodeId
         ? findNodeById(mindmap, selectedNodeId) ?? mindmap
         : mindmap,
-    [mindmap, searchScope, selectedNodeId],
+    [focusedMindmap, focusedRootId, mindmap, searchScope, selectedNodeId],
   );
   const rawSearchMatches = useMemo(
     () => findMindmapMatches(searchRoot, searchQuery, searchScope),
@@ -969,10 +1058,34 @@ export function App() {
     templates: '模板库',
     'node-types': '节点类型',
     search: '查找替换',
+    outline: '大纲导航',
     performance: '性能测试',
     plugins: '插件管理',
     settings: '设置',
   } as const;
+
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    const updateSize = () => setCanvasViewport({ width: element.clientWidth, height: element.clientHeight });
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setPerformanceMetrics((current) => ({
+      ...current,
+      nodeCount: mindmapIndex.flattenedNodeIds.length,
+      focusedNodeCount: createMindmapIndex(focusedMindmap).flattenedNodeIds.length,
+      visibleNodeCount: visibleNodeIds.size,
+      renderedNodeCount: renderedLayoutNodes.length,
+      renderedEdgeCount: renderedLayoutLines.length,
+      collapsedNodeCount: mindmapIndex.flattenedNodeIds.filter((id) => mindmapIndex.nodeById.get(id)?.collapsed).length,
+      lastLayoutMs: layoutDurationMs,
+    }));
+  }, [focusedMindmap, layoutDurationMs, mindmapIndex, renderedLayoutLines.length, renderedLayoutNodes.length, visibleNodeIds.size]);
 
   useEffect(() => {
     let isActive = true;
@@ -1168,6 +1281,20 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    void loadCommandPaletteSettings()
+      .then((settings) => {
+        if (active) setCommandPaletteSettings(settings);
+      })
+      .catch(() => {
+        if (active) setCommandPaletteSettings(DEFAULT_COMMAND_PALETTE_SETTINGS);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!availableThemes.some((theme) => theme.id === themeId)) {
       setThemeId('default-blue');
       showMessage('当前主题来自已禁用或未安装插件，已切回默认主题');
@@ -1238,8 +1365,28 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
+      if (
+        commandPaletteSettings.shortcutEnabled &&
+        isCommandPaletteShortcut(event)
+      ) {
+        event.preventDefault();
+        if (isCommandPaletteOpen) {
+          document
+            .querySelector<HTMLInputElement>('.command-palette-search input')
+            ?.focus({ preventScroll: true });
+        } else {
+          commandPaletteSuspendsEditingRef.current = true;
+          setIsCommandPaletteOpen(true);
+        }
+        return;
+      }
+
+      if (isCommandPaletteOpen) {
+        return;
+      }
+
       const action = getKeyboardShortcutAction(event, {
-        hasModalOpen: Boolean(excelImportPreview || isPluginManagerVisible || isShortcutHelpVisible),
+        hasModalOpen: Boolean(excelImportPreview || isPluginManagerVisible || isShortcutHelpVisible || isCommandPaletteOpen),
         hasContextMenuOpen: Boolean(contextMenu),
         isBoxSelecting: Boolean(boxSelection),
         hasSelection: selectedNodeIds.length > 0,
@@ -1332,6 +1479,53 @@ export function App() {
     }, 2400);
   };
 
+  const openCommandPalette = () => {
+    commandPaletteSuspendsEditingRef.current = true;
+    setIsCommandPaletteOpen(true);
+  };
+
+  const closeCommandPalette = () => {
+    commandPaletteSuspendsEditingRef.current = false;
+    setIsCommandPaletteOpen(false);
+  };
+
+  const updateCommandPaletteSettings = (
+    patch: Partial<CommandPaletteSettings>,
+  ) => {
+    setCommandPaletteSettings((current) => {
+      const next = { ...current, ...patch };
+      void saveCommandPaletteSettings(next).catch(() => {
+        showMessage('命令面板设置保存失败', 'error');
+      });
+      return next;
+    });
+  };
+
+  const handleRecordCommand = (commandId: string) => {
+    setCommandPaletteSettings((current) => {
+      const next = {
+        ...current,
+        recentCommands: recordCommandUsage(current.recentCommands, commandId),
+      };
+      void saveCommandPaletteSettings(next);
+      return next;
+    });
+  };
+
+  const handleToggleFavoriteCommand = (commandId: string) => {
+    setCommandPaletteSettings((current) => {
+      const next = {
+        ...current,
+        favoriteCommandIds: toggleFavoriteCommand(
+          current.favoriteCommandIds,
+          commandId,
+        ),
+      };
+      void saveCommandPaletteSettings(next);
+      return next;
+    });
+  };
+
   const dismissCanvasGuide = () => {
     setIsCanvasGuideDismissed(true);
     try {
@@ -1388,6 +1582,11 @@ export function App() {
   };
 
   const handleEscapeShortcut = () => {
+    if (isCommandPaletteOpen) {
+      closeCommandPalette();
+      return;
+    }
+
     if (excelImportPreview) {
       setExcelImportPreview(null);
       return;
@@ -1481,7 +1680,16 @@ export function App() {
     showMessage('已重做');
   };
 
+  const confirmReplaceDirtyDocument = (actionLabel: string) =>
+    !isDocumentDirty ||
+    window.confirm(
+      `当前导图有未保存修改。${actionLabel}会替换当前导图，是否继续？`,
+    );
+
   const handleCreateMindmap = () => {
+    if (!confirmReplaceDirtyDocument('新建导图')) {
+      return;
+    }
     recordHistory();
     setMindmap(createCenterNode());
     setNodeTypes(userNodeTypes);
@@ -1731,6 +1939,10 @@ export function App() {
       }
       const openedProject = parseLmindProject(opened.content);
 
+      if (!confirmReplaceDirtyDocument('打开文件')) {
+        return;
+      }
+
       recordHistory();
       applyProject(openedProject);
       setCurrentFilePath(opened.path);
@@ -1754,6 +1966,9 @@ export function App() {
   const handleOpenRecentFile = async (entry: RecentFileEntry) => {
     if (!isDesktopApp) {
       showMessage(`最近下载：${entry.name}。浏览器无法重新打开本地下载路径。`);
+      return;
+    }
+    if (!confirmReplaceDirtyDocument('打开最近文件')) {
       return;
     }
     try {
@@ -2973,6 +3188,10 @@ export function App() {
         return;
       }
 
+      if (!confirmReplaceDirtyDocument('导入 JSON')) {
+        return;
+      }
+
       recordHistory();
       applyProject(importedProject);
       showMessage('已导入 JSON');
@@ -2986,6 +3205,10 @@ export function App() {
       const importedMindmap = await importMindmapMarkdown();
 
       if (!importedMindmap) {
+        return;
+      }
+
+      if (!confirmReplaceDirtyDocument('导入 Markdown')) {
         return;
       }
 
@@ -3021,6 +3244,10 @@ export function App() {
     rows: RawExcelRow[],
   ) => {
     if (!excelImportPreview) {
+      return;
+    }
+
+    if (!confirmReplaceDirtyDocument('导入 Excel')) {
       return;
     }
 
@@ -3140,8 +3367,11 @@ export function App() {
     }
 
     if (
-      selectedNodeIds.length > 1 &&
-      !window.confirm(`将删除 ${deletableIds.length} 个节点及其子节点，是否继续？`)
+      !window.confirm(
+        deletableIds.length > 1
+          ? `将删除 ${deletableIds.length} 个节点及其子节点，是否继续？`
+          : '将删除当前节点及其子节点，是否继续？',
+      )
     ) {
       return;
     }
@@ -3334,26 +3564,55 @@ export function App() {
     setHasEditedNode(true);
     setSelectedNodeId(node.id);
     setSelectedNodeIds([node.id]);
+    editingSessionRef.current = { nodeId: node.id };
+    editingTextRef.current = node.text;
     setEditingNodeId(node.id);
     setEditingText(node.text);
   };
 
-  const handleCommitEdit = () => {
-    if (!editingNodeId) {
+  const finishEditing = (blurEditor = false) => {
+    const session = editingSessionRef.current;
+    if (!session) {
       return;
     }
 
-    const nextText = editingText.trim() || '未命名节点';
+    // Clear the session first: canvas pointerup and textarea blur can occur in either order.
+    editingSessionRef.current = null;
+    const nextText = resolveCommittedNodeText(editingTextRef.current);
+    const currentNode = findNodeById(mindmap, session.nodeId);
 
-    recordHistory();
-    setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, editingNodeId, (node) => ({
-        ...node,
-        text: nextText,
-      })),
-    );
+    if (currentNode && currentNode.text !== nextText) {
+      recordHistory();
+      setMindmap((currentMindmap) =>
+        updateNodeById(currentMindmap, session.nodeId, (node) => ({
+          ...node,
+          text: nextText,
+        })),
+      );
+    }
     setEditingNodeId(null);
     setEditingText('');
+    editingTextRef.current = '';
+    if (blurEditor) {
+      nodeEditorRef.current?.blur();
+    }
+  };
+
+  const handleCommitEdit = () => {
+    if (commandPaletteSuspendsEditingRef.current) {
+      return;
+    }
+    finishEditing();
+  };
+
+  const handleEditingTextChange = (text: string) => {
+    editingTextRef.current = text;
+    setEditingText(text);
+  };
+
+  const commitEditingAndClearSelection = () => {
+    finishEditing(true);
+    clearSelection();
   };
 
   const handleRunSearch = () => {
@@ -3389,8 +3648,7 @@ export function App() {
     const normalizedIndex =
       (nextIndex + currentMatches.length) % currentMatches.length;
     setActiveMatchIndex(normalizedIndex);
-    setSelectedNodeId(currentMatches[normalizedIndex].nodeId);
-    setSelectedNodeIds([currentMatches[normalizedIndex].nodeId]);
+    locateNode(currentMatches[normalizedIndex].nodeId);
   };
 
   const handleReplaceCurrent = () => {
@@ -3532,6 +3790,9 @@ export function App() {
   };
 
   const handleCreateFromTemplate = (template: MindmapTemplate) => {
+    if (!confirmReplaceDirtyDocument('使用模板')) {
+      return;
+    }
     recordHistory();
     applyProject(cloneTemplateProject(template));
     setActiveDrawer(null);
@@ -3716,12 +3977,8 @@ export function App() {
 
   const handleToggleCollapse = (nodeId: string) => {
     recordHistory();
-    setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, nodeId, (node) => ({
-        ...node,
-        collapsed: !node.collapsed,
-      })),
-    );
+    const node = mindmapIndex.nodeById.get(nodeId);
+    setMindmap((currentMindmap) => setCollapsed(currentMindmap, nodeId, !node?.collapsed));
   };
 
   const handleExpandAll = () => {
@@ -3736,6 +3993,52 @@ export function App() {
     showMessage('已折叠全部');
   };
 
+  const handleExpandToDepth = (depth: number) => {
+    recordHistory();
+    setMindmap((currentMindmap) => expandToDepth(currentMindmap, depth));
+    showMessage(`已展开到第 ${depth} 层`);
+  };
+
+  const locateNode = (nodeId: string, options: { exitFocusIfNeeded?: boolean } = {}) => {
+    if (!mindmapIndex.nodeById.has(nodeId)) {
+      showMessage('定位失败：节点已不存在');
+      return;
+    }
+    if (focusedRootId && !isNodeInSubtree(mindmapIndex, nodeId, focusedRootId)) {
+      if (!options.exitFocusIfNeeded) {
+        showMessage('目标节点位于当前聚焦分支外');
+        return;
+      }
+      setFocusedRootId(null);
+    }
+    setMindmap((currentMindmap) => expandAncestors(currentMindmap, nodeId, mindmapIndex));
+    setSelectedNodeId(nodeId);
+    setSelectedNodeIds([nodeId]);
+    requestAnimationFrame(() => {
+      const layoutNode = layoutNodeById.get(nodeId);
+      if (!layoutNode || !canvasRef.current) return;
+      const viewport = canvasRef.current.getBoundingClientRect();
+      setCanvasView((view) => ({
+        ...view,
+        offsetX: viewport.width / 2 - (layoutNode.x + layoutNode.width / 2) * view.scale,
+        offsetY: viewport.height / 2 - (layoutNode.y + layoutNode.height / 2) * view.scale,
+      }));
+    });
+  };
+
+  const handleFocusBranch = (nodeId: string) => {
+    if (!mindmapIndex.nodeById.has(nodeId)) return;
+    setFocusedRootId(nodeId);
+    setIsFocusMode(false);
+    locateNode(nodeId);
+    showMessage('已聚焦当前分支');
+  };
+
+  const handleExitBranchFocus = () => {
+    setFocusedRootId(null);
+    showMessage('已退出分支聚焦');
+  };
+
   const handleResetAutoLayout = () => {
     recordHistory();
     setMindmap((currentMindmap) => clearMindmapPositions(currentMindmap));
@@ -3748,7 +4051,16 @@ export function App() {
       return;
     }
 
+    if (isExportingLargeMap) {
+      showMessage('已有导出任务正在进行');
+      return;
+    }
+    const previousPerformanceMode = autoPerformanceMode;
+    const startedAt = typeof performance === 'undefined' ? Date.now() : performance.now();
+    setIsExportingLargeMap(true);
+    setAutoPerformanceMode(false);
     try {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       await exportFile({
         content: await createMindmapImageBytes(exportTreeRef.current, format),
         extension: format,
@@ -3757,6 +4069,11 @@ export function App() {
       });
     } catch (error) {
       showMessage(`导出失败：图片生成失败：${getErrorMessage(error, '未知错误')}`);
+    } finally {
+      setAutoPerformanceMode(previousPerformanceMode);
+      setIsExportingLargeMap(false);
+      const endedAt = typeof performance === 'undefined' ? Date.now() : performance.now();
+      setPerformanceMetrics((current) => ({ ...current, lastExportMs: endedAt - startedAt }));
     }
   };
 
@@ -3839,6 +4156,10 @@ export function App() {
     const isOnInteractiveElement = isCanvasInteractionBlockedTarget(
       event.target as HTMLElement | null,
     );
+    const startedOnBlank = isCanvasBlankTarget(
+      event.target as HTMLElement | null,
+      event.currentTarget,
+    );
 
     const canvasElement = event.currentTarget;
     const canvasViewportRect = canvasElement.getBoundingClientRect();
@@ -3874,6 +4195,7 @@ export function App() {
         canvasCurrent: selectionGeometry.canvasCurrent,
         append: false,
         isActive: false,
+        startedOnBlank,
       });
       setBoxSelectionPreviewIds([]);
       return;
@@ -3895,6 +4217,7 @@ export function App() {
         screenStart: screenPoint,
         lastScreenPoint: screenPoint,
         hasMoved: false,
+        startedOnBlank,
       };
     }
   };
@@ -4020,7 +4343,11 @@ export function App() {
     if (boxSelection) {
       event.preventDefault();
       if (!boxSelection.isActive) {
-        clearSelection();
+        if (boxSelection.startedOnBlank) {
+          commitEditingAndClearSelection();
+        } else {
+          clearSelection();
+        }
         cancelBoxSelection();
         return;
       }
@@ -4103,10 +4430,11 @@ export function App() {
     if (canvasPanStateRef.current) {
       event.preventDefault();
       const hasMoved = canvasPanStateRef.current.hasMoved;
+      const startedOnBlank = canvasPanStateRef.current.startedOnBlank;
       stopCanvasPan();
 
-      if (!hasMoved) {
-        clearSelection();
+      if (!hasMoved && startedOnBlank) {
+        commitEditingAndClearSelection();
       }
 
       return;
@@ -5104,6 +5432,260 @@ export function App() {
     (entry) => recentFileHealth[entry.path] === 'missing',
   );
 
+  const commandActions: CommandContext['actions'] = {
+    'file.new': handleCreateMindmap,
+    'file.open': handleOpenMindmap,
+    'file.save': handleSaveMindmap,
+    'file.saveAs': handleSaveMindmapAs,
+    'file.import': () => showMessage('请选择“导入 Markdown / Excel / JSON”命令'),
+    'file.importMarkdown': handleImportMarkdown,
+    'file.importExcel': handleImportExcel,
+    'file.importJson': handleImportJson,
+    'file.export': () => showMessage('请选择具体导出格式'),
+    'file.exportPng': () => handleExportImage('png'),
+    'file.exportMarkdown': handleExportMarkdown,
+    'file.exportExcel': handleExportExcel,
+    'file.exportJson': handleExportJson,
+    'file.exportTxt': handleExportTxt,
+    'file.exportFocused': () =>
+      exportFile({
+        content: serializeMindmapMarkdown(focusedMindmap),
+        extension: 'md',
+        mimeType: 'text/markdown;charset=utf-8',
+        filterName: 'Markdown',
+        defaultFileName: `${sanitizeFileName(focusedMindmap.text)}-聚焦分支.md`,
+      }),
+    'history.snapshot': handleCreateVersionSnapshot,
+    'history.open': handleOpenVersionHistory,
+    'history.recovery': () => setIsRecoveryCenterVisible(true),
+    'file.recent': () => setIsFileStatusVisible(true),
+    'edit.undo': handleUndo,
+    'edit.redo': handleRedo,
+    'edit.find': () => setActiveDrawer('search'),
+    'edit.replace': () => setActiveDrawer('search'),
+    'edit.copy': handleCopyNodes,
+    'edit.cut': handleCutNodes,
+    'edit.paste': handlePasteNodes,
+    'node.delete': handleDeleteNode,
+    'node.edit': () => {
+      if (selectedNodeId) handleStartEdit(selectedNode);
+    },
+    'node.addChild': () => handleAddChild(childNodeTypeId, { startEditing: true }),
+    'node.addSibling': () => handleAddSibling(siblingNodeTypeId, { startEditing: true }),
+    'node.remark': () => {
+      setIsRemarkPanelCollapsed(false);
+      setRemarkMode('edit');
+    },
+    'node.collapse': () => {
+      if (!selectedNodeId) return;
+      recordHistory();
+      setMindmap((current) => setCollapsed(current, selectedNodeId, true));
+    },
+    'node.expand': () => {
+      if (!selectedNodeId) return;
+      recordHistory();
+      setMindmap((current) => setCollapsed(current, selectedNodeId, false));
+    },
+    'node.focus': () => {
+      if (selectedNodeId) handleFocusBranch(selectedNodeId);
+    },
+    'node.exitFocus': handleExitBranchFocus,
+    'node.saveStyleAsType': () => {
+      const name = window.prompt('节点类型名称', `${selectedNode.text}样式`)?.trim();
+      if (name) return handleSaveSelectedStyleAsNodeType(name);
+    },
+    'node.resetStyle': handleResetSelectedNodeStyle,
+    'node.manageTypes': () => setActiveDrawer('node-types'),
+    'node.locate': () => {
+      if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true });
+    },
+    'node.selectParent': () => {
+      const parentId = selectedNodeId ? mindmapIndex.parentById.get(selectedNodeId) : null;
+      if (parentId) locateNode(parentId, { exitFocusIfNeeded: true });
+    },
+    'node.selectFirstChild': () => {
+      const childId = selectedNodeId ? mindmapIndex.childrenById.get(selectedNodeId)?.[0] : null;
+      if (childId) locateNode(childId, { exitFocusIfNeeded: true });
+    },
+    'view.outline': () => setActiveDrawer((current) => current === 'outline' ? null : 'outline'),
+    'view.minimap': () => setShowMiniMap((visible) => !visible),
+    'view.inspector': () => setIsRemarkPanelCollapsed((collapsed) => !collapsed),
+    'view.center': () => setCanvasView(centerCanvasView()),
+    'view.zoomIn': () => setCanvasView((view) => zoomCanvasView(view, 'in')),
+    'view.zoomOut': () => setCanvasView((view) => zoomCanvasView(view, 'out')),
+    'view.zoomReset': () => setCanvasView((view) => ({ ...view, scale: 1 })),
+    'view.expandAll': handleExpandAll,
+    'view.collapseAll': handleCollapseAll,
+    'view.expandDepth1': () => handleExpandToDepth(1),
+    'view.expandDepth2': () => handleExpandToDepth(2),
+    'view.expandDepth3': () => handleExpandToDepth(3),
+    'view.performance': () => setActiveDrawer('performance'),
+    'view.autoPerformance': () => setAutoPerformanceMode((enabled) => !enabled),
+    'view.layout': handleResetAutoLayout,
+    'template.library': () => setActiveDrawer('templates'),
+    'plugin.manager': () => setIsPluginManagerVisible(true),
+    'plugin.gallery': () => setIsPluginManagerVisible(true),
+    'plugin.workbench': () => setIsPluginManagerVisible(true),
+    'plugin.diagnostics': () => setIsPluginManagerVisible(true),
+    'plugin.logs': () => setIsPluginManagerVisible(true),
+    'help.guide': () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
+    'help.shortcuts': () => setIsShortcutHelpVisible(true),
+    'help.about': () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
+    'settings.commandPalette': () => setActiveDrawer('settings'),
+  };
+
+  const commandContext: CommandContext = {
+    mindmap,
+    currentFilePath,
+    isDocumentDirty,
+    selectedNodeId,
+    selectedNodeIds,
+    editingNodeId,
+    focusedRootId,
+    mindmapIndex,
+    nodeTypes: availableNodeTypes,
+    isScriptRunnerEnabled,
+    isExternalRunnerEnabled,
+    actions: commandActions,
+    showMessage,
+  };
+
+  const pluginPaletteCommands = createPluginCommands(
+    plugins,
+    { isScriptRunnerEnabled, isExternalRunnerEnabled },
+    (commandId, pluginId, menuId) =>
+      runPluginCommand(commandId, pluginId, undefined, menuId),
+  );
+  const commandRegistry = createCommandRegistry([
+    ...BUILTIN_COMMANDS,
+    ...(commandPaletteSettings.showPluginCommands ? pluginPaletteCommands : []),
+  ]);
+  const fixedCommandResults: PaletteResult[] = commandRegistry
+    .list()
+    .filter((command) => command.when?.(commandContext) !== false)
+    .map((command) => ({
+      id: command.id,
+      type: command.source === 'plugin' ? 'plugin-command' : 'command',
+      title: command.title,
+      description: command.description,
+      category: command.category,
+      keywords: command.keywords,
+      shortcut: command.shortcut,
+      icon: command.icon,
+      commandId: command.id,
+      pluginId: command.pluginId,
+      pluginName: command.pluginName,
+      riskLevel: command.riskLevel,
+      disabledReason: command.disabledReason?.(commandContext),
+      execute: () => command.execute(commandContext),
+    }));
+  const pluginNodeTypeIds = new Set(pluginNodeTypes.map((nodeType) => nodeType.id));
+  const dynamicCommandResults: PaletteResult[] = [
+    ...(commandPaletteSettings.showNodeResults
+      ? commandNodeSearchIndex.map((entry) => ({
+          id: `node.${entry.nodeId}`,
+          type: 'node' as const,
+          title: entry.title,
+          description: `${entry.path ? `父路径：${entry.path} · ` : ''}标题或备注匹配`,
+          category: 'navigation' as const,
+          keywords: [],
+          searchText: entry.searchText,
+          execute: () => locateNode(entry.nodeId, { exitFocusIfNeeded: true }),
+        }))
+      : []),
+    ...(commandPaletteSettings.showRecentFiles
+      ? recentFiles.flatMap((entry, index): PaletteResult[] => {
+          const missing = recentFileHealth[entry.path] === 'missing';
+          const base: PaletteResult = {
+            id: `recent-file.${index}.${entry.name}`,
+            type: 'recent-file',
+            title: entry.name,
+            description: missing
+              ? '文件已移动或删除'
+              : maskUserDataPath(entry.path, userDataDir),
+            category: 'file',
+            keywords: [entry.name],
+            searchText: entry.name.toLocaleLowerCase(),
+            disabledReason: missing
+              ? '文件已移动或删除，可选择重新定位或移除结果'
+              : undefined,
+            execute: () => handleOpenRecentFile(entry),
+          };
+          return missing
+            ? [
+                base,
+                {
+                  ...base,
+                  id: `recent-file.${index}.relocate`,
+                  title: `重新定位：${entry.name}`,
+                  description: '选择新的 .lmind 文件位置',
+                  disabledReason: undefined,
+                  execute: () => handleRelocateRecentFile(entry),
+                },
+                {
+                  ...base,
+                  id: `recent-file.${index}.remove`,
+                  title: `从最近文件移除：${entry.name}`,
+                  description: '只移除最近记录，不删除本地文件',
+                  disabledReason: undefined,
+                  execute: () => handleRemoveRecentFile(entry),
+                },
+              ]
+            : [base];
+        })
+      : []),
+    ...[...availableOfficialTemplates, ...templates].map((template) => ({
+      id: `template.${template.id}`,
+      type: 'template' as const,
+      title: template.name,
+      description: `${template.category} · ${createMindmapIndex(template.rootNode).flattenedNodeIds.length} 个节点${template.description ? ` · ${template.description}` : ''}`,
+      category: 'template' as const,
+      keywords: [template.category, template.description, template.isOfficial ? '官方' : '用户'],
+      searchText: `${template.name} ${template.category} ${template.description}`.toLocaleLowerCase(),
+      execute: () => handleCreateFromTemplate(template),
+    })),
+    ...[
+      {
+        id: 'node-type.default',
+        type: 'node-type' as const,
+        title: '普通节点',
+        description: '清除当前节点类型，使用普通节点样式',
+        category: 'node-type' as const,
+        keywords: ['默认', '普通', '节点类型'],
+        searchText: '普通 默认 节点类型',
+        execute: () => {
+          if (selectedNodeIds.length > 0) handleSelectedNodeTypeChange('');
+          else setActiveDrawer('node-types');
+        },
+      },
+      ...availableNodeTypes.map((nodeType) => ({
+      id: `node-type.${nodeType.id}`,
+      type: 'node-type' as const,
+      title: nodeType.name,
+      description: pluginNodeTypeIds.has(nodeType.id)
+        ? '插件节点类型'
+        : nodeTypes.some((item) => item.id === nodeType.id)
+          ? '用户自定义节点类型'
+          : '内置节点类型',
+      category: 'node-type' as const,
+      keywords: [nodeType.name, nodeType.defaultText, nodeType.icon],
+      searchText: `${nodeType.name} ${nodeType.defaultText}`.toLocaleLowerCase(),
+      execute: () => {
+        if (selectedNodeIds.length > 0) handleSelectedNodeTypeChange(nodeType.id);
+        else setActiveDrawer('node-types');
+      },
+      })),
+    ],
+  ];
+  const commandPaletteResults = [...fixedCommandResults, ...dynamicCommandResults];
+  const commandPaletteContextCategories: CommandCategory[] = Array.from(
+    new Set<CommandCategory>([
+      ...(selectedNodeId ? ['node', 'navigation'] as CommandCategory[] : ['file', 'template', 'view'] as CommandCategory[]),
+      ...(focusedRootId ? ['navigation', 'file'] as CommandCategory[] : []),
+      ...(isDocumentDirty ? ['file', 'history'] as CommandCategory[] : []),
+    ]),
+  );
+
   const topMenus: TopMenuGroup[] = [
     {
       id: 'file',
@@ -5255,6 +5837,12 @@ export function App() {
         },
         { label: '展开全部', onSelect: handleExpandAll },
         { label: '折叠全部', onSelect: handleCollapseAll },
+        { label: '展开到第 1 层', onSelect: () => handleExpandToDepth(1) },
+        { label: '展开到第 2 层', onSelect: () => handleExpandToDepth(2) },
+        { label: '展开到第 3 层', onSelect: () => handleExpandToDepth(3) },
+        { label: '聚焦当前分支', onSelect: () => selectedNodeId && handleFocusBranch(selectedNodeId), disabled: !selectedNodeId },
+        { label: '退出分支聚焦', onSelect: handleExitBranchFocus, disabled: !focusedRootId },
+        { label: showMiniMap ? '隐藏小地图' : '显示小地图', onSelect: () => setShowMiniMap((visible) => !visible) },
         {
           label: '专注模式',
           onSelect: () => setIsFocusMode(true),
@@ -5321,6 +5909,10 @@ export function App() {
       label: '帮助',
       items: [
         {
+          label: '命令面板（Ctrl+K）',
+          onSelect: openCommandPalette,
+        },
+        {
           label: '快捷键',
           onSelect: () => setIsShortcutHelpVisible(true),
         },
@@ -5368,6 +5960,25 @@ export function App() {
           onUndo={handleUndo}
           onRedo={handleRedo}
           onQuickSave={handleSaveMindmap}
+        />
+      ) : null}
+
+      {isCommandPaletteOpen ? (
+        <CommandPalette
+          results={commandPaletteResults}
+          recentCommands={
+            commandPaletteSettings.showRecentCommands
+              ? commandPaletteSettings.recentCommands
+              : []
+          }
+          favoriteCommandIds={commandPaletteSettings.favoriteCommandIds}
+          contextCategories={commandPaletteContextCategories}
+          closeAfterExecute={commandPaletteSettings.closeAfterExecute}
+          onClose={closeCommandPalette}
+          onRecordCommand={handleRecordCommand}
+          onToggleFavorite={handleToggleFavoriteCommand}
+          onDisabled={(reason) => showMessage(reason, 'warning')}
+          onError={(reason) => showMessage(`命令执行失败：${reason}`, 'error')}
         />
       ) : null}
 
@@ -5867,16 +6478,14 @@ export function App() {
             ) : null}
 
             {activeDrawer === 'performance' ? (
-              <PerformancePanel
-                rootNode={mindmap}
-                nodeTypes={nodeTypes}
-                themeId={themeId}
-                canExportTxt={canExportTxt}
-                result={performanceResult}
-                onGenerate={handleGeneratePerformanceMindmap}
-                onResultChange={setPerformanceResult}
-                onMessage={showMessage}
-              />
+              <>
+                <PerformanceInfoPanel metrics={performanceMetrics} cullingEnabled={isViewportCullingEnabled} onReset={() => setPerformanceMetrics(EMPTY_PERFORMANCE_METRICS)} />
+                <PerformancePanel rootNode={mindmap} nodeTypes={nodeTypes} themeId={themeId} canExportTxt={canExportTxt} result={performanceResult} onGenerate={handleGeneratePerformanceMindmap} onResultChange={setPerformanceResult} onMessage={showMessage} />
+              </>
+            ) : null}
+
+            {activeDrawer === 'outline' ? (
+              <OutlinePanel index={mindmapIndex} selectedNodeId={selectedNodeId} focusedRootId={focusedRootId} onLocate={(id) => locateNode(id, { exitFocusIfNeeded: true })} onToggle={handleToggleCollapse} onFocus={handleFocusBranch} />
             ) : null}
 
             {activeDrawer === 'plugins' ? (
@@ -5941,6 +6550,12 @@ export function App() {
                   >
                     查看快捷键
                   </button>
+                </section>
+                <section className="settings-group">
+                  <h3>性能与导航</h3>
+                  <label className="toggle-control"><input type="checkbox" checked={autoPerformanceMode} onChange={(event) => setAutoPerformanceMode(event.target.checked)} /><span>自动性能模式</span></label>
+                  <label className="stacked-control"><span>视口裁剪阈值</span><input type="number" min={100} max={5000} value={viewportCullingThreshold} onChange={(event) => setViewportCullingThreshold(Math.max(100, Math.min(5000, Number(event.target.value) || 300)))} /></label>
+                  <label className="toggle-control"><input type="checkbox" checked={showMiniMap} onChange={(event) => setShowMiniMap(event.target.checked)} /><span>显示小地图</span></label>
                 </section>
                 <section className="settings-group">
                   <h3>文件设置</h3>
@@ -6010,6 +6625,20 @@ export function App() {
                   </div>
                 </section>
                 <section className="settings-group">
+                  <h3>命令面板</h3>
+                  <p className="settings-hint">打开快捷键：Ctrl+K / Meta+K；备用：Ctrl+Shift+P / Meta+Shift+P</p>
+                  <label className="toggle-control"><input type="checkbox" checked={commandPaletteSettings.shortcutEnabled} onChange={(event) => updateCommandPaletteSettings({ shortcutEnabled: event.target.checked })} /><span>启用命令面板快捷键</span></label>
+                  <label className="toggle-control"><input type="checkbox" checked={commandPaletteSettings.showRecentCommands} onChange={(event) => updateCommandPaletteSettings({ showRecentCommands: event.target.checked })} /><span>显示最近命令</span></label>
+                  <label className="toggle-control"><input type="checkbox" checked={commandPaletteSettings.showRecentFiles} onChange={(event) => updateCommandPaletteSettings({ showRecentFiles: event.target.checked })} /><span>显示最近文件</span></label>
+                  <label className="toggle-control"><input type="checkbox" checked={commandPaletteSettings.showNodeResults} onChange={(event) => updateCommandPaletteSettings({ showNodeResults: event.target.checked })} /><span>显示节点搜索结果</span></label>
+                  <label className="toggle-control"><input type="checkbox" checked={commandPaletteSettings.showPluginCommands} onChange={(event) => updateCommandPaletteSettings({ showPluginCommands: event.target.checked })} /><span>显示插件命令</span></label>
+                  <label className="toggle-control"><input type="checkbox" checked={commandPaletteSettings.closeAfterExecute} onChange={(event) => updateCommandPaletteSettings({ closeAfterExecute: event.target.checked })} /><span>执行命令后自动关闭</span></label>
+                  <div className="settings-actions">
+                    <button type="button" className="secondary-action" onClick={openCommandPalette}>打开命令面板</button>
+                    <button type="button" className="ghost-action" onClick={() => updateCommandPaletteSettings({ recentCommands: [] })}>清空最近命令</button>
+                  </div>
+                </section>
+                <section className="settings-group">
                   <h3>插件设置</h3>
                   <button
                     type="button"
@@ -6050,7 +6679,7 @@ export function App() {
           onWheel={handleCanvasWheel}
           onContextMenu={handleCanvasContextMenu}
         >
-          {showCanvasGrid ? <div className="canvas-grid" aria-hidden="true" /> : null}
+          {showCanvasGrid ? <div className="canvas-grid" data-canvas-background="true" aria-hidden="true" /> : null}
           {shouldShowCanvasGuide ? (
             <aside className="canvas-guide" aria-label="画布新手引导">
               <span>双击节点编辑内容</span>
@@ -6058,6 +6687,7 @@ export function App() {
               <span>Enter 新建同级节点</span>
               <span>拖拽节点调整结构</span>
               <span>Ctrl+F 查找节点</span>
+              <span>Ctrl+K 打开命令面板</span>
               <button
                 type="button"
                 className="ghost-action"
@@ -6069,7 +6699,7 @@ export function App() {
           ) : null}
           <CanvasControls
             scale={canvasView.scale}
-            isFocusMode={isFocusMode}
+            isFocusMode={Boolean(focusedRootId)}
             onZoomIn={() =>
               setCanvasView((view) => zoomCanvasView(view, 'in'))
             }
@@ -6078,15 +6708,27 @@ export function App() {
             }
             onCenter={() => setCanvasView(centerCanvasView())}
             onAutoLayout={handleResetAutoLayout}
-            onExitFocusMode={() => setIsFocusMode(false)}
+            onExitFocusMode={handleExitBranchFocus}
           />
+          {focusedRootId ? (
+            <div className="focus-mode-banner" role="status">
+              正在聚焦：{mindmapIndex.nodeById.get(focusedRootId)?.text}
+              <span>{getFocusBreadcrumb(mindmapIndex, focusedRootId).map((node) => node.text).join(' / ')}</span>
+              <button type="button" onClick={handleExitBranchFocus}>退出聚焦</button>
+            </div>
+          ) : null}
+          {showMiniMap && mindmapIndex.flattenedNodeIds.length >= 100 ? (
+            <MiniMap layout={mindmapLayout} viewport={worldViewport} onNavigate={(worldX, worldY) => setCanvasView((view) => ({ ...view, offsetX: canvasViewport.width / 2 - worldX * view.scale, offsetY: canvasViewport.height / 2 - worldY * view.scale }))} />
+          ) : null}
           <div
             className="mindmap-pan-layer"
+            data-canvas-background="true"
             style={panLayerStyle}
             ref={panLayerRef}
           >
             <div
               className="mindmap-tree"
+              data-canvas-background="true"
               style={{
                 width: mindmapLayout.width,
                 height: mindmapLayout.height,
@@ -6095,22 +6737,24 @@ export function App() {
             >
               <svg
                 className="mindmap-lines"
+                data-canvas-background="true"
                 width={mindmapLayout.width}
                 height={mindmapLayout.height}
                 aria-hidden="true"
               >
-                {mindmapLayout.lines.map((line) => {
+                {renderedLayoutLines.map((line) => {
                   const middleX = (line.from.x + line.to.x) / 2;
 
                   return (
                     <path
                       key={line.id}
+                      data-canvas-edge="true"
                       d={`M ${line.from.x} ${line.from.y} C ${middleX} ${line.from.y}, ${middleX} ${line.to.y}, ${line.to.x} ${line.to.y}`}
                     />
                   );
                 })}
               </svg>
-              {mindmapLayout.nodes.map((layoutNode) => (
+              {renderedLayoutNodes.map((layoutNode) => (
                 <MindmapTree
                   key={layoutNode.id}
                   layoutNode={layoutNode}
@@ -6128,7 +6772,10 @@ export function App() {
                   onToggleCollapse={handleToggleCollapse}
                   onSelectNode={selectNode}
                   onStartEdit={handleStartEdit}
-                  onEditingTextChange={setEditingText}
+                  onEditingTextChange={handleEditingTextChange}
+                  onEditorRef={(element) => {
+                    nodeEditorRef.current = element;
+                  }}
                   onCommitEdit={handleCommitEdit}
                   onStartDrag={handleStartNodeDrag}
                   onOpenContextMenu={handleNodeContextMenu}
@@ -6438,6 +7085,9 @@ export function App() {
               </button>
             </header>
             <div className="shortcut-list">
+              <span>
+                <kbd>Ctrl</kbd> / <kbd>Meta</kbd> + <kbd>K</kbd>：打开命令面板
+              </span>
               <span>
                 <kbd>Ctrl</kbd> + <kbd>Z</kbd>：撤销
               </span>

@@ -3,6 +3,7 @@ import {
   getBoxSelectionGeometry,
   getSelectionRect,
   hitTestNodesInRect,
+  isCanvasBlankTarget,
   isCanvasInteractionBlockedTarget,
   mergeBoxSelection,
   screenToCanvasPoint,
@@ -273,5 +274,17 @@ describe('box selection helpers', () => {
     expect(isCanvasInteractionBlockedTarget({ closest: () => null })).toBe(
       false,
     );
+  });
+
+  it('recognizes only explicit canvas background layers as blank clicks', () => {
+    const canvas = {};
+    expect(isCanvasBlankTarget(canvas, canvas)).toBe(true);
+    expect(
+      isCanvasBlankTarget({ dataset: { canvasBackground: 'true' } }, canvas),
+    ).toBe(true);
+    expect(
+      isCanvasBlankTarget({ dataset: { canvasEdge: 'true' } }, canvas),
+    ).toBe(false);
+    expect(isCanvasBlankTarget({ dataset: {} }, canvas)).toBe(false);
   });
 });

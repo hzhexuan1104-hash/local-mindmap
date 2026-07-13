@@ -53,6 +53,10 @@ export const CANVAS_INTERACTION_BLOCK_SELECTOR = [
   '.plugin-manager-backdrop',
   '.mindmap-node',
   '.collapse-toggle',
+  '.mini-map',
+  '.canvas-controls',
+  '.focus-mode-banner',
+  '.mindmap-lines path',
 ].join(',');
 
 export function getSelectionRect(start: Point, end: Point): Rect {
@@ -235,4 +239,16 @@ export function isCanvasInteractionBlockedTarget(
   target: { closest: (selector: string) => unknown } | null,
 ) {
   return Boolean(target?.closest(CANVAS_INTERACTION_BLOCK_SELECTOR));
+}
+
+/** Only explicit canvas background layers may clear canvas selection. */
+export function isCanvasBlankTarget(
+  target: { dataset?: Record<string, string | undefined> } | null,
+  currentTarget: unknown,
+) {
+  if (target === currentTarget) {
+    return true;
+  }
+
+  return target?.dataset?.canvasBackground === 'true';
 }

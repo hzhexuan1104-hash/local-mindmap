@@ -132,38 +132,13 @@ export function TopMenuBar({
   };
 
   return (
-    <header className="top-menu-bar" aria-labelledby="app-title">
-      <div className="top-brand">
-        <span className="top-brand-mark" aria-hidden="true">
-          LM
-        </span>
-        <div className="top-brand-copy">
-          <strong id="app-title">本地思维导图工具</strong>
-          <span>Local Mindmap</span>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        className="top-document-title"
-        title={currentPath ?? currentTitle}
-        onClick={onOpenFileStatus}
+    <header className="top-menu-bar" aria-label="应用工具栏">
+      <nav
+        className="top-menu-nav topbar-left-menus topbar-non-shrink"
+        aria-label="顶部菜单"
+        data-testid="topbar-left-menus"
+        ref={menuBarRef}
       >
-        <span
-          className={[
-            'document-status-dot',
-            isDirty ? 'is-dirty' : '',
-            `is-${saveStatus}`,
-          ]
-            .filter(Boolean)
-            .join(' ')}
-          aria-hidden="true"
-        />
-        <strong>{currentTitle}</strong>
-        <span className="document-status-label">{saveStatusLabel}</span>
-      </button>
-
-      <nav className="top-menu-nav" aria-label="顶部菜单" ref={menuBarRef}>
         {menus.map((menu) => {
           const isOpen = activeMenuId === menu.id;
 
@@ -203,7 +178,29 @@ export function TopMenuBar({
         })}
       </nav>
 
-      <div className="top-menu-actions" aria-label="高频操作">
+      <div
+        className="topbar-document-status topbar-true-center"
+        data-testid="topbar-document-status"
+      >
+        <button
+          type="button"
+          className="top-document-title topbar-title-ellipsis"
+          title={currentPath ?? currentTitle}
+          onClick={onOpenFileStatus}
+        >
+          <span
+            className={[
+              'document-status-dot',
+              isDirty ? 'is-dirty' : '',
+              `is-${saveStatus}`,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            aria-hidden="true"
+          />
+          <strong>{currentTitle}</strong>
+          <span className="document-status-label">{saveStatusLabel}</span>
+        </button>
         {message ? (
           <span
             className={`top-status-message is-${messageKind}`}
@@ -213,6 +210,13 @@ export function TopMenuBar({
             {message}
           </span>
         ) : null}
+      </div>
+
+      <div
+        className="top-menu-actions topbar-right-actions topbar-non-shrink"
+        aria-label="高频操作"
+        data-testid="topbar-right-actions"
+      >
         <button type="button" className="icon-action" onClick={onUndo} title="撤销">
           ↶
           <span className="sr-only">撤销</span>
