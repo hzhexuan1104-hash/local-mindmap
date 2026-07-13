@@ -1,10 +1,10 @@
 import type { MindmapNode, MindmapNodeType } from './types';
 import {
   formatPerformanceResultAsMarkdown,
-  generateLargeMindmap,
   runPerformanceBenchmarks,
   type PerformanceBenchmarkResult,
 } from './performanceTest';
+import { generateLargeMindmap } from './largeMapGenerator';
 
 type PerformancePanelProps = {
   rootNode: MindmapNode;
@@ -31,13 +31,25 @@ export function PerformancePanel({
   onMessage,
 }: PerformancePanelProps) {
   const generateAndLoad = (nodeCount: number) => {
-    const generated = generateLargeMindmap(nodeCount);
+    if (!window.confirm(`加载 ${nodeCount} 节点测试导图会替换当前画布；请先保存未保存的内容。是否继续？`)) {
+      return;
+    }
+    const startedAt = typeof performance === 'undefined' ? Date.now() : performance.now();
+    const generated = generateLargeMindmap({
+      nodeCount,
+      maxDepth: 20,
+      maxChildren: nodeCount >= 1000 ? 8 : 6,
+      includeRemarks: true,
+      includeCustomStyles: true,
+      seed: 1160,
+    });
+    const generateDurationMs = (typeof performance === 'undefined' ? Date.now() : performance.now()) - startedAt;
     const benchmark = runPerformanceBenchmarks(
       generated.rootNode,
       nodeTypes,
       themeId,
       canExportTxt,
-      generated.generateDurationMs,
+      generateDurationMs,
     );
     onGenerate(generated.rootNode, benchmark);
   };
@@ -76,7 +88,7 @@ export function PerformancePanel({
         <span className="panel-note">纯本地生成</span>
       </div>
       <div className="compact-form">
-        {[100, 500, 1000].map((nodeCount) => (
+        {[100, 500, 1000, 3000].map((nodeCount) => (
           <button
             key={nodeCount}
             type="button"
@@ -110,4 +122,3 @@ export function PerformancePanel({
     </section>
   );
 }
-

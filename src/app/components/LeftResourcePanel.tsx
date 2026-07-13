@@ -4,6 +4,7 @@ export type ResourceView =
   | 'templates'
   | 'node-types'
   | 'search'
+  | 'outline'
   | 'plugins'
   | 'settings'
   | 'performance';
@@ -41,6 +42,13 @@ const resourceItems: Array<{
     icon: '⌕',
     label: '查找',
     tooltip: '查找：搜索和替换节点标题、备注',
+    group: '工具',
+  },
+  {
+    id: 'outline',
+    icon: '☷',
+    label: '大纲',
+    tooltip: '大纲：快速浏览、搜索和定位节点',
     group: '工具',
   },
   {

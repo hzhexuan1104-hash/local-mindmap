@@ -50,6 +50,7 @@ export const USER_DATA_PATHS = {
   pluginDev: 'plugins/dev',
   appSettings: 'config/app-settings.json',
   fileReliabilitySettings: 'config/file-reliability-settings.json',
+  commandPaletteSettings: 'config/command-palette-settings.json',
   recentFiles: 'config/recent-files.json',
   userPreferences: 'config/user-preferences.json',
   migrationFlag: 'config/migration-state.json',

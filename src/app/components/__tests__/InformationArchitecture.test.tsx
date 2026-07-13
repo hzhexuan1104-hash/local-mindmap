@@ -56,16 +56,17 @@ describe('v1.13 information architecture components', () => {
     expect(html).not.toContain('<span>资源</span><h2>模板库</h2>');
   });
 
-  it('keeps import and export under File and exposes separate find and replace', () => {
+  it('splits the top bar into left menus, truly centered document status, and right actions', () => {
     const menus: TopMenuGroup[] = [
       {
         id: 'file',
         label: '文件',
-        items: [
-          { label: '导入', children: [{ label: '导入 Markdown' }] },
-          { label: '导出', children: [{ label: '导出 Markdown' }] },
-        ],
+        items: [{ label: '新建' }],
       },
+      { id: 'edit', label: '编辑', items: [{ label: '复制' }] },
+      { id: 'insert', label: '插入', items: [{ label: '子节点' }] },
+      { id: 'view', label: '视图', items: [{ label: '居中' }] },
+      { id: 'plugin', label: '插件', items: [{ label: '插件管理' }] },
       {
         id: 'help',
         label: '帮助',
@@ -79,23 +80,58 @@ describe('v1.13 information architecture components', () => {
     ];
     const html = renderToStaticMarkup(
       <TopMenuBar
-        currentTitle="未命名导图 · 未保存"
+        currentTitle="竞赛方案 · 未保存"
         menus={menus}
         isDirty
+        saveStatus="draft"
+        saveStatusLabel="草稿"
         onUndo={noop}
         onRedo={noop}
         onQuickSave={noop}
       />,
     );
 
-    expect(html).toContain('本地思维导图工具');
-    expect(html).toContain('文件');
-    expect(html).toContain('导入 / 导出');
-    expect(html).toContain('帮助');
-    expect(html).toContain('快捷键 / 使用指南 / 插件开发文档 / 关于 Local Mindmap');
-    expect(html).not.toContain('导入导出');
-    expect(html).not.toContain('更多');
-    expect(html).toContain('document-status-dot is-dirty');
+    const leftMenus = html.match(
+      /<nav[^>]*data-testid="topbar-left-menus"[^>]*>([\s\S]*?)<\/nav>/,
+    )?.[1] ?? '';
+    const documentStatus = html.match(
+      /<div[^>]*data-testid="topbar-document-status"[^>]*>([\s\S]*?)<\/div>/,
+    )?.[1] ?? '';
+    const rightActions = html.match(
+      /<div[^>]*data-testid="topbar-right-actions"[^>]*>([\s\S]*?)<\/div>/,
+    )?.[1] ?? '';
+
+    expect(leftMenus).toBeTruthy();
+    expect(documentStatus).toBeTruthy();
+    expect(rightActions).toBeTruthy();
+    const menuPositions = ['文件', '编辑', '插入', '视图', '插件', '帮助'].map(
+      (label) => leftMenus.indexOf(label),
+    );
+    expect(menuPositions.every((position) => position >= 0)).toBe(true);
+    expect(menuPositions).toEqual([...menuPositions].sort((left, right) => left - right));
+    for (const label of ['文件', '编辑', '插入', '视图', '插件', '帮助']) {
+      expect(leftMenus).toContain(label);
+      expect(rightActions).not.toContain(label);
+    }
+    expect(documentStatus).toContain('竞赛方案 · 未保存');
+    expect(documentStatus).toContain('草稿');
+    expect(rightActions).toContain('撤销');
+    expect(rightActions).toContain('重做');
+    expect(rightActions).toContain('保存');
+
+    expect(html).toContain('topbar-left-menus topbar-non-shrink');
+    expect(html).toContain('topbar-document-status topbar-true-center');
+    expect(html).toContain('top-document-title topbar-title-ellipsis');
+    expect(html).toContain('top-menu-actions topbar-right-actions topbar-non-shrink');
+    expect(html).not.toContain('本地思维导图工具');
+    expect(html).not.toContain('本地化思维导图工具');
+    expect(html).not.toContain('top-brand');
+    expect(html).not.toContain('top-menu-spacer');
+    expect(html).not.toContain('top-menu-right');
+    expect(documentStatus).not.toContain('Local Mindmap');
+    expect(html).not.toContain('>Local Mindmap</');
+    expect(html).toContain('关于 Local Mindmap');
+    expect(html).toContain('document-status-dot is-dirty is-draft');
   });
 
   it('renders current node style editing without renaming global node type management', () => {

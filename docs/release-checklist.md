@@ -1,6 +1,18 @@
-# v1.4.0 Release 发布检查清单
+# Release 发布检查清单
 
-更新日期：2026-06-26
+更新日期：2026-07-13
+
+## v1.17.0 增量检查
+
+- [ ] 当前分支为 `v1.17-command-palette`，五处版本号均为 `1.17.0`。
+- [ ] Ctrl/Meta+K、Ctrl/Meta+Shift+P、帮助菜单入口均可打开命令面板。
+- [ ] `>`、`@`、`#`、`:` 过滤与中文、英文、多关键词搜索正确。
+- [ ] 节点编辑时打开/关闭面板不丢内容、不重复提交，Tab/Enter 不触发画布新增。
+- [ ] 最近命令文件不包含查询、节点正文、备注或绝对路径。
+- [ ] Script / Workflow / external 命令不绕过 runner、trusted、permission 与 action 校验。
+- [ ] `npm run build`、`npm run test`、Rust 测试、性能脚本及 `npm run tauri:dev` 启动检查通过。
+
+以下 v1.4 内容保留为桌面发布基础回归清单。
 
 ## 1. 发布前检查
 
