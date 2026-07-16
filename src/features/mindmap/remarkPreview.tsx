@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { MarkdownPreview } from './MarkdownPreview';
 
 type RemarkPreviewDialogProps = {
@@ -11,6 +12,21 @@ export function RemarkPreviewDialog({
   content,
   onClose,
 }: RemarkPreviewDialogProps) {
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [onClose]);
+
   return (
     <div className="remark-preview-backdrop" role="presentation">
       <section

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCommittedNodeText } from '../nodeEditing';
+import { resolveCommittedNodeText, resolveEditingNodeId } from '../nodeEditing';
 
 describe('node editing commit rules', () => {
   it('keeps the existing empty-text fallback when an edit is committed', () => {
@@ -13,5 +13,12 @@ describe('node editing commit rules', () => {
 
   it('normalizes text once before a history entry is recorded', () => {
     expect(resolveCommittedNodeText('  已修改  ')).toBe('已修改');
+  });
+
+  it('keeps a shortcut-created node editable when its blur session has not started', () => {
+    expect(resolveEditingNodeId(null, 'shortcut-child')).toBe('shortcut-child');
+    expect(resolveEditingNodeId('double-clicked-node', 'shortcut-child')).toBe(
+      'double-clicked-node',
+    );
   });
 });

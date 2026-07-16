@@ -1,5 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { preserveStandaloneTripleAsterisks } from './remarkMarkdown';
 
 type MarkdownPreviewProps = {
   content: string;
@@ -12,7 +13,9 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
 
   return (
     <div className="markdown-preview">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {preserveStandaloneTripleAsterisks(content)}
+      </ReactMarkdown>
     </div>
   );
 }

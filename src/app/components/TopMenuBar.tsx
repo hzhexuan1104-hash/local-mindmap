@@ -18,6 +18,8 @@ type TopMenuBarProps = {
 
 const itemKey = (path: string[]) => path.join('/');
 const itemAction = (item: TopMenuItem) => item.execute ?? item.onSelect;
+export const getMenuHoverPath = (path: string[], hasChildren: boolean) =>
+  hasChildren ? path : path.slice(0, -1);
 
 export function TopMenuBar({
   currentTitle, currentPath, menus, message, messageKind = 'info', isDirty,
@@ -101,12 +103,12 @@ export function TopMenuBar({
     const key = itemKey(path);
     const isOpen = hasChildren && openPath.slice(0, path.length).join('/') === key;
     return (
-      <div className={`top-menu-submenu ${item.separatorBefore || item.dividerBefore ? 'has-divider' : ''} ${isOpen ? 'is-open' : ''}`} data-menu-row key={key} onMouseEnter={() => { clearCloseTimer(); if (hasChildren) setOpenPath(path); }} onMouseLeave={closeLater}>
+      <div className={`top-menu-submenu ${item.separatorBefore || item.dividerBefore ? 'has-divider' : ''} ${isOpen ? 'is-open' : ''}`} data-menu-row key={key} onMouseEnter={() => { clearCloseTimer(); setOpenPath(getMenuHoverPath(path, hasChildren)); }} onMouseLeave={closeLater}>
         <button type="button" role="menuitem" aria-haspopup={hasChildren ? 'menu' : undefined} aria-expanded={hasChildren ? isOpen : undefined} disabled={item.disabled} title={item.disabledReason ?? item.label} data-menu-item-id={key} className={item.danger ? 'is-danger' : undefined} onClick={() => handleItem(item, path)} onKeyDown={(event) => onItemKeyDown(event, item, path)}>
           <span className="top-menu-item-label">{item.checked ? <span className="menu-check">✓</span> : <span className="menu-check" />}{item.label}</span>
           <span className="top-menu-item-meta">{item.shortcut ? <kbd>{item.shortcut}</kbd> : null}{hasChildren ? <span aria-hidden="true">›</span> : null}</span>
         </button>
-        {hasChildren && isOpen ? <div className={`top-menu-submenu-popover ${flipped[key] ? `is-flipped-${flipped[key]}` : ''}`} data-submenu-popover={key} role="menu" onMouseEnter={clearCloseTimer} onMouseLeave={closeLater}>{item.children!.map((child) => renderItem(child, [...path, child.id], depth + 1))}</div> : null}
+        {hasChildren && isOpen ? <div className={`top-menu-submenu-popover menu-depth-${depth} ${flipped[key] ? `is-flipped-${flipped[key]}` : ''}`} data-submenu-popover={key} role="menu" onMouseEnter={clearCloseTimer} onMouseLeave={closeLater}>{item.children!.map((child) => renderItem(child, [...path, child.id], depth + 1))}</div> : null}
       </div>
     );
   };

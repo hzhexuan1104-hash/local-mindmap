@@ -528,6 +528,29 @@ export function PluginManagerPanel({
     useState<'' | PluginDiagnosticCategory>('');
   const [diagnosticKeyword, setDiagnosticKeyword] = useState('');
 
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (showPluginLogs) {
+        setShowPluginLogs(false);
+        return;
+      }
+      if (showApiDocs) {
+        setShowApiDocs(false);
+        return;
+      }
+      onClose();
+    };
+
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [onClose, showApiDocs, showPluginLogs]);
+
   const refreshGallery = async () => {
     setGalleryLoading(true);
     try {

@@ -118,6 +118,8 @@ export function RightInspectorPanel({
 }: RightInspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>('style');
   const [nodeTypeName, setNodeTypeName] = useState('');
+  const [dismissedVirtualRemarkTemplateNodeIds, setDismissedVirtualRemarkTemplateNodeIds] =
+    useState<Set<string>>(() => new Set());
   const selectedNodeType =
     nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
   const effectiveStyle = getEffectiveNodeStyle(selectedNode, selectedNodeType);
@@ -282,6 +284,16 @@ export function RightInspectorPanel({
             onModeChange={onRemarkModeChange}
             onRemarkChange={onRemarkChange}
             activeMatch={activeRemarkMatch}
+            isVirtualTemplateDismissed={dismissedVirtualRemarkTemplateNodeIds.has(
+              selectedNode.id,
+            )}
+            onDismissVirtualTemplate={() =>
+              setDismissedVirtualRemarkTemplateNodeIds((current) => {
+                const next = new Set(current);
+                next.add(selectedNode.id);
+                return next;
+              })
+            }
             embedded
           />
         ) : null}

@@ -102,6 +102,7 @@ import {
   type MindmapLayoutNode,
 } from '../features/mindmap/layout';
 import { getKeyboardShortcutAction } from '../features/mindmap/keyboardShortcuts';
+import { getEscapeNavigationAction } from '../features/mindmap/escapeNavigation';
 import {
   createEmptyNodeTypeDraft,
   createMindmapNodeType,
@@ -121,7 +122,10 @@ import {
   mergeNodeStyle,
 } from '../features/mindmap/nodeStyles';
 import { updateNodePositionById } from '../features/mindmap/nodePositions';
-import { resolveCommittedNodeText } from '../features/mindmap/nodeEditing';
+import {
+  resolveCommittedNodeText,
+  resolveEditingNodeId,
+} from '../features/mindmap/nodeEditing';
 import {
   createNodeTypePack,
   exportNodeTypesToPack,
@@ -1386,7 +1390,16 @@ export function App() {
       }
 
       const action = getKeyboardShortcutAction(event, {
-        hasModalOpen: Boolean(excelImportPreview || isPluginManagerVisible || isShortcutHelpVisible || isCommandPaletteOpen),
+        hasModalOpen: Boolean(
+          excelImportPreview ||
+            isPluginManagerVisible ||
+            isShortcutHelpVisible ||
+            isCommandPaletteOpen ||
+            isRecoveryCenterVisible ||
+            isVersionHistoryVisible ||
+            isFileStatusVisible ||
+            activeWorkspacePanel,
+        ),
         hasContextMenuOpen: Boolean(contextMenu),
         isBoxSelecting: Boolean(boxSelection),
         hasSelection: selectedNodeIds.length > 0,
@@ -1582,49 +1595,67 @@ export function App() {
   };
 
   const handleEscapeShortcut = () => {
-    if (isCommandPaletteOpen) {
-      closeCommandPalette();
-      return;
-    }
+    const action = getEscapeNavigationAction({
+      isCommandPaletteOpen,
+      hasExcelImportPreview: Boolean(excelImportPreview),
+      isPluginManagerVisible,
+      isShortcutHelpVisible,
+      hasVersionPreview: Boolean(versionPreview),
+      isVersionHistoryVisible,
+      isRecoveryCenterVisible,
+      isFileStatusVisible,
+      hasContextMenu: Boolean(contextMenu),
+      isBoxSelecting: Boolean(boxSelection),
+      isDragging: Boolean(dragStateRef.current),
+      hasWorkspacePanel: Boolean(activeWorkspacePanel),
+      hasSelection: selectedNodeIds.length > 0,
+    });
 
-    if (excelImportPreview) {
-      setExcelImportPreview(null);
-      return;
+    switch (action) {
+      case 'close-command-palette':
+        closeCommandPalette();
+        return;
+      case 'close-excel-import':
+        setExcelImportPreview(null);
+        return;
+      case 'close-plugin-manager':
+        setIsPluginManagerVisible(false);
+        return;
+      case 'close-shortcut-help':
+        setIsShortcutHelpVisible(false);
+        return;
+      case 'clear-version-preview':
+        setVersionPreview(null);
+        return;
+      case 'close-version-history':
+        setIsVersionHistoryVisible(false);
+        return;
+      case 'close-recovery-center':
+        setIsRecoveryCenterVisible(false);
+        return;
+      case 'close-file-status':
+        setIsFileStatusVisible(false);
+        return;
+      case 'close-context-menu':
+        setContextMenu(null);
+        return;
+      case 'cancel-box-selection':
+        cancelBoxSelection();
+        return;
+      case 'cancel-drag':
+        dragStateRef.current = null;
+        setDraggingNodeId(null);
+        setDropTargetNodeId(null);
+        return;
+      case 'close-workspace-panel':
+        setActiveWorkspacePanel(null);
+        return;
+      case 'clear-selection':
+        clearSelection();
+        return;
+      default:
+        return;
     }
-
-    if (isPluginManagerVisible) {
-      setIsPluginManagerVisible(false);
-      return;
-    }
-
-    if (isShortcutHelpVisible) {
-      setIsShortcutHelpVisible(false);
-      return;
-    }
-
-    if (contextMenu) {
-      setContextMenu(null);
-      return;
-    }
-
-    if (boxSelection) {
-      cancelBoxSelection();
-      return;
-    }
-
-    if (dragStateRef.current) {
-      dragStateRef.current = null;
-      setDraggingNodeId(null);
-      setDropTargetNodeId(null);
-      return;
-    }
-
-    if (activeWorkspacePanel) {
-      setActiveWorkspacePanel(null);
-      return;
-    }
-
-    clearSelection();
   };
 
   const applyProject = (
@@ -3281,11 +3312,16 @@ export function App() {
     result: TypedNodeCreationResult,
     options: { startEditing?: boolean } = {},
   ) => {
+    const shouldStartEditing = Boolean(options.startEditing);
     setMindmap(result.rootNode);
     setSelectedNodeId(result.selectedNodeId);
     setSelectedNodeIds(result.selectedNodeIds);
-    setEditingNodeId(options.startEditing ? result.createdNode.id : null);
-    setEditingText(options.startEditing ? result.createdNode.text : '');
+    editingSessionRef.current = shouldStartEditing
+      ? { nodeId: result.createdNode.id }
+      : null;
+    editingTextRef.current = shouldStartEditing ? result.createdNode.text : '';
+    setEditingNodeId(shouldStartEditing ? result.createdNode.id : null);
+    setEditingText(shouldStartEditing ? result.createdNode.text : '');
   };
 
   const handleAddChild = (
@@ -3327,7 +3363,7 @@ export function App() {
     }
 
     if (selectedNodeId === mindmap.id) {
-      showMessage('中心主题不能新建同级节点，请使用 Tab 新建子节点');
+      showMessage('中心主题不能新建同级节点，请使用 Insert 新建子节点');
       return;
     }
 
@@ -3577,19 +3613,18 @@ export function App() {
 
   const finishEditing = (blurEditor = false) => {
     const session = editingSessionRef.current;
-    if (!session) {
-      return;
-    }
+    const nodeId = resolveEditingNodeId(session?.nodeId ?? null, editingNodeId);
 
     // Clear the session first: canvas pointerup and textarea blur can occur in either order.
     editingSessionRef.current = null;
-    const nextText = resolveCommittedNodeText(editingTextRef.current);
-    const currentNode = findNodeById(mindmap, session.nodeId);
+    const draft = session ? editingTextRef.current : editingText;
+    const nextText = resolveCommittedNodeText(draft);
+    const currentNode = nodeId ? findNodeById(mindmap, nodeId) : null;
 
-    if (currentNode && currentNode.text !== nextText) {
+    if (nodeId && currentNode && currentNode.text !== nextText) {
       recordHistory();
       setMindmap((currentMindmap) =>
-        updateNodeById(currentMindmap, session.nodeId, (node) => ({
+        updateNodeById(currentMindmap, nodeId, (node) => ({
           ...node,
           text: nextText,
         })),
@@ -4124,6 +4159,12 @@ export function App() {
       event.target as HTMLElement | null,
       event.currentTarget,
     );
+
+    // Commit before a blank-canvas pan or box selection begins. This avoids
+    // leaving the node in an editing state when a textarea blur is delayed.
+    if (startedOnBlank && editingNodeId) {
+      finishEditing(true);
+    }
 
     const canvasElement = event.currentTarget;
     const canvasViewportRect = canvasElement.getBoundingClientRect();
@@ -5719,8 +5760,11 @@ export function App() {
     ] },
     { id: 'node', label: '节点', items: [
       { id: 'new', label: '新建', children: [
-        { id: 'child', label: '新建子节点', shortcut: 'Tab', execute: () => handleAddChild(childNodeTypeId) },
-        { id: 'sibling', label: '新建同级节点', shortcut: 'Enter', disabled: !selectedNodeId || selectedNodeId === mindmap.id, execute: () => handleAddSibling(childNodeTypeId) },
+        { id: 'child', label: '新建子节点', shortcut: 'Insert', children: [
+          { id: 'normal', label: '普通节点', execute: () => handleAddChild('') },
+          ...availableNodeTypes.map((nodeType) => ({ id: `type-${nodeType.id}`, label: nodeType.name, execute: () => handleAddChild(nodeType.id) })),
+        ] },
+        { id: 'sibling', label: '新建同级节点', shortcut: 'Enter', disabled: !selectedNodeId || selectedNodeId === mindmap.id, execute: () => handleAddSibling(siblingNodeTypeId) },
       ] },
       { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: () => setIsRemarkPanelCollapsed(false) }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId, execute: handleDeleteNode }] },
       { id: 'structure', label: '结构', children: [{ id: 'collapse', label: '折叠当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'expand', label: '展开当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'focus', label: '聚焦当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleFocusBranch(selectedNodeId); } }, { id: 'exit-focus', label: '退出分支聚焦', disabled: !focusedRootId, execute: handleExitBranchFocus }] },
@@ -6474,7 +6518,7 @@ export function App() {
           {shouldShowCanvasGuide ? (
             <aside className="canvas-guide" aria-label="画布新手引导">
               <span>双击节点编辑内容</span>
-              <span>Tab 新建子节点</span>
+              <span>Insert 新建子节点</span>
               <span>Enter 新建同级节点</span>
               <span>拖拽节点调整结构</span>
               <span>Ctrl+F 查找节点</span>
@@ -6895,6 +6939,12 @@ export function App() {
               </span>
               <span>
                 <kbd>Ctrl</kbd> + <kbd>O</kbd>：打开 .lmind
+              </span>
+              <span>
+                <kbd>Insert</kbd>：新建子节点
+              </span>
+              <span>
+                <kbd>Enter</kbd>：新建同级节点
               </span>
               <span>
                 <kbd>Delete</kbd>：删除选中节点

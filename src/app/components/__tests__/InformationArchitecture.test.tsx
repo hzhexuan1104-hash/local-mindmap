@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { WorkspacePanelHost } from '../WorkspacePanelHost';
 import { RightInspectorPanel, normalizeHexColorInput } from '../RightInspectorPanel';
-import { TopMenuBar, type TopMenuGroup } from '../TopMenuBar';
+import { getMenuHoverPath, TopMenuBar, type TopMenuGroup } from '../TopMenuBar';
 import type { MindmapNode, MindmapNodeType } from '../../../features/mindmap/types';
 
 const noop = () => undefined;
@@ -41,6 +41,11 @@ describe('v1.18 information architecture components', () => {
     const html = renderToStaticMarkup(<TopMenuBar currentTitle="Document" menus={[{ id: 'file', label: 'File', items: [{ id: 'open', label: 'Open', children: [{ id: 'recent', label: 'Recent files', children: [{ id: 'entry', label: 'Example', shortcut: 'Ctrl+O', checked: true, execute: noop }] }] }] }]} isDirty={false} />);
     expect(html).toContain('data-menu-item-id="file"');
     expect(html).toContain('aria-haspopup="menu"');
+  });
+
+  it('closes an open sibling submenu when hovering a leaf action', () => {
+    expect(getMenuHoverPath(['file', 'location'], true)).toEqual(['file', 'location']);
+    expect(getMenuHoverPath(['file', 'settings'], false)).toEqual(['file']);
   });
 
   it('limits the inspector to visual style and remark tabs', () => {

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { MarkdownPreview } from './MarkdownPreview';
 import { RemarkPreviewDialog } from './remarkPreview';
+import {
+  getRemarkEditorValue,
+  shouldPersistRemarkEditorValue,
+  shouldShowVirtualRemarkTemplate,
+} from './remarkTemplate';
 import type { SearchMatch } from './searchReplace';
 import type { MindmapNode } from './types';
 
@@ -14,6 +19,8 @@ type RemarkPanelProps = {
   onCollapse?: () => void;
   embedded?: boolean;
   activeMatch?: SearchMatch | null;
+  isVirtualTemplateDismissed?: boolean;
+  onDismissVirtualTemplate?: () => void;
 };
 
 export function RemarkPanel({
@@ -24,6 +31,8 @@ export function RemarkPanel({
   onCollapse,
   embedded = false,
   activeMatch = null,
+  isVirtualTemplateDismissed = false,
+  onDismissVirtualTemplate,
 }: RemarkPanelProps) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -37,6 +46,14 @@ export function RemarkPanel({
   const contextEnd = remarkMatch
     ? Math.min(selectedNode.remark.length, remarkMatch.end + 24)
     : 0;
+  const isVirtualTemplateVisible = shouldShowVirtualRemarkTemplate(
+    selectedNode.remark,
+    isVirtualTemplateDismissed,
+  );
+  const editorValue = getRemarkEditorValue(
+    selectedNode.remark,
+    isVirtualTemplateVisible,
+  );
 
   useEffect(() => {
     if (!remarkMatch || mode !== 'edit') {
@@ -123,15 +140,33 @@ export function RemarkPanel({
             ) : null}
             <textarea
               ref={editorRef}
-              className="remark-editor"
-              value={selectedNode.remark}
-              onChange={(event) => onRemarkChange(event.target.value)}
+              className={
+                isVirtualTemplateVisible
+                  ? 'remark-editor is-virtual-template'
+                  : 'remark-editor'
+              }
+              value={editorValue}
+              onChange={(event) => {
+                const nextRemark = event.target.value;
+                if (isVirtualTemplateVisible) {
+                  onDismissVirtualTemplate?.();
+                }
+                if (
+                  shouldPersistRemarkEditorValue(
+                    nextRemark,
+                    isVirtualTemplateVisible,
+                  )
+                ) {
+                  onRemarkChange(nextRemark);
+                }
+              }}
               aria-label={`${selectedNode.text} 的 Markdown 备注`}
+              title={
+                isVirtualTemplateVisible
+                  ? '示例内容不会保存；修改或删除后才会写入备注。'
+                  : undefined
+              }
             />
-            <div className="remark-live-preview">
-              <div className="remark-live-preview-title">实时预览</div>
-              <MarkdownPreview content={selectedNode.remark} />
-            </div>
           </div>
         ) : (
           <MarkdownPreview content={selectedNode.remark} />
