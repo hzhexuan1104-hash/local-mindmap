@@ -774,7 +774,8 @@ export function App() {
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
   const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
   const [isExternalRunnerEnabled, setIsExternalRunnerEnabled] = useState(false);
-  const [pythonPath, setPythonPath] = useState('python');
+  const [pythonPath, setPythonPath] = useState('auto');
+  const [pythonRuntimeLabel, setPythonRuntimeLabel] = useState<string | null>(null);
   const [scriptRunResults, setScriptRunResults] = useState<
     Record<string, PluginRunRecord>
   >({});
@@ -2690,7 +2691,7 @@ export function App() {
   };
 
   const handleSavePythonPath = async (nextPythonPath: string) => {
-    const normalizedPath = nextPythonPath.trim() || 'python';
+    const normalizedPath = nextPythonPath.trim() || 'auto';
     try {
       await savePluginSettings({
         scriptRunnerEnabled: isScriptRunnerEnabled,
@@ -2698,6 +2699,7 @@ export function App() {
         pythonPath: normalizedPath,
       });
       setPythonPath(normalizedPath);
+      setPythonRuntimeLabel(null);
       recordPluginLog(
         'info',
         'python-path-saved',
@@ -2721,9 +2723,10 @@ export function App() {
       recordPluginLog(
         'info',
         'python-test-succeeded',
-        `python test succeeded: ${result.version ?? 'unknown'}`,
+        `python test succeeded: ${result.command ?? candidatePath} ${result.version ?? 'unknown'}`,
       );
-      showMessage(`Python 可用：${result.version ?? '版本未知'}`);
+      setPythonRuntimeLabel(`${result.command ?? candidatePath} · ${result.version ?? '版本未知'}`);
+      showMessage(`Python 可用：${result.command ?? candidatePath} · ${result.version ?? '版本未知'}`);
     } catch (error) {
       const reason = getErrorMessage(error, 'Python 测试失败。');
       recordPluginLog('error', 'python-test-failed', reason);
@@ -6852,6 +6855,7 @@ export function App() {
             void handleExternalRunnerEnabledChange(enabled)
           }
           pythonPath={pythonPath}
+          pythonRuntimeLabel={pythonRuntimeLabel ?? undefined}
           onSavePythonPath={(path) => void handleSavePythonPath(path)}
           onTestPython={(path) => void handleTestPython(path)}
           externalRunResults={externalRunResults}

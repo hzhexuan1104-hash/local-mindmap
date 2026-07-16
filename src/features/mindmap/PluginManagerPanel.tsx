@@ -101,6 +101,7 @@ type PluginManagerPanelProps = {
   isExternalRunnerEnabled?: boolean;
   onExternalRunnerEnabledChange?: (enabled: boolean) => void;
   pythonPath?: string;
+  pythonRuntimeLabel?: string;
   onSavePythonPath?: (pythonPath: string) => void;
   onTestPython?: (pythonPath: string) => void;
   externalRunResults?: Record<string, PluginRunInfo>;
@@ -486,7 +487,8 @@ export function PluginManagerPanel({
   workflowRunResults = {},
   isExternalRunnerEnabled = false,
   onExternalRunnerEnabledChange,
-  pythonPath = 'python',
+  pythonPath = 'auto',
+  pythonRuntimeLabel,
   onSavePythonPath,
   onTestPython,
   externalRunResults = {},
@@ -936,7 +938,7 @@ export function PluginManagerPanel({
                 <input
                   type="text"
                   value={pythonPathDraft}
-                  placeholder="python 或 Python 可执行文件绝对路径"
+                  placeholder="auto（自动检测）或受控 Python 路径"
                   onChange={(event) => setPythonPathDraft(event.target.value)}
                 />
               </label>
@@ -956,6 +958,9 @@ export function PluginManagerPanel({
                   测试 Python
                 </button>
               </div>
+              {pythonRuntimeLabel ? (
+                <p className="plugin-safety-note">已检测解释器：{pythonRuntimeLabel}</p>
+              ) : null}
               {!isDesktopApp ? (
                 <p className="plugin-web-warning">
                   不支持在 Web 端打开本地目录。

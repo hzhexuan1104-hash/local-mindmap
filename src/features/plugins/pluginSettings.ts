@@ -13,7 +13,7 @@ export type PluginSettings = {
 export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   scriptRunnerEnabled: false,
   externalRunnerEnabled: false,
-  pythonPath: 'python',
+  pythonPath: 'auto',
 };
 
 export function normalizePluginSettings(value: unknown): PluginSettings {
