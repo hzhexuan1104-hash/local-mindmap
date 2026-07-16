@@ -1,8 +1,16 @@
 # 项目状态
 
-更新：2026-07-13
+更新：2026-07-16
 
-当前阶段：v1.18.0 顶部菜单整合与属性面板精简
+当前阶段：v1.19.0 跨平台构建与 GitHub Draft Release 流水线
+
+## v1.19.0 跨平台发布 MVP
+
+- 已新增 Windows x64、macOS ARM64/x64、UOS x64/ARM64 的原生构建矩阵与独立 Actions Artifact。
+- tag 发布必须通过版本、tag/commit、图标、前端/Rust/性能测试及全部构建产物验证，再统一创建 Draft Release。
+- UOS 产物以 Ubuntu 22.04 构建并标记为 `candidate`，仍待真实 x64/ARM64 设备验收。
+- macOS 正式发布需 Developer ID 签名与公证；手工预览包带 `_preview`，不会进入正式 Draft Release。
+- Python 插件新增跨平台自动解释器候选；executable 插件新增 Windows `.exe` 与 Unix 原生二进制/执行权限校验。
 
 ## v1.18.0 顶部菜单整合与属性面板精简
 

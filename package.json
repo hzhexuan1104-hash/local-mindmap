@@ -1,6 +1,6 @@
 {
   "name": "local-mindmap",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:release-ci": "vitest run scripts/ci/__tests__",
     "perf:mindmap": "vitest run src/features/mindmap/__tests__/performanceBenchmark.test.ts --silent=false",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

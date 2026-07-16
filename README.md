@@ -1,6 +1,6 @@
 # 本地化思维导图工具
 
-一个纯本地运行的思维导图工具，使用 React + TypeScript + Vite + Tauri 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前阶段：v1.18.0 顶部菜单整合与属性面板精简。
+一个纯本地运行的思维导图工具，使用 React + TypeScript + Vite + Tauri 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前阶段：v1.19.0 跨平台构建与 Draft Release 流水线。
 
 ## v1.18.0：顶部菜单整合
 
@@ -11,6 +11,12 @@
 ## 在线预览
 
 [GitHub Pages 在线预览](https://hzhexuan1104-hash.github.io/local-mindmap/)
+
+## 桌面版下载
+
+正式版本从 GitHub Draft Release 人工验收后发布。下载时请根据平台和架构选择：Windows x64（EXE 或 MSI）、macOS ARM64、macOS x64、UOS x64（DEB/AppImage）或 UOS ARM64（DEB/AppImage）。Windows 普通用户建议 EXE；UOS 的 DEB 用于安装，AppImage 用于免安装运行。
+
+UOS 包由 Ubuntu 22.04 兼容基线构建；在真实 UOS 设备验收前仅是兼容候选，不代表统信官方认证。每个 Release 都包含 `SHA256SUMS.txt` 和 `release-manifest.json`，详细流程见 [跨平台发布文档](docs/release/cross-platform-release.md)。
 
 ## 已实现功能
 
@@ -233,6 +239,10 @@ docs/release-notes-v1.2.0-draft.md
 docs/release-notes-v1.3.0-draft.md
 docs/release-notes-v1.4.0-draft.md
 docs/share-packs.md
+docs/release/cross-platform-release.md
+docs/release/release-checklist.md
+docs/release/uos-compatibility.md
+docs/release/macos-signing.md
 ```
 
 ## 验收测试

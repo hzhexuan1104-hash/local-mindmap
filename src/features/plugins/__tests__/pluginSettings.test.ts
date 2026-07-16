@@ -39,7 +39,7 @@ describe('plugin runner settings', () => {
     await expect(loadPluginSettings()).resolves.toEqual({
       scriptRunnerEnabled: false,
       externalRunnerEnabled: false,
-      pythonPath: 'python',
+      pythonPath: 'auto',
     });
     await savePluginSettings({
       scriptRunnerEnabled: true,

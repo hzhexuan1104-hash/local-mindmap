@@ -1006,13 +1006,68 @@ fn validate_external_entry_path(entry: &str, runtime: &str) -> Result<(), String
         return Err("runtime=python 时 entry 必须是 .py 文件。".to_string());
     }
     if runtime == "executable" {
-        if lower.ends_with(".dll") {
-            return Err("runtime=executable 不支持 DLL。".to_string());
+        if let Some(error) = external_executable_entry_error_for_platform(&normalized, cfg!(target_os = "windows")) {
+            return Err(error);
         }
-        #[cfg(target_os = "windows")]
-        if !lower.ends_with(".exe") {
-            return Err("Windows 下 runtime=executable 时 entry 必须是 .exe 文件。".to_string());
+    }
+    Ok(())
+}
+
+fn external_executable_entry_error_for_platform(entry: &str, is_windows: bool) -> Option<String> {
+    let lower = entry.to_ascii_lowercase();
+    if lower.ends_with(".dll") {
+        return Some("runtime=executable 不支持 DLL。".to_string());
+    }
+    if is_windows && !lower.ends_with(".exe") {
+        return Some("Windows 下 runtime=executable 时 entry 必须是 .exe 文件。".to_string());
+    }
+    if !is_windows && lower.ends_with(".sh") {
+        return Some("macOS/Linux 下 runtime=executable 暂不支持 Shell 脚本。".to_string());
+    }
+    None
+}
+
+fn validate_executable_entry_file(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!("可执行插件入口不存在或不是普通文件：{}", path.display()));
+    }
+    let header = fs::read(path).map_err(|error| format!("无法读取可执行插件入口：{error}"))?;
+    if header.len() < 4 {
+        return Err("可执行插件入口文件过小。".to_string());
+    }
+    if cfg!(target_os = "windows") {
+        if &header[..2] != b"MZ" {
+            return Err("Windows 可执行插件入口必须是 PE 二进制文件。".to_string());
         }
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::metadata(path)
+            .map_err(|error| format!("无法读取可执行插件权限：{error}"))?
+            .permissions()
+            .mode()
+            & 0o111
+            == 0
+        {
+            return Err("macOS/Linux 可执行插件入口缺少执行权限。".to_string());
+        }
+    }
+
+    let native_binary = matches!(
+        &header[..4],
+        b"\x7fELF"
+            | [0xfe, 0xed, 0xfa, 0xce]
+            | [0xce, 0xfa, 0xed, 0xfe]
+            | [0xfe, 0xed, 0xfa, 0xcf]
+            | [0xcf, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe]
+            | [0xbe, 0xba, 0xfe, 0xca]
+    );
+    if !native_binary {
+        return Err("macOS/Linux 可执行插件入口必须是原生二进制文件。".to_string());
     }
     Ok(())
 }
@@ -2675,7 +2730,7 @@ if __name__ == "__main__":
         "external-command-executable" => (
             "external-command",
             Some("executable"),
-            Some("plugin.exe"),
+            Some(default_executable_plugin_entry_name()),
             None,
             json!([
                 "external-command",
@@ -2746,9 +2801,9 @@ if __name__ == "__main__":
         .map_err(|error| format!("生成的模板未通过 schema 校验：{error}"))?;
 
     let executable_note = if request.template_type == "external-command-executable" {
-        "\n## executable 准备\n\n本向导不会生成真实 EXE。请自行编译 `plugin.exe` 并放在本目录后再校验和打包。宿主不会通过 Shell 启动程序。\n"
+        format!("\n## executable 准备\n\n本向导不会生成真实原生二进制。请自行编译 `{}` 并放在本目录后再校验和打包。宿主不会通过 Shell 启动程序。\n", default_executable_plugin_entry_name())
     } else {
-        ""
+        String::new()
     };
     let readme = format!(
         "# {name}\n\n{description}\n\n- pluginId: `{plugin_id}`\n- pluginType: `{plugin_type}`\n{}\n## 本地安全边界\n\n项目位于本机用户数据目录；打包和安装均不联网。运行型插件只有在安装后、用户显式开启对应 runner 并授予信任时才能执行。\n{executable_note}",
@@ -2763,6 +2818,14 @@ if __name__ == "__main__":
         entry_content,
         readme,
     })
+}
+
+fn default_executable_plugin_entry_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "plugin.exe"
+    } else {
+        "plugin"
+    }
 }
 
 fn dev_project_dir_at(root: &Path, plugin_id: &str) -> Result<PathBuf, String> {
@@ -3212,12 +3275,13 @@ fn validate_dev_plugin_project_at(root: &Path, plugin_id: &str) -> DevPluginVali
                 }
                 if plugin_type == "external-command"
                     && result.runtime.as_deref() == Some("executable")
-                    && !normalized_entry.to_ascii_lowercase().ends_with(".exe")
+                    && external_executable_entry_error_for_platform(&normalized_entry, cfg!(target_os = "windows")).is_some()
                 {
                     result.errors.push(validation_issue(
                         "executable-entry-invalid",
                         Some("entry"),
-                        "runtime=executable 时 entry 必须是 .exe 文件。",
+                        external_executable_entry_error_for_platform(&normalized_entry, cfg!(target_os = "windows"))
+                            .expect("executable entry error should be present"),
                     ));
                 }
                 let entry_path = project_dir.join(Path::new(&normalized_entry));
@@ -4732,18 +4796,34 @@ fn scan_installed_diagnostics(
                         None,
                     );
                 }
-                if plugin_type == "external-command" && runtime == "executable" && !entry.to_ascii_lowercase().ends_with(".exe") {
-                    push_diagnostic_item(
-                        items,
-                        PluginDiagnosticSeverity::Error,
-                        PluginDiagnosticStatus::Failed,
-                        PluginDiagnosticCategory::Runtime,
-                        Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
-                        "Executable entry is not .exe",
-                        "runtime=executable requires an .exe entry on Windows packages.",
-                        Some(relative_manifest_path.clone()),
-                        None,
-                    );
+                if plugin_type == "external-command" && runtime == "executable" {
+                    if let Some(error) = external_executable_entry_error_for_platform(entry, cfg!(target_os = "windows")) {
+                        push_diagnostic_item(
+                            items,
+                            PluginDiagnosticSeverity::Error,
+                            PluginDiagnosticStatus::Failed,
+                            PluginDiagnosticCategory::Runtime,
+                            Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                            if cfg!(target_os = "windows") { "Executable entry is not .exe" } else { "Executable entry is unsupported" },
+                            error,
+                            Some(relative_manifest_path.clone()),
+                            None,
+                        );
+                    } else if entry_path.is_file() {
+                        if let Err(error) = validate_executable_entry_file(&entry_path) {
+                            push_diagnostic_item(
+                                items,
+                                PluginDiagnosticSeverity::Error,
+                                PluginDiagnosticStatus::Failed,
+                                PluginDiagnosticCategory::Runtime,
+                                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                                "Executable entry is unsafe",
+                                error,
+                                Some(relative_manifest_path.clone()),
+                                None,
+                            );
+                        }
+                    }
                 }
             }
         } else if plugin_type == "script" || plugin_type == "external-command" {
@@ -6297,6 +6377,7 @@ struct ExternalProcessResult {
 #[serde(rename_all = "camelCase")]
 struct PythonTestResult {
     ok: bool,
+    command: Option<String>,
     version: Option<String>,
     exit_code: Option<i32>,
     duration_ms: u128,
@@ -6494,18 +6575,44 @@ fn run_managed_process(
     })
 }
 
-fn validate_python_path(python_path: &str) -> Result<PathBuf, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PythonInvocation {
+    program: PathBuf,
+    args: Vec<String>,
+    display: String,
+}
+
+fn python_candidate_specs_for_platform(is_windows: bool) -> Vec<(&'static str, Vec<&'static str>)> {
+    if is_windows {
+        vec![("py", vec!["-3"]), ("python", vec![]), ("python3", vec![])]
+    } else {
+        vec![("python3", vec![]), ("python", vec![])]
+    }
+}
+
+fn python_invocation_from_setting(python_path: &str) -> Result<PythonInvocation, String> {
     let trimmed = python_path.trim();
     if trimmed.is_empty() || trimmed.contains('\0') {
         return Err("Python 路径不能为空。".to_string());
     }
+    if trimmed == "py" {
+        return Ok(PythonInvocation {
+            program: PathBuf::from("py"),
+            args: vec!["-3".to_string()],
+            display: "py -3".to_string(),
+        });
+    }
     if ["python", "python3", "python.exe"].contains(&trimmed) {
-        return Ok(PathBuf::from(trimmed));
+        return Ok(PythonInvocation {
+            program: PathBuf::from(trimmed),
+            args: vec![],
+            display: trimmed.to_string(),
+        });
     }
     let path = PathBuf::from(trimmed);
     if !path.is_absolute() {
         return Err(
-            "Python 路径只允许简单命令 python/python3/python.exe 或可执行文件绝对路径。"
+            "Python 设置只允许 auto、py、python、python3、python.exe 或受控的可执行文件绝对路径。"
                 .to_string(),
         );
     }
@@ -6520,7 +6627,50 @@ fn validate_python_path(python_path: &str) -> Result<PathBuf, String> {
     {
         return Err("Windows 下 Python 路径必须指向 .exe 文件。".to_string());
     }
-    Ok(path)
+    Ok(PythonInvocation {
+        program: path.clone(),
+        args: vec![],
+        display: path.to_string_lossy().to_string(),
+    })
+}
+
+fn python_candidate_invocations(python_path: &str) -> Result<Vec<PythonInvocation>, String> {
+    if python_path.trim().is_empty() || python_path.trim().eq_ignore_ascii_case("auto") {
+        return Ok(python_candidate_specs_for_platform(cfg!(target_os = "windows"))
+            .into_iter()
+            .map(|(program, args)| PythonInvocation {
+                program: PathBuf::from(program),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                display: if args.is_empty() { program.to_string() } else { format!("{program} {}", args.join(" ")) },
+            })
+            .collect());
+    }
+    Ok(vec![python_invocation_from_setting(python_path)?])
+}
+
+fn probe_python_runtime(invocation: &PythonInvocation) -> Result<ExternalProcessResult, String> {
+    let mut command = Command::new(&invocation.program);
+    command.args(&invocation.args).arg("--version");
+    configure_python_utf8(&mut command);
+    run_managed_process(
+        &mut command,
+        &[],
+        EXTERNAL_DEFAULT_TIMEOUT_MS,
+        64 * 1024,
+        64 * 1024,
+    )
+}
+
+fn resolve_python_runtime(python_path: &str) -> Result<(PythonInvocation, ExternalProcessResult), String> {
+    let candidates = python_candidate_invocations(python_path)?;
+    for candidate in candidates {
+        if let Ok(result) = probe_python_runtime(&candidate) {
+            if result.status == "success" && (!result.stdout.trim().is_empty() || !result.stderr.trim().is_empty()) {
+                return Ok((candidate, result));
+            }
+        }
+    }
+    Err("未检测到可用的 Python 3 解释器。请安装 Python 3，或在设置中填写受控解释器路径。".to_string())
 }
 
 fn external_settings_at(root: &Path) -> Result<(bool, String), String> {
@@ -6534,7 +6684,7 @@ fn external_settings_at(root: &Path) -> Result<(bool, String), String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("python")
+        .unwrap_or("auto")
         .to_string();
     Ok((enabled, python_path))
 }
@@ -6603,13 +6753,17 @@ fn run_external_command_at(
     if !entry_path.is_file() {
         return Err(format!("插件入口文件不存在：{}", entry_path.display()));
     }
+    if runtime == "executable" {
+        validate_executable_entry_file(&entry_path)?;
+    }
 
     let mut command = if runtime == "python" {
         if requested_python_path.trim() != configured_python_path {
             return Err("Python 路径与已保存配置不一致，请重新加载设置。".to_string());
         }
-        let python = validate_python_path(&configured_python_path)?;
-        let mut command = Command::new(python);
+        let (python, _) = resolve_python_runtime(&configured_python_path)?;
+        let mut command = Command::new(python.program);
+        command.args(python.args);
         command.arg(&entry_path);
         configure_python_utf8(&mut command);
         command
@@ -6649,17 +6803,7 @@ async fn run_external_command_plugin(
 }
 
 fn test_python_runtime_at(python_path: &str) -> Result<PythonTestResult, String> {
-    let executable = validate_python_path(python_path)?;
-    let mut command = Command::new(executable);
-    command.arg("--version");
-    configure_python_utf8(&mut command);
-    let result = run_managed_process(
-        &mut command,
-        &[],
-        EXTERNAL_DEFAULT_TIMEOUT_MS,
-        64 * 1024,
-        64 * 1024,
-    )?;
+    let (invocation, result) = resolve_python_runtime(python_path)?;
     let version = if result.stdout.trim().is_empty() {
         result.stderr.trim().to_string()
     } else {
@@ -6667,6 +6811,7 @@ fn test_python_runtime_at(python_path: &str) -> Result<PythonTestResult, String>
     };
     Ok(PythonTestResult {
         ok: result.status == "success" && !version.is_empty(),
+        command: Some(invocation.display),
         version: (!version.is_empty()).then_some(version),
         exit_code: result.exit_code,
         duration_ms: result.duration_ms,
@@ -6754,6 +6899,27 @@ mod tests {
             .expect("system clock should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("local-mindmap-{name}-{suffix}"))
+    }
+
+    #[test]
+    fn python_candidate_order_is_platform_specific() {
+        assert_eq!(
+            python_candidate_specs_for_platform(true),
+            vec![("py", vec!["-3"]), ("python", vec![]), ("python3", vec![])]
+        );
+        assert_eq!(
+            python_candidate_specs_for_platform(false),
+            vec![("python3", vec![]), ("python", vec![])]
+        );
+    }
+
+    #[test]
+    fn executable_entry_rules_cover_windows_and_unix_security_boundaries() {
+        assert!(external_executable_entry_error_for_platform("plugin.bin", true).is_some());
+        assert!(external_executable_entry_error_for_platform("plugin.exe", true).is_none());
+        assert!(external_executable_entry_error_for_platform("plugin", false).is_none());
+        assert!(external_executable_entry_error_for_platform("plugin.sh", false).is_some());
+        assert!(external_executable_entry_error_for_platform("plugin.dll", false).is_some());
     }
 
     fn write_test_plugin_package(path: &Path, entries: &[(&str, &[u8])]) {

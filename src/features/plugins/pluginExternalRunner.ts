@@ -17,6 +17,7 @@ export type ExternalProcessResult = {
 
 export type PythonTestResult = {
   ok: boolean;
+  command?: string;
   version?: string;
   exitCode: number | null;
   durationMs: number;

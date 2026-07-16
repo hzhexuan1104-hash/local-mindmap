@@ -1,5 +1,17 @@
 # 本地化思维导图工具验收测试清单
 
+## v1.19.0 跨平台发布验收
+
+| 测试项 | 操作 | 预期结果 | 是否通过 |
+|---|---|---|---|
+| 版本门禁 | 运行 `node scripts/ci/check-release-version.mjs --tag v1.19.0` | 五处版本和 tag 一致 | [ ] |
+| 工作流静态检查 | 审核 `release-multiplatform.yml` | tag 触发、五目标矩阵、原生 ARM runner、Draft 发布条件存在 | [ ] |
+| Windows | 安装 EXE、MSI | x64 架构、版本、图标、`.lmind` 打开保存正常 | [ ] |
+| macOS | 分别安装 ARM64/x64 DMG | 单架构、签名/公证、Gatekeeper、文件操作正常 | [ ] |
+| UOS | 在 x64/ARM64 真机安装 DEB、运行 AppImage | 包架构正确、中文/文件选择器/插件/HiDPI 正常 | [ ] |
+| 插件跨平台 | 测试 `auto` Python 与 executable 插件 | 解释器顺序正确；Unix 拒绝 `.sh` 与无执行权限文件 | [ ] |
+| Draft Release | tag 流水线结束后检查 GitHub | 仅一个 Draft，八个用户资产和校验文件齐全，无自动 Publish | [ ] |
+
 > 说明：每条用例包含测试目标、操作步骤、预期结果和是否通过勾选项。测试前建议先执行 `npm install`、`npm run build`、`npm run dev`。
 
 ## v1.18.0 菜单与工作面板

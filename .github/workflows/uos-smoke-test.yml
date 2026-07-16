@@ -1,0 +1,41 @@
+name: UOS manual smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Target architecture on a real UOS self-hosted runner.
+        required: true
+        type: choice
+        default: x64
+        options: [x64, arm64]
+      release_tag:
+        description: Existing Draft Release tag whose UOS candidate packages will be checked.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-x64:
+    if: inputs.architecture == 'x64'
+    runs-on: [self-hosted, linux, uos, x64]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download x64 candidate packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.release_tag }}" --pattern 'Local-Mindmap_*_uos_x64.*' --dir uos-packages
+      - run: bash docs/release/scripts/uos-smoke-test.sh uos-packages x64
+
+  smoke-arm64:
+    if: inputs.architecture == 'arm64'
+    runs-on: [self-hosted, linux, uos, arm64]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download ARM64 candidate packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.release_tag }}" --pattern 'Local-Mindmap_*_uos_arm64.*' --dir uos-packages
+      - run: bash docs/release/scripts/uos-smoke-test.sh uos-packages arm64
