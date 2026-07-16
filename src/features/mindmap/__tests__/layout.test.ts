@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   clearMindmapPositions,
   createMindmapLayout,
+  getNodeContentSize,
   getDiamondBoundaryAnchor,
+  measureNodeText,
   POSITIONED_LAYOUT,
 } from '../layout';
 import { serializeLmindDocument } from '../saveMindmap';
@@ -85,15 +87,15 @@ describe('mindmap layout positions', () => {
     const child = layout.nodes.find((node) => node.id === 'child')!;
     const line = layout.lines[0];
 
-    expect(root.height).toBe(POSITIONED_LAYOUT.nodeHeight);
-    expect(child.height).toBe(POSITIONED_LAYOUT.nodeHeight);
+    expect(root.width).toBeGreaterThan(child.width);
+    expect(child.width).toBeGreaterThanOrEqual(88);
     expect(line.from).toEqual({
-      x: root.x + POSITIONED_LAYOUT.nodeWidth,
-      y: root.y + POSITIONED_LAYOUT.nodeHeight / 2,
+      x: root.x + root.width,
+      y: root.y + root.height / 2,
     });
     expect(line.to).toEqual({
       x: child.x,
-      y: child.y + POSITIONED_LAYOUT.nodeHeight / 2,
+      y: child.y + child.height / 2,
     });
   });
 
@@ -133,8 +135,7 @@ describe('mindmap layout positions', () => {
     const child = layout.nodes.find((node) => node.id === 'child')!;
     const line = layout.lines[0];
 
-    expect(root.height).toBe(POSITIONED_LAYOUT.diamondNodeHeight);
-    expect(child.height).toBe(POSITIONED_LAYOUT.diamondNodeHeight);
+    expect(root.height).toBeGreaterThan(child.height);
     expect(line.from).toEqual({
       x: root.x + root.width,
       y: root.y + root.height / 2,
@@ -145,7 +146,7 @@ describe('mindmap layout positions', () => {
     });
   });
 
-  it('uses node type diamond shape when calculating anchors', () => {
+  it('uses node type diamond shape when attaching at visual vertices', () => {
     const layout = createMindmapLayout(
       {
         id: 'root',
@@ -164,19 +165,10 @@ describe('mindmap layout positions', () => {
       [diamondNodeType],
     );
     const root = layout.nodes.find((node) => node.id === 'root')!;
-    const rootCenter = {
-      x: root.x + root.width / 2,
-      y: root.y + root.height / 2,
-    };
-    const boundaryValue =
-      Math.abs(layout.lines[0].from.x - rootCenter.x) / (root.width / 2) +
-      Math.abs(layout.lines[0].from.y - rootCenter.y) / (root.height / 2);
-
     expect(root.shape).toBe('diamond');
-    expect(boundaryValue).toBeCloseTo(1);
-    expect(layout.lines[0].from).not.toEqual({
+    expect(layout.lines[0].from).toEqual({
       x: root.x + root.width,
-      y: root.y + POSITIONED_LAYOUT.nodeHeight / 2,
+      y: root.y + root.height / 2,
     });
   });
 
@@ -249,5 +241,32 @@ describe('mindmap layout positions', () => {
     const resetMindmap = clearMindmapPositions(mindmap);
 
     expect(resetMindmap.children[1].position).toBeUndefined();
+  });
+
+  it('sizes short nodes close to the minimum and grows wider for longer text', () => {
+    const short = getNodeContentSize({ id: 'short', text: '短', remark: '', children: [] });
+    const long = getNodeContentSize({ id: 'long', text: '这是一个明显更长的节点标题', remark: '', children: [] });
+
+    expect(short.width).toBeGreaterThanOrEqual(88);
+    expect(short.width).toBeLessThan(140);
+    expect(long.width).toBeGreaterThan(short.width);
+  });
+
+  it('wraps long content at the maximum width and gives diamonds a safe width allowance', () => {
+    const longText = '一个很长的节点文本 '.repeat(40);
+    const rounded = getNodeContentSize({ id: 'rounded', text: longText, remark: '', children: [] });
+    const diamond = getNodeContentSize({ id: 'diamond', text: '菱形节点', remark: '', style: { shape: 'diamond' }, children: [] });
+    const regular = getNodeContentSize({ id: 'regular', text: '菱形节点', remark: '', children: [] });
+
+    expect(rounded.width).toBeLessThanOrEqual(340);
+    expect(rounded.height).toBeGreaterThan(POSITIONED_LAYOUT.nodeHeight);
+    expect(diamond.width).toBeGreaterThan(regular.width);
+  });
+
+  it('reuses content measurements for unchanged text and font attributes', () => {
+    const first = measureNodeText('缓存测量', 16, true);
+    const second = measureNodeText('缓存测量', 16, true);
+
+    expect(second).toBe(first);
   });
 });
