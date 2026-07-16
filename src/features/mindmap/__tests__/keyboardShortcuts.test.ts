@@ -38,7 +38,7 @@ describe('keyboard shortcut helpers', () => {
         ),
       ).toBeNull();
       expect(
-        getKeyboardShortcutAction({ key: 'Tab', target }, defaultState),
+        getKeyboardShortcutAction({ key: 'Insert', target }, defaultState),
       ).toBeNull();
       expect(
         getKeyboardShortcutAction({ key: 'Enter', target }, defaultState),
@@ -46,19 +46,36 @@ describe('keyboard shortcut helpers', () => {
     });
   });
 
-  it('maps Tab and Enter to node creation shortcuts outside editable elements', () => {
-    expect(getKeyboardShortcutAction({ key: 'Tab' }, defaultState)).toBe(
+  it('keeps Escape available inside editable elements to return from an open window', () => {
+    const target = {
+      closest: () => ({ tagName: 'TEXTAREA' }),
+    } as unknown as EventTarget;
+
+    expect(
+      getKeyboardShortcutAction(
+        { key: 'Escape', target },
+        { ...defaultState, hasModalOpen: true },
+      ),
+    ).toBe('close-or-clear');
+    expect(
+      getKeyboardShortcutAction({ key: 'Escape', target }, defaultState),
+    ).toBeNull();
+  });
+
+  it('maps Insert and Enter to node creation shortcuts outside editable elements', () => {
+    expect(getKeyboardShortcutAction({ key: 'Insert' }, defaultState)).toBe(
       'add-child',
     );
+    expect(getKeyboardShortcutAction({ key: 'Tab' }, defaultState)).toBeNull();
     expect(getKeyboardShortcutAction({ key: 'Enter' }, defaultState)).toBe(
       'add-sibling',
     );
   });
 
-  it('does not map Tab or Enter while editing, without selection, or while UI overlays are active', () => {
+  it('does not map Insert or Enter while editing, without selection, or while UI overlays are active', () => {
     expect(
       getKeyboardShortcutAction(
-        { key: 'Tab' },
+        { key: 'Insert' },
         { ...defaultState, isEditingNodeText: true },
       ),
     ).toBeNull();
@@ -70,7 +87,7 @@ describe('keyboard shortcut helpers', () => {
     ).toBeNull();
     expect(
       getKeyboardShortcutAction(
-        { key: 'Tab' },
+        { key: 'Insert' },
         { ...defaultState, hasModalOpen: true },
       ),
     ).toBeNull();

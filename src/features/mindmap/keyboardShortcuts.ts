@@ -53,17 +53,23 @@ export function getKeyboardShortcutAction(
   event: KeyboardShortcutEventLike,
   state: KeyboardShortcutState,
 ): KeyboardShortcutAction | null {
-  if (isEditableShortcutTarget(event.target)) {
-    return null;
-  }
-
   if (event.key === 'Escape') {
+    if (isEditableShortcutTarget(event.target)) {
+      return state.hasModalOpen || state.hasContextMenuOpen
+        ? 'close-or-clear'
+        : null;
+    }
+
     return state.hasModalOpen ||
       state.hasContextMenuOpen ||
       state.isBoxSelecting ||
       state.hasSelection
       ? 'close-or-clear'
       : null;
+  }
+
+  if (isEditableShortcutTarget(event.target)) {
+    return null;
   }
 
   if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -83,7 +89,7 @@ export function getKeyboardShortcutAction(
       return null;
     }
 
-    if (event.key === 'Tab') {
+    if (event.key === 'Insert') {
       return 'add-child';
     }
 
