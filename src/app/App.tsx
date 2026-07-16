@@ -13,14 +13,15 @@ import { MiniMap } from './components/MiniMap';
 import { PerformanceInfoPanel } from './components/PerformanceInfoPanel';
 import { CommandPalette } from './components/CommandPalette';
 import {
-  LeftResourcePanel,
-  type ResourceView,
-} from './components/LeftResourcePanel';
+  WorkspacePanelHost,
+  type WorkspacePanelId,
+} from './components/WorkspacePanelHost';
 import { RightInspectorPanel } from './components/RightInspectorPanel';
 import {
   TopMenuBar,
   type TopMenuGroup,
 } from './components/TopMenuBar';
+import { buildPluginCommandMenu, buildRecentFilesMenu } from '../features/menu/menuBuilders';
 import { createBuiltinCommands } from '../features/commands/builtinCommands';
 import { createCommandRegistry } from '../features/commands/commandRegistry';
 import {
@@ -113,7 +114,6 @@ import {
   type NodeTypeDraft,
 } from '../features/mindmap/nodeTypes';
 import {
-  applyStyleToNodeType,
   createNodeTypeFromStyle,
   getEffectiveNodeStyle,
   getNodeShapeClassName,
@@ -516,7 +516,7 @@ type EditingSession = {
   nodeId: string;
 };
 
-type ToolDrawer = ResourceView;
+type ToolDrawer = WorkspacePanelId;
 
 const BUILTIN_COMMANDS = createBuiltinCommands();
 
@@ -590,7 +590,7 @@ function MindmapTree({
         left: layoutNode.x,
         top: layoutNode.y,
         width: layoutNode.width,
-        minHeight: layoutNode.height,
+        height: layoutNode.height,
       }}
     >
         <div
@@ -610,7 +610,7 @@ function MindmapTree({
           ]
             .filter(Boolean)
             .join(' ')}
-          style={nodeStyle}
+          style={{ ...nodeStyle, width: '100%', height: '100%' }}
           aria-pressed={isSelected || isPrimarySelected}
           onClick={(event) => {
             event.stopPropagation();
@@ -785,8 +785,8 @@ export function App() {
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
-  const [activeDrawer, setActiveDrawer] =
-    useState<ToolDrawer | null>('templates');
+  const [activeWorkspacePanel, setActiveWorkspacePanel] =
+    useState<ToolDrawer | null>(null);
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [focusedRootId, setFocusedRootId] = useState<string | null>(null);
@@ -1428,11 +1428,11 @@ export function App() {
           handleSelectAllNodes();
           return;
         case 'find':
-          setActiveDrawer('search');
+          setActiveWorkspacePanel('search');
           showMessage('已打开查找');
           return;
         case 'replace':
-          setActiveDrawer('search');
+          setActiveWorkspacePanel('search');
           showMessage('已打开替换');
           return;
         case 'add-child':
@@ -1616,6 +1616,11 @@ export function App() {
       dragStateRef.current = null;
       setDraggingNodeId(null);
       setDropTargetNodeId(null);
+      return;
+    }
+
+    if (activeWorkspacePanel) {
+      setActiveWorkspacePanel(null);
       return;
     }
 
@@ -3795,7 +3800,7 @@ export function App() {
     }
     recordHistory();
     applyProject(cloneTemplateProject(template));
-    setActiveDrawer(null);
+    setActiveWorkspacePanel(null);
     showMessage('已从模板新建思维导图');
   };
 
@@ -3888,47 +3893,6 @@ export function App() {
       setNodeTypes(nextNodeTypes);
       setUserNodeTypes(nextNodeTypes);
       showMessage('已保存为节点类型');
-    } catch (error) {
-      showMessage(getErrorMessage(error, '节点类型保存失败'));
-    }
-  };
-
-  const handleApplySelectedStyleToNodeType = async () => {
-    if (!selectedNode.nodeTypeId) {
-      showMessage('当前节点未使用节点类型');
-      return;
-    }
-
-    const targetNodeType = nodeTypes.find(
-      (nodeType) => nodeType.id === selectedNode.nodeTypeId,
-    );
-
-    if (!targetNodeType) {
-      showMessage('插件或文件内置节点类型不能在此处直接修改');
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `这会更新「${targetNodeType.name}」的全局样式，并影响所有使用该节点类型的节点。是否继续？`,
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    const nextStyle = getEffectiveNodeStyle(selectedNode, targetNodeType);
-    const nextNodeTypes = nodeTypes.map((nodeType) =>
-      nodeType.id === targetNodeType.id
-        ? applyStyleToNodeType(nodeType, nextStyle)
-        : nodeType,
-    );
-
-    recordHistory();
-    try {
-      await saveLocalNodeTypes(nextNodeTypes);
-      setNodeTypes(nextNodeTypes);
-      setUserNodeTypes(nextNodeTypes);
-      showMessage('已应用到当前节点类型');
     } catch (error) {
       showMessage(getErrorMessage(error, '节点类型保存失败'));
     }
@@ -5461,8 +5425,8 @@ export function App() {
     'file.recent': () => setIsFileStatusVisible(true),
     'edit.undo': handleUndo,
     'edit.redo': handleRedo,
-    'edit.find': () => setActiveDrawer('search'),
-    'edit.replace': () => setActiveDrawer('search'),
+    'edit.find': () => setActiveWorkspacePanel('search'),
+    'edit.replace': () => setActiveWorkspacePanel('search'),
     'edit.copy': handleCopyNodes,
     'edit.cut': handleCutNodes,
     'edit.paste': handlePasteNodes,
@@ -5495,7 +5459,7 @@ export function App() {
       if (name) return handleSaveSelectedStyleAsNodeType(name);
     },
     'node.resetStyle': handleResetSelectedNodeStyle,
-    'node.manageTypes': () => setActiveDrawer('node-types'),
+    'node.manageTypes': () => setActiveWorkspacePanel('node-types'),
     'node.locate': () => {
       if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true });
     },
@@ -5507,7 +5471,7 @@ export function App() {
       const childId = selectedNodeId ? mindmapIndex.childrenById.get(selectedNodeId)?.[0] : null;
       if (childId) locateNode(childId, { exitFocusIfNeeded: true });
     },
-    'view.outline': () => setActiveDrawer((current) => current === 'outline' ? null : 'outline'),
+    'view.outline': () => setActiveWorkspacePanel((current) => current === 'outline' ? null : 'outline'),
     'view.minimap': () => setShowMiniMap((visible) => !visible),
     'view.inspector': () => setIsRemarkPanelCollapsed((collapsed) => !collapsed),
     'view.center': () => setCanvasView(centerCanvasView()),
@@ -5519,10 +5483,10 @@ export function App() {
     'view.expandDepth1': () => handleExpandToDepth(1),
     'view.expandDepth2': () => handleExpandToDepth(2),
     'view.expandDepth3': () => handleExpandToDepth(3),
-    'view.performance': () => setActiveDrawer('performance'),
+    'view.performance': () => setActiveWorkspacePanel('performance'),
     'view.autoPerformance': () => setAutoPerformanceMode((enabled) => !enabled),
     'view.layout': handleResetAutoLayout,
-    'template.library': () => setActiveDrawer('templates'),
+    'template.library': () => setActiveWorkspacePanel('templates'),
     'plugin.manager': () => setIsPluginManagerVisible(true),
     'plugin.gallery': () => setIsPluginManagerVisible(true),
     'plugin.workbench': () => setIsPluginManagerVisible(true),
@@ -5531,7 +5495,7 @@ export function App() {
     'help.guide': () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
     'help.shortcuts': () => setIsShortcutHelpVisible(true),
     'help.about': () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
-    'settings.commandPalette': () => setActiveDrawer('settings'),
+    'settings.commandPalette': () => setActiveWorkspacePanel('settings'),
   };
 
   const commandContext: CommandContext = {
@@ -5655,7 +5619,7 @@ export function App() {
         searchText: '普通 默认 节点类型',
         execute: () => {
           if (selectedNodeIds.length > 0) handleSelectedNodeTypeChange('');
-          else setActiveDrawer('node-types');
+          else setActiveWorkspacePanel('node-types');
         },
       },
       ...availableNodeTypes.map((nodeType) => ({
@@ -5672,7 +5636,7 @@ export function App() {
       searchText: `${nodeType.name} ${nodeType.defaultText}`.toLocaleLowerCase(),
       execute: () => {
         if (selectedNodeIds.length > 0) handleSelectedNodeTypeChange(nodeType.id);
-        else setActiveDrawer('node-types');
+        else setActiveWorkspacePanel('node-types');
       },
       })),
     ],
@@ -5686,252 +5650,101 @@ export function App() {
     ]),
   );
 
+  const recentFileMenu = buildRecentFilesMenu(
+    recentFiles.map((entry, index) => ({ id: `${index}`, name: entry.name, missing: recentFileHealth[entry.path] === 'missing', execute: () => void handleOpenRecentFile(entry) })),
+    () => setIsFileStatusVisible(true),
+  );
+  const pluginCommandMenu = buildPluginCommandMenu(pluginMenuGroups.map((group) => {
+    const plugin = plugins.find((candidate) => candidate.pluginId === group.pluginId);
+    const disabledReason = plugin?.pluginType === 'script' && !isScriptRunnerEnabled
+      ? 'Script runner 未启用'
+      : plugin?.pluginType === 'external-command' && !isExternalRunnerEnabled
+        ? '外部命令 runner 未启用'
+        : undefined;
+    const riskLabel = plugin?.pluginType === 'external-command'
+      ? '（严重风险）'
+      : plugin?.pluginType === 'script' && getPluginWritePermissions(plugin).length
+        ? '（高风险）'
+        : '';
+    return {
+      pluginId: group.pluginId,
+      pluginName: group.pluginName,
+      items: group.items.map((menu) => ({ id: menu.id, label: `${menu.label}${riskLabel}`, disabled: Boolean(disabledReason), disabledReason, execute: () => void runPluginCommand(menu.command, group.pluginId, undefined, menu.id) })),
+    };
+  }));
   const topMenus: TopMenuGroup[] = [
-    {
-      id: 'file',
-      label: '文件',
-      items: [
-        {
-          label:
-            missingRecentFiles.length > 0
-              ? `最近文件健康检查（${missingRecentFiles.length} 个异常）`
-              : '最近文件健康检查',
-          disabled: missingRecentFiles.length === 0,
-          children: missingRecentFiles.flatMap((entry) => [
-            {
-              label: `${entry.name}：重新定位文件`,
-              onSelect: () => void handleRelocateRecentFile(entry),
-            },
-            {
-              label: `${entry.name}：从最近文件移除`,
-              onSelect: () => void handleRemoveRecentFile(entry),
-            },
-          ]),
-        },
-        {
-          label: '创建版本快照',
-          onSelect: () => void handleCreateVersionSnapshot(),
-        },
-        {
-          label: '版本历史',
-          onSelect: () => void handleOpenVersionHistory(),
-        },
-        {
-          label: '恢复自动保存草稿',
-          onSelect: () => setIsRecoveryCenterVisible(true),
-          disabled: recoveryDrafts.length === 0,
-          dividerBefore: true,
-        },
-        { label: '新建思维导图', onSelect: handleCreateMindmap },
-        {
-          label: '打开 .lmind',
-          onSelect: () => void handleOpenMindmap(),
-        },
-        { label: '保存', onSelect: handleSaveMindmap },
-        { label: '另存为 .lmind', onSelect: handleSaveMindmapAs },
-        {
-          label: '导入',
-          dividerBefore: true,
-          children: [
-            { label: '导入 Markdown', onSelect: () => void handleImportMarkdown() },
-            { label: '导入 Excel', onSelect: () => void handleImportExcel() },
-            { label: '导入 JSON', onSelect: () => void handleImportJson() },
-            {
-              label: '导入节点类型包',
-              onSelect: () => void handleImportNodeTypePack(),
-            },
-            { label: '导入模板包', onSelect: () => void handleImportTemplatePack() },
-          ],
-        },
-        {
-          label: '导出',
-          children: [
-            { label: '导出 Markdown', onSelect: handleExportMarkdown },
-            { label: '导出 Excel', onSelect: handleExportExcel },
-            { label: '导出 JSON', onSelect: handleExportJson },
-            { label: '导出 PNG', onSelect: () => void handleExportImage('png') },
-            { label: '导出 JPG', onSelect: () => void handleExportImage('jpg') },
-            {
-              label: canExportTxt ? '导出 TXT' : '导出 TXT（需启用插件）',
-              onSelect: handleExportTxt,
-              disabled: !canExportTxt,
-            },
-            { label: '导出节点类型包', onSelect: handleExportNodeTypePack },
-            { label: '导出模板包', onSelect: handleExportTemplatePack },
-          ],
-        },
-        ...(isDesktopApp
-          ? [
-              {
-                label: '打开所在目录',
-                onSelect: () => void handleOpenCurrentFileLocation(),
-                disabled: !currentFilePath,
-                dividerBefore: true,
-              },
-              {
-                label: '复制文件路径',
-                onSelect: () => void handleCopyCurrentFilePath(),
-                disabled: !currentFilePath,
-              },
-            ]
-          : []),
-        ...recentFiles.slice(0, 5).map((entry, index) => ({
-          label: `最近文件：${entry.name}`,
-          onSelect: () => void handleOpenRecentFile(entry),
-          dividerBefore: index === 0,
-        })),
-      ],
-    },
-    {
-      id: 'edit',
-      label: '编辑',
-      items: [
-        { label: '撤销', onSelect: handleUndo },
-        { label: '重做', onSelect: handleRedo },
-        { label: '复制', onSelect: handleCopyNodes, dividerBefore: true },
-        { label: '剪切', onSelect: handleCutNodes },
-        { label: '粘贴', onSelect: () => handlePasteNodes() },
-        { label: '复制为同级节点', onSelect: handleDuplicateNodeAsSibling },
-        { label: '删除节点', onSelect: handleDeleteNode, dividerBefore: true },
-        {
-          label: '查找',
-          onSelect: () => setActiveDrawer('search'),
-          dividerBefore: true,
-        },
-        {
-          label: '替换',
-          onSelect: () => setActiveDrawer('search'),
-        },
-      ],
-    },
-    {
-      id: 'insert',
-      label: '插入',
-      items: [
-        { label: '添加子节点', onSelect: handleAddChild },
-        { label: '添加同级节点', onSelect: handleAddSibling },
-      ],
-    },
-    {
-      id: 'view',
-      label: '视图',
-      items: [
-        {
-          label: '放大',
-          onSelect: () =>
-            setCanvasView((view) => zoomCanvasView(view, 'in')),
-        },
-        {
-          label: '缩小',
-          onSelect: () =>
-            setCanvasView((view) => zoomCanvasView(view, 'out')),
-        },
-        {
-          label: '一键居中',
-          onSelect: () => setCanvasView(centerCanvasView()),
-        },
-        {
-          label: '重新自动布局',
-          onSelect: handleResetAutoLayout,
-          dividerBefore: true,
-        },
-        { label: '展开全部', onSelect: handleExpandAll },
-        { label: '折叠全部', onSelect: handleCollapseAll },
-        { label: '展开到第 1 层', onSelect: () => handleExpandToDepth(1) },
-        { label: '展开到第 2 层', onSelect: () => handleExpandToDepth(2) },
-        { label: '展开到第 3 层', onSelect: () => handleExpandToDepth(3) },
-        { label: '聚焦当前分支', onSelect: () => selectedNodeId && handleFocusBranch(selectedNodeId), disabled: !selectedNodeId },
-        { label: '退出分支聚焦', onSelect: handleExitBranchFocus, disabled: !focusedRootId },
-        { label: showMiniMap ? '隐藏小地图' : '显示小地图', onSelect: () => setShowMiniMap((visible) => !visible) },
-        {
-          label: '专注模式',
-          onSelect: () => setIsFocusMode(true),
-          dividerBefore: true,
-        },
-        {
-          label: '性能测试',
-          onSelect: () => setActiveDrawer('performance'),
-        },
-      ],
-    },
-    {
-      id: 'plugins',
-      label: '插件',
-      items: [
-        {
-          label: '插件管理',
-          onSelect: () => setIsPluginManagerVisible(true),
-        },
-        {
-          label: '本地插件中心',
-          onSelect: () => setIsPluginManagerVisible(true),
-        },
-        {
-          label: '插件开发者工作台',
-          onSelect: () => setIsPluginManagerVisible(true),
-        },
-        {
-          label: '插件诊断中心',
-          onSelect: () => setIsPluginManagerVisible(true),
-        },
-        {
-          label: '重新加载插件',
-          onSelect: () => void runPluginCommand('builtin.reloadPlugins'),
-          dividerBefore: true,
-        },
-        ...(isDesktopApp
-          ? [
-              {
-                label: '打开插件目录',
-                onSelect: () =>
-                  void runPluginCommand('builtin.openPluginDirectory'),
-              },
-            ]
-          : []),
-        ...pluginMenuGroups.map((group, index) => ({
-          label: group.pluginName,
-          dividerBefore: index === 0,
-          children: group.items.map((menu) => ({
-            label: menu.label,
-            onSelect: () =>
-              void runPluginCommand(
-                menu.command,
-                group.pluginId,
-                undefined,
-                menu.id,
-              ),
-          })),
-        })),
-      ],
-    },
-    {
-      id: 'help',
-      label: '帮助',
-      items: [
-        {
-          label: '命令面板（Ctrl+K）',
-          onSelect: openCommandPalette,
-        },
-        {
-          label: '快捷键',
-          onSelect: () => setIsShortcutHelpVisible(true),
-        },
-        {
-          label: '使用指南',
-          onSelect: () =>
-            showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
-        },
-        {
-          label: '插件开发文档',
-          onSelect: () => void handleOpenPluginDevelopmentDocs(),
-        },
-        {
-          label: '关于 Local Mindmap',
-          onSelect: () =>
-            showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
-        },
-      ],
-    },
+    { id: 'file', label: '文件', items: [
+      { id: 'new', label: '新建', children: [
+        { id: 'blank', label: '新建空白思维导图', execute: handleCreateMindmap },
+        { id: 'template', label: '从模板新建', execute: () => setActiveWorkspacePanel('templates') },
+      ] },
+      { id: 'open', label: '打开', children: [
+        { id: 'mind', label: '打开 .lmind 文件', shortcut: 'Ctrl+O', execute: () => void handleOpenMindmap() },
+        { id: 'templates', label: '打开模板库', checked: activeWorkspacePanel === 'templates', execute: () => setActiveWorkspacePanel('templates') },
+        { id: 'recent', label: '最近文件', children: recentFileMenu },
+      ] },
+      { id: 'save-version', label: '保存与版本', children: [
+        { id: 'save', label: '保存', shortcut: 'Ctrl+S', execute: handleSaveMindmap },
+        { id: 'save-as', label: '另存为 .lmind', execute: handleSaveMindmapAs },
+        { id: 'snapshot', label: '创建版本快照', execute: () => void handleCreateVersionSnapshot() },
+        { id: 'history', label: '版本历史', execute: () => void handleOpenVersionHistory() },
+      ] },
+      { id: 'recovery', label: '恢复与备份', children: [
+        { id: 'drafts', label: '恢复自动保存草稿', disabled: recoveryDrafts.length === 0, execute: () => setIsRecoveryCenterVisible(true) },
+        { id: 'center', label: '打开恢复中心', execute: () => setIsRecoveryCenterVisible(true) },
+        { id: 'health', label: missingRecentFiles.length ? `最近文件健康检查（${missingRecentFiles.length}）` : '最近文件健康检查', disabled: missingRecentFiles.length === 0, children: missingRecentFiles.flatMap((entry, index) => [
+          { id: `relocate-${index}`, label: `${entry.name}：重新定位`, execute: () => void handleRelocateRecentFile(entry) },
+          { id: `remove-${index}`, label: `${entry.name}：从最近文件移除`, danger: true, execute: () => void handleRemoveRecentFile(entry) },
+        ]) },
+        { id: 'backups', label: '打开备份目录', execute: () => void openUserDataSubdir(USER_DATA_PATHS.fileBackups) },
+      ] },
+      { id: 'import', label: '导入', children: [
+        { id: 'markdown', label: '导入 Markdown', execute: () => void handleImportMarkdown() }, { id: 'excel', label: '导入 Excel', execute: () => void handleImportExcel() }, { id: 'json', label: '导入 JSON', execute: () => void handleImportJson() }, { id: 'node-types', label: '导入节点类型包', execute: () => void handleImportNodeTypePack() }, { id: 'template-pack', label: '导入模板包', execute: () => void handleImportTemplatePack() },
+      ] },
+      { id: 'export', label: '导出', children: [
+        { id: 'markdown', label: '导出 Markdown', execute: handleExportMarkdown }, { id: 'excel', label: '导出 Excel', execute: handleExportExcel }, { id: 'json', label: '导出 JSON', execute: handleExportJson }, { id: 'png', label: '导出 PNG', execute: () => void handleExportImage('png') }, { id: 'jpg', label: '导出 JPG', execute: () => void handleExportImage('jpg') }, { id: 'txt', label: canExportTxt ? '导出 TXT' : '导出 TXT（需启用插件）', disabled: !canExportTxt, disabledReason: 'TXT 导出插件未启用', execute: handleExportTxt }, { id: 'node-types', label: '导出节点类型包', execute: handleExportNodeTypePack }, { id: 'template-pack', label: '导出模板包', execute: handleExportTemplatePack },
+      ] },
+      { id: 'location', label: '文件位置', children: [
+        { id: 'directory', label: '打开文件所在目录', disabled: !currentFilePath, execute: () => void handleOpenCurrentFileLocation() }, { id: 'path', label: '复制文件路径', disabled: !currentFilePath, execute: () => void handleCopyCurrentFilePath() },
+      ] },
+      { id: 'settings', label: '设置', separatorBefore: true, checked: activeWorkspacePanel === 'settings', execute: () => setActiveWorkspacePanel('settings') },
+    ] },
+    { id: 'edit', label: '编辑', items: [
+      { id: 'undo', label: '撤销', shortcut: 'Ctrl+Z', execute: handleUndo }, { id: 'redo', label: '重做', shortcut: 'Ctrl+Y', execute: handleRedo },
+      { id: 'find', label: '查找与替换', separatorBefore: true, children: [
+        { id: 'find', label: '查找', shortcut: 'Ctrl+F', checked: activeWorkspacePanel === 'search', execute: () => setActiveWorkspacePanel('search') }, { id: 'replace', label: '替换', shortcut: 'Ctrl+H', checked: activeWorkspacePanel === 'search', execute: () => setActiveWorkspacePanel('search') }, { id: 'next', label: '查找下一个', execute: () => jumpToMatch(activeMatchIndex + 1) }, { id: 'previous', label: '查找上一个', execute: () => jumpToMatch(activeMatchIndex - 1) },
+      ] },
+      { id: 'clipboard', label: '剪贴板', children: [{ id: 'cut', label: '剪切', shortcut: 'Ctrl+X', execute: handleCutNodes }, { id: 'copy', label: '复制', shortcut: 'Ctrl+C', execute: handleCopyNodes }, { id: 'paste', label: '粘贴', shortcut: 'Ctrl+V', execute: () => handlePasteNodes() }, { id: 'duplicate', label: '复制为同级节点', execute: handleDuplicateNodeAsSibling }] },
+      { id: 'selection', label: '选择', children: [{ id: 'all', label: '全选', shortcut: 'Ctrl+A', execute: handleSelectAllNodes }, { id: 'clear', label: '取消选择', execute: clearSelection }] },
+    ] },
+    { id: 'node', label: '节点', items: [
+      { id: 'new', label: '新建', children: [
+        { id: 'child', label: '新建子节点', shortcut: 'Tab', execute: () => handleAddChild(childNodeTypeId) },
+        { id: 'sibling', label: '新建同级节点', shortcut: 'Enter', disabled: !selectedNodeId || selectedNodeId === mindmap.id, execute: () => handleAddSibling(childNodeTypeId) },
+      ] },
+      { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: () => setIsRemarkPanelCollapsed(false) }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId, execute: handleDeleteNode }] },
+      { id: 'structure', label: '结构', children: [{ id: 'collapse', label: '折叠当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'expand', label: '展开当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'focus', label: '聚焦当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleFocusBranch(selectedNodeId); } }, { id: 'exit-focus', label: '退出分支聚焦', disabled: !focusedRootId, execute: handleExitBranchFocus }] },
+      { id: 'locate', label: '定位', children: [{ id: 'current', label: '定位当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true }); } }, { id: 'parent', label: '选择父节点', disabled: !selectedNodeId || !mindmapIndex.parentById.get(selectedNodeId), execute: () => { const id = selectedNodeId && mindmapIndex.parentById.get(selectedNodeId); if (id) locateNode(id, { exitFocusIfNeeded: true }); } }, { id: 'first-child', label: '选择第一个子节点', disabled: !selectedNodeId || !mindmapIndex.childrenById.get(selectedNodeId)?.length, execute: () => { const id = selectedNodeId && mindmapIndex.childrenById.get(selectedNodeId)?.[0]; if (id) locateNode(id, { exitFocusIfNeeded: true }); } }] },
+      { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: activeWorkspacePanel === 'node-types', execute: () => setActiveWorkspacePanel('node-types') }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }, { id: 'save-style', label: '保存当前样式为节点类型', disabled: !selectedNodeId, execute: () => handleSaveSelectedStyleAsNodeType(selectedNode.text.trim() ? `${selectedNode.text.trim()}样式` : '节点样式') }] },
+    ] },
+    { id: 'view', label: '视图', items: [
+      { id: 'panels', label: '面板', children: [{ id: 'outline', label: '大纲导航', checked: activeWorkspacePanel === 'outline', execute: () => setActiveWorkspacePanel((current) => current === 'outline' ? null : 'outline') }, { id: 'inspector', label: '右侧属性面板', checked: !isRemarkPanelCollapsed, execute: () => setIsRemarkPanelCollapsed((collapsed) => !collapsed) }, { id: 'minimap', label: '小地图', checked: showMiniMap, execute: () => setShowMiniMap((visible) => !visible) }, { id: 'performance', label: '性能信息', checked: activeWorkspacePanel === 'performance', execute: () => setActiveWorkspacePanel('performance') }] },
+      { id: 'zoom', label: '缩放与定位', children: [{ id: 'in', label: '放大', execute: () => setCanvasView((view) => zoomCanvasView(view, 'in')) }, { id: 'out', label: '缩小', execute: () => setCanvasView((view) => zoomCanvasView(view, 'out')) }, { id: 'reset', label: '重置缩放', execute: () => setCanvasView((view) => ({ ...view, scale: 1 })) }, { id: 'center', label: '居中画布', execute: () => setCanvasView(centerCanvasView()) }] },
+      { id: 'expand', label: '展开与折叠', children: [{ id: 'all', label: '全部展开', execute: handleExpandAll }, { id: 'none', label: '全部折叠', execute: handleCollapseAll }, { id: 'one', label: '展开到第 1 层', execute: () => handleExpandToDepth(1) }, { id: 'two', label: '展开到第 2 层', execute: () => handleExpandToDepth(2) }, { id: 'three', label: '展开到第 3 层', execute: () => handleExpandToDepth(3) }] },
+      { id: 'layout', label: '布局结构', children: [{ id: 'auto', label: '重新自动布局', execute: handleResetAutoLayout }, { id: 'focus', label: '专注模式', execute: () => setIsFocusMode(true) }] },
+      { id: 'performance-mode', label: '性能模式', children: [{ id: 'auto', label: '自动性能模式', checked: autoPerformanceMode, execute: () => setAutoPerformanceMode((enabled) => !enabled) }] },
+    ] },
+    { id: 'plugins', label: '插件', items: [
+      { id: 'center', label: '插件中心', children: [{ id: 'manage', label: '插件管理', execute: () => setIsPluginManagerVisible(true) }, { id: 'gallery', label: '本地插件中心', execute: () => setIsPluginManagerVisible(true) }, { id: 'import', label: '导入插件', execute: () => void handleInstallPlugin() }, { id: 'reload', label: '重新加载插件', execute: () => void runPluginCommand('builtin.reloadPlugins') }, ...(isDesktopApp ? [{ id: 'directory', label: '打开插件目录', execute: () => void runPluginCommand('builtin.openPluginDirectory') }] : [])] },
+      { id: 'commands', label: '插件命令', children: pluginCommandMenu.length ? pluginCommandMenu : [{ id: 'empty', label: '暂无已启用插件命令', disabled: true }] },
+      { id: 'developer', label: '开发者工具', children: [{ id: 'workbench', label: '插件开发者工作台', execute: () => setIsPluginManagerVisible(true) }, { id: 'docs', label: '打开插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
+      { id: 'diagnostics', label: '诊断与日志', children: [{ id: 'diagnostics', label: '插件诊断中心', execute: () => setIsPluginManagerVisible(true) }, { id: 'logs', label: '插件日志', execute: () => setIsPluginManagerVisible(true) }] },
+    ] },
+    { id: 'help', label: '帮助', items: [
+      { id: 'usage', label: '使用帮助', children: [{ id: 'guide', label: '使用指南', execute: () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。') }, { id: 'shortcuts', label: '快捷键', execute: () => setIsShortcutHelpVisible(true) }, { id: 'palette', label: '命令面板（Ctrl+K）', execute: openCommandPalette }] },
+      { id: 'docs', label: '开发文档', children: [{ id: 'plugin', label: '插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
+      { id: 'about', label: '关于', children: [{ id: 'local-mindmap', label: '关于 Local Mindmap', execute: () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。') }] },
+    ] },
   ];
 
   return (
@@ -5957,9 +5770,6 @@ export function App() {
           saveStatus={effectiveFileSaveStatus}
           saveStatusLabel={fileStatusLabel[effectiveFileSaveStatus]}
           onOpenFileStatus={() => setIsFileStatusVisible(true)}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          onQuickSave={handleSaveMindmap}
         />
       ) : null}
 
@@ -5985,29 +5795,27 @@ export function App() {
       <div
         className={[
           'app-body',
-          activeDrawer && !isFocusMode ? 'has-drawer' : '',
+          activeWorkspacePanel && !isFocusMode ? 'has-drawer' : '',
           isFocusMode ? 'is-focus-mode' : '',
         ]
           .filter(Boolean)
           .join(' ')}
       >
-        {!isFocusMode ? (
-          <LeftResourcePanel
-            activeView={activeDrawer}
-            title={activeDrawer ? drawerTitle[activeDrawer] : '工作区'}
-            onViewChange={(view) => {
-              if (view === 'plugins') {
-                setIsPluginManagerVisible(true);
-                setActiveDrawer(null);
-                return;
-              }
-              setActiveDrawer(view);
-            }}
-          >
-            {activeDrawer ? (
-              <>
+        {!isFocusMode && activeWorkspacePanel ? (
+          <>
+            <button
+              type="button"
+              className="workspace-panel-backdrop"
+              aria-label="关闭工作面板"
+              onClick={() => setActiveWorkspacePanel(null)}
+            />
+            <WorkspacePanelHost
+              id={activeWorkspacePanel}
+              title={drawerTitle[activeWorkspacePanel]}
+              onClose={() => setActiveWorkspacePanel(null)}
+            >
 
-            {activeDrawer === 'templates' ? (
+            {activeWorkspacePanel === 'templates' ? (
               <section className="feature-panel" aria-label="模板库">
                 <label className="resource-search-shell">
                   <span aria-hidden="true">⌕</span>
@@ -6198,7 +6006,7 @@ export function App() {
               </section>
             ) : null}
 
-            {activeDrawer === 'node-types' ? (
+            {activeWorkspacePanel === 'node-types' ? (
               <section className="feature-panel node-type-panel" aria-label="节点类型">
                 <div className="aligned-form node-type-form">
               <label>
@@ -6397,7 +6205,7 @@ export function App() {
               </section>
             ) : null}
 
-            {activeDrawer === 'search' ? (
+            {activeWorkspacePanel === 'search' ? (
               <section className="feature-panel" aria-label="查找替换">
                 <div className="panel-heading">
                   <h2>查找替换</h2>
@@ -6477,34 +6285,18 @@ export function App() {
               </section>
             ) : null}
 
-            {activeDrawer === 'performance' ? (
+            {activeWorkspacePanel === 'performance' ? (
               <>
                 <PerformanceInfoPanel metrics={performanceMetrics} cullingEnabled={isViewportCullingEnabled} onReset={() => setPerformanceMetrics(EMPTY_PERFORMANCE_METRICS)} />
                 <PerformancePanel rootNode={mindmap} nodeTypes={nodeTypes} themeId={themeId} canExportTxt={canExportTxt} result={performanceResult} onGenerate={handleGeneratePerformanceMindmap} onResultChange={setPerformanceResult} onMessage={showMessage} />
               </>
             ) : null}
 
-            {activeDrawer === 'outline' ? (
+            {activeWorkspacePanel === 'outline' ? (
               <OutlinePanel index={mindmapIndex} selectedNodeId={selectedNodeId} focusedRootId={focusedRootId} onLocate={(id) => locateNode(id, { exitFocusIfNeeded: true })} onToggle={handleToggleCollapse} onFocus={handleFocusBranch} />
             ) : null}
 
-            {activeDrawer === 'plugins' ? (
-              <section className="feature-panel" aria-label="插件管理入口">
-                <div className="panel-heading">
-                  <h2>插件管理</h2>
-                  <span className="panel-note">{plugins.length} 个插件</span>
-                </div>
-                <button
-                  type="button"
-                  className="secondary-action"
-                  onClick={() => setIsPluginManagerVisible(true)}
-                >
-                  打开插件管理面板
-                </button>
-              </section>
-            ) : null}
-
-            {activeDrawer === 'settings' ? (
+            {activeWorkspacePanel === 'settings' ? (
               <section className="feature-panel settings-panel" aria-label="系统设置">
                 <div className="panel-heading">
                   <h2>系统设置</h2>
@@ -6650,9 +6442,8 @@ export function App() {
                 </section>
               </section>
             ) : null}
-              </>
-            ) : null}
-          </LeftResourcePanel>
+            </WorkspacePanelHost>
+          </>
         ) : null}
 
         <div
@@ -6812,26 +6603,16 @@ export function App() {
           ) : (
             <RightInspectorPanel
               selectedNode={selectedNode}
-              selectedCount={selectedNodeIds.length}
               nodeTypes={availableNodeTypes}
-              editableNodeTypeIds={nodeTypes.map((nodeType) => nodeType.id)}
-              childNodeTypeId={childNodeTypeId}
-              themeId={themeId}
-              themes={availableThemes}
               remarkMode={remarkMode}
               activeRemarkMatch={
                 activeMatch?.field === 'remark' ? activeMatch : null
               }
-              onChildNodeTypeChange={setChildNodeTypeId}
-              onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
               onNodeStyleChange={handleSelectedNodeStyleChange}
               onSaveStyleAsNodeType={handleSaveSelectedStyleAsNodeType}
-              onApplyStyleToNodeType={handleApplySelectedStyleToNodeType}
               onResetNodeStyle={handleResetSelectedNodeStyle}
-              onThemeChange={handleThemeChange}
               onRemarkModeChange={setRemarkMode}
               onRemarkChange={handleRemarkChange}
-              onManageNodeTypes={() => setActiveDrawer('node-types')}
               onCollapse={() => setIsRemarkPanelCollapsed(true)}
             />
           )
