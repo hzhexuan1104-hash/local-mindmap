@@ -32,6 +32,7 @@ import {
   shouldConfirmWorkflowPluginRun,
   shouldConfirmExternalPluginRun,
   uninstallPlugin,
+  validateExternalEntryPath,
   validatePluginManifest,
   type PluginManifest,
 } from '../plugins';
@@ -71,13 +72,17 @@ describe('external-command manifest validation', () => {
   });
 
   it('requires .exe for executable entries on Windows schema', () => {
-    const result = validatePluginManifest({
-      ...manifest,
-      runtime: 'executable',
-      entry: 'keyword-plugin.bin',
-    });
-    expect(result.valid).toBe(false);
-    expect(result.errors[0].message).toContain('必须是 .exe');
+    expect(
+      validateExternalEntryPath('keyword-plugin.bin', 'executable', true),
+    ).toContain('必须是 .exe');
+  });
+
+  it('accepts extensionless and .bin executable entries on Unix schema', () => {
+    expect(validateExternalEntryPath('keyword-plugin', 'executable', false)).toBeNull();
+    expect(validateExternalEntryPath('keyword-plugin.bin', 'executable', false)).toBeNull();
+    expect(validateExternalEntryPath('keyword-plugin.sh', 'executable', false)).toContain(
+      '暂不支持 Shell 脚本',
+    );
   });
 
   it.each(['commandLine', 'args', 'shell', 'script', 'code'])(
