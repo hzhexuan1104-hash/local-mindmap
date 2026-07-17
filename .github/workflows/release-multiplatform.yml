@@ -255,7 +255,18 @@ jobs:
 
       - name: Verify bundle format, version, and native architecture
         shell: bash
-        run: node scripts/ci/verify-release-assets.mjs --platform ${{ matrix.user_platform }} --arch ${{ matrix.user_arch }} --version ${{ needs.preflight.outputs.version }} --variant "${RELEASE_VARIANT:-}" --macos-signed ${{ github.event_name == 'push' && 'true' || 'false' }}
+        run: |
+          VERIFY_ARGS=(
+            --platform "${{ matrix.user_platform }}"
+            --arch "${{ matrix.user_arch }}"
+            --version "${{ needs.preflight.outputs.version }}"
+            --variant "${RELEASE_VARIANT:-}"
+            --macos-signed "${{ github.event_name == 'push' && 'true' || 'false' }}"
+          )
+          if [ "${{ matrix.user_platform }}" = "windows" ]; then
+            VERIFY_ARGS+=(--app-binary "src-tauri/target/${{ matrix.rust_target }}/release/local-mindmap.exe")
+          fi
+          node scripts/ci/verify-release-assets.mjs "${VERIFY_ARGS[@]}"
 
       - name: Write build provenance
         shell: bash

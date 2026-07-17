@@ -13,6 +13,11 @@ import {
 } from './release-utils.mjs';
 
 const MIN_ASSET_SIZE = 1024;
+const PE_HEADER_POINTER_OFFSET = 0x3c;
+const PE_SIGNATURE_SIZE = 4;
+const PE_MACHINE_SIZE = 2;
+export const PE_MACHINE_X86 = 0x14c;
+export const PE_MACHINE_X64 = 0x8664;
 
 export function validateAssetSet(directory, platform, arch, version, { variant = '' } = {}) {
   const expected = expectedAssets(platform, arch, version, { variant });
@@ -31,36 +36,98 @@ export function validateAssetSet(directory, platform, arch, version, { variant =
   return records;
 }
 
-function assertPeX64(path) {
-  const executable = readFileSync(path);
-  if (executable.subarray(0, 2).toString('ascii') !== 'MZ') {
-    throw new Error(`Windows 安装程序不是 PE 文件：${path}`);
-  }
-  const headerOffset = executable.readUInt32LE(0x3c);
-  if (executable.subarray(headerOffset, headerOffset + 4).toString('ascii') !== 'PE\0\0') {
-    throw new Error(`Windows 安装程序缺少 PE 头：${path}`);
-  }
-  const machine = executable.readUInt16LE(headerOffset + 4);
-  if (machine !== 0x8664) throw new Error(`Windows 安装程序架构错误，期望 x64，实际 machine=0x${machine.toString(16)}`);
+function formatPeMachine(machine) {
+  return `0x${machine.toString(16)}`;
 }
 
-function verifyWindows(directory, version) {
-  const [exe, msi] = expectedAssets('windows', 'x64', version).map((asset) => join(directory, asset.filename));
-  assertPeX64(exe);
+export function readPeMachine(path, description = 'PE 文件') {
+  const stats = statSync(path, { throwIfNoEntry: false });
+  if (!stats?.isFile()) throw new Error(`${description}不存在或不是文件：${path}`);
+  if (stats.size === 0) throw new Error(`${description}为空文件：${path}`);
+
+  const executable = readFileSync(path);
+  if (executable.length < 2 || executable.subarray(0, 2).toString('ascii') !== 'MZ') {
+    throw new Error(`${description}不是合法 PE 文件（缺少 MZ 头）：${path}`);
+  }
+  if (executable.length < PE_HEADER_POINTER_OFFSET + 4) {
+    throw new Error(`${description}不是合法 PE 文件（DOS 头长度不足）：${path}`);
+  }
+
+  const headerOffset = executable.readUInt32LE(PE_HEADER_POINTER_OFFSET);
+  const minimumPeHeaderLength = PE_SIGNATURE_SIZE + PE_MACHINE_SIZE;
+  if (headerOffset > executable.length - minimumPeHeaderLength) {
+    throw new Error(`${description}的 PE 头偏移越界：${path}`);
+  }
+  if (executable.subarray(headerOffset, headerOffset + PE_SIGNATURE_SIZE).toString('ascii') !== 'PE\0\0') {
+    throw new Error(`${description}缺少 PE\\0\\0 头：${path}`);
+  }
+  return executable.readUInt16LE(headerOffset + PE_SIGNATURE_SIZE);
+}
+
+export function assertValidPe(path, description) {
+  return readPeMachine(path, description);
+}
+
+export function assertPeArchitecture(path, expectedMachine, description) {
+  const machine = readPeMachine(path, description);
+  if (machine !== expectedMachine) {
+    throw new Error(`${description}架构错误，期望 machine=${formatPeMachine(expectedMachine)}，实际 machine=${formatPeMachine(machine)}：${path}`);
+  }
+  return machine;
+}
+
+export function inspectWindowsInstaller(exe, msi) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     '$exeVersion = (Get-Item -LiteralPath $env:RELEASE_EXE).VersionInfo.ProductVersion',
-    "if (-not $exeVersion -or $exeVersion -notlike \"*$env:RELEASE_VERSION*\") { throw \"EXE version metadata does not contain $env:RELEASE_VERSION\" }",
     '$installer = New-Object -ComObject WindowsInstaller.Installer',
     '$database = $installer.OpenDatabase($env:RELEASE_MSI, 0)',
     '$view = $database.OpenView("SELECT `Value` FROM `Property` WHERE `Property` = \'ProductVersion\'")',
     '$view.Execute()',
     '$record = $view.Fetch()',
-    "if (-not $record -or $record.StringData(1) -ne $env:RELEASE_VERSION) { throw \"MSI ProductVersion does not match $env:RELEASE_VERSION\" }",
+    "if (-not $record) { throw 'MSI 缺少 ProductVersion 属性' }",
+    '$summary = $installer.SummaryInformation($env:RELEASE_MSI, 0)',
+    '$template = [string]$summary.Property(7)',
+    '[pscustomobject]@{ installerProductVersion = [string]$exeVersion; msiProductVersion = [string]$record.StringData(1); msiTemplateSummary = $template } | ConvertTo-Json -Compress',
   ].join('; ');
-  runChecked('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, RELEASE_EXE: exe, RELEASE_MSI: msi, RELEASE_VERSION: version },
+  const output = runChecked('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: { ...process.env, RELEASE_EXE: exe, RELEASE_MSI: msi },
   });
+  try {
+    return JSON.parse(output);
+  } catch (error) {
+    throw new Error(`无法解析 Windows 安装程序元数据：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function assertWindowsInstallerMetadata(metadata, version) {
+  if (metadata?.installerProductVersion !== version) {
+    throw new Error(`NSIS ProductVersion 不匹配，期望 ${version}，实际 ${metadata?.installerProductVersion || '空'}`);
+  }
+  if (metadata?.msiProductVersion !== version) {
+    throw new Error(`MSI ProductVersion 不匹配，期望 ${version}，实际 ${metadata?.msiProductVersion || '空'}`);
+  }
+  const templateSummary = typeof metadata?.msiTemplateSummary === 'string' ? metadata.msiTemplateSummary : '';
+  const msiPlatform = templateSummary.split(';', 1)[0].trim();
+  if (msiPlatform.toLowerCase() !== 'x64') {
+    throw new Error(`MSI Template Summary platform 不是 x64：${templateSummary || '空'}`);
+  }
+  return { msiPlatform: 'x64' };
+}
+
+export function verifyWindows(directory, version, appBinary, { inspectInstaller = inspectWindowsInstaller } = {}) {
+  if (!appBinary) throw new Error('Windows 原生架构验证缺少必填参数 --app-binary');
+  const [exe, msi] = expectedAssets('windows', 'x64', version).map((asset) => join(directory, asset.filename));
+  const installerMachine = assertValidPe(exe, 'NSIS 安装程序');
+  const applicationMachine = assertPeArchitecture(appBinary, PE_MACHINE_X64, 'Local Mindmap 应用主程序');
+  const metadata = inspectInstaller(exe, msi);
+  const { msiPlatform } = assertWindowsInstallerMetadata(metadata, version);
+  return {
+    installerMachine: formatPeMachine(installerMachine),
+    applicationMachine: formatPeMachine(applicationMachine),
+    applicationArchitecture: 'x64',
+    msiPlatform,
+  };
 }
 
 function mountedMacApp(mountPoint) {
@@ -136,13 +203,28 @@ export function main() {
     const variant = typeof args.variant === 'string' && args.variant ? `_${args.variant}` : '';
     const signed = args['macos-signed'] === 'true';
     const records = validateAssetSet(directory, platform, arch, version, { variant });
+    if (platform === 'windows' && args['skip-native'] !== undefined) {
+      throw new Error('Windows 发布资产不允许使用 --skip-native 绕过原生架构验证。');
+    }
+    let nativeVerification;
     if (!args['skip-native']) {
-      if (platform === 'windows') verifyWindows(directory, version);
+      if (platform === 'windows') {
+        const appBinary = resolve(requireArg(args, 'app-binary'));
+        nativeVerification = verifyWindows(directory, version, appBinary);
+      }
       else if (platform === 'macos') verifyMacos(directory, arch, version, signed);
       else if (platform === 'uos') verifyUos(directory, arch, version);
       else throw new Error(`不支持的验证平台：${platform}`);
     }
-    const verification = { platform, arch, version, signed, verifiedAt: new Date().toISOString(), assets: records };
+    const verification = {
+      platform,
+      arch,
+      version,
+      signed,
+      verifiedAt: new Date().toISOString(),
+      assets: records,
+      ...(nativeVerification ? { nativeVerification } : {}),
+    };
     const out = resolve(args.out ?? join(directory, `verification-${platform}-${arch}.json`));
     writeJson(out, verification);
     console.log(JSON.stringify(verification, null, 2));
