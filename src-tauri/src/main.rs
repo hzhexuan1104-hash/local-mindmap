@@ -522,7 +522,10 @@ fn backup_file_name(source_path: &Path, path_hash: &str) -> String {
         .unwrap_or("mindmap")
         .chars()
         .map(|character| {
-            if matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+            if matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            ) {
                 '-'
             } else {
                 character
@@ -666,20 +669,32 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
     {
         let mut file = fs::File::create(&temp_path).map_err(|error| {
-            format!("Failed to create temporary file `{}`: {error}", temp_path.display())
+            format!(
+                "Failed to create temporary file `{}`: {error}",
+                temp_path.display()
+            )
         })?;
         file.write_all(bytes).map_err(|error| {
-            format!("Failed to write temporary file `{}`: {error}", temp_path.display())
+            format!(
+                "Failed to write temporary file `{}`: {error}",
+                temp_path.display()
+            )
         })?;
         file.sync_all().map_err(|error| {
-            format!("Failed to flush temporary file `{}`: {error}", temp_path.display())
+            format!(
+                "Failed to flush temporary file `{}`: {error}",
+                temp_path.display()
+            )
         })?;
     }
 
     if path.is_file() {
         fs::copy(path, &restore_path).map_err(|error| {
             let _ = fs::remove_file(&temp_path);
-            format!("Failed to prepare restore copy `{}`: {error}", restore_path.display())
+            format!(
+                "Failed to prepare restore copy `{}`: {error}",
+                restore_path.display()
+            )
         })?;
     }
 
@@ -689,7 +704,10 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
             fs::remove_file(path).map_err(|error| {
                 let _ = fs::remove_file(&temp_path);
                 let _ = fs::remove_file(&restore_path);
-                format!("Failed to replace existing file `{}`: {error}", path.display())
+                format!(
+                    "Failed to replace existing file `{}`: {error}",
+                    path.display()
+                )
             })?;
         }
     }
@@ -700,7 +718,10 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         }
         let _ = fs::remove_file(&temp_path);
         let _ = fs::remove_file(&restore_path);
-        return Err(format!("Failed to atomically replace `{}`: {error}", path.display()));
+        return Err(format!(
+            "Failed to atomically replace `{}`: {error}",
+            path.display()
+        ));
     }
 
     let _ = fs::remove_file(&restore_path);
@@ -1006,38 +1027,81 @@ fn validate_external_entry_path(entry: &str, runtime: &str) -> Result<(), String
         return Err("runtime=python 时 entry 必须是 .py 文件。".to_string());
     }
     if runtime == "executable" {
-        if let Some(error) = external_executable_entry_error_for_platform(&normalized, cfg!(target_os = "windows")) {
-            return Err(error);
+        if let Some(error) =
+            executable_entry_path_error_for_platform(&normalized, cfg!(target_os = "windows"))
+        {
+            return Err(error.message);
         }
     }
     Ok(())
 }
 
-fn external_executable_entry_error_for_platform(entry: &str, is_windows: bool) -> Option<String> {
+#[derive(Debug, Clone)]
+struct ExecutableEntryValidationError {
+    code: &'static str,
+    message: String,
+}
+
+impl ExecutableEntryValidationError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+fn executable_entry_path_error_for_platform(
+    entry: &str,
+    is_windows: bool,
+) -> Option<ExecutableEntryValidationError> {
     let lower = entry.to_ascii_lowercase();
     if lower.ends_with(".dll") {
-        return Some("runtime=executable 不支持 DLL。".to_string());
+        return Some(ExecutableEntryValidationError::new(
+            "executable-entry-dll-forbidden",
+            "runtime=executable 不支持 DLL。",
+        ));
     }
     if is_windows && !lower.ends_with(".exe") {
-        return Some("Windows 下 runtime=executable 时 entry 必须是 .exe 文件。".to_string());
+        return Some(ExecutableEntryValidationError::new(
+            "executable-entry-invalid",
+            "Windows 下 runtime=executable 时 entry 必须是 .exe 文件。",
+        ));
     }
     if !is_windows && lower.ends_with(".sh") {
-        return Some("macOS/Linux 下 runtime=executable 暂不支持 Shell 脚本。".to_string());
+        return Some(ExecutableEntryValidationError::new(
+            "executable-entry-script-forbidden",
+            "macOS/Linux 下 runtime=executable 暂不支持 Shell 脚本。",
+        ));
     }
     None
 }
 
-fn validate_executable_entry_file(path: &Path) -> Result<(), String> {
+fn validate_executable_entry_file(path: &Path) -> Result<(), ExecutableEntryValidationError> {
     if !path.is_file() {
-        return Err(format!("可执行插件入口不存在或不是普通文件：{}", path.display()));
+        return Err(ExecutableEntryValidationError::new(
+            "executable-entry-not-regular-file",
+            format!("可执行插件入口不存在或不是普通文件：{}", path.display()),
+        ));
     }
-    let header = fs::read(path).map_err(|error| format!("无法读取可执行插件入口：{error}"))?;
+    let header = fs::read(path).map_err(|error| {
+        ExecutableEntryValidationError::new(
+            "executable-entry-read-failed",
+            format!("无法读取可执行插件入口：{error}"),
+        )
+    })?;
     if header.len() < 4 {
-        return Err("可执行插件入口文件过小。".to_string());
+        return Err(ExecutableEntryValidationError::new(
+            "executable-entry-native-binary-invalid",
+            "可执行插件入口文件过小。",
+        ));
     }
     if cfg!(target_os = "windows") {
         if &header[..2] != b"MZ" {
-            return Err("Windows 可执行插件入口必须是 PE 二进制文件。".to_string());
+            return Err(ExecutableEntryValidationError::new(
+                "executable-entry-native-binary-invalid",
+                "Windows 可执行插件入口必须是 PE 二进制文件。",
+            ));
         }
         return Ok(());
     }
@@ -1046,13 +1110,21 @@ fn validate_executable_entry_file(path: &Path) -> Result<(), String> {
     {
         use std::os::unix::fs::PermissionsExt;
         if fs::metadata(path)
-            .map_err(|error| format!("无法读取可执行插件权限：{error}"))?
+            .map_err(|error| {
+                ExecutableEntryValidationError::new(
+                    "executable-entry-read-failed",
+                    format!("无法读取可执行插件权限：{error}"),
+                )
+            })?
             .permissions()
             .mode()
             & 0o111
             == 0
         {
-            return Err("macOS/Linux 可执行插件入口缺少执行权限。".to_string());
+            return Err(ExecutableEntryValidationError::new(
+                "executable-entry-not-executable",
+                "macOS/Linux 可执行插件入口缺少执行权限。",
+            ));
         }
     }
 
@@ -1067,7 +1139,10 @@ fn validate_executable_entry_file(path: &Path) -> Result<(), String> {
             | [0xbe, 0xba, 0xfe, 0xca]
     );
     if !native_binary {
-        return Err("macOS/Linux 可执行插件入口必须是原生二进制文件。".to_string());
+        return Err(ExecutableEntryValidationError::new(
+            "executable-entry-native-binary-invalid",
+            "macOS/Linux 可执行插件入口必须是原生二进制文件。",
+        ));
     }
     Ok(())
 }
@@ -1233,6 +1308,12 @@ fn extract_plugin_package(path: &Path, staging_dir: &Path) -> Result<(), String>
             .map_err(|error| format!("插件包解压失败：文件创建失败：{error}"))?;
         std::io::copy(&mut entry, &mut output)
             .map_err(|error| format!("插件包解压失败：文件写入失败：{error}"))?;
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(mode & 0o777))
+                .map_err(|error| format!("插件包解压失败：文件权限设置失败：{error}"))?;
+        }
     }
     Ok(())
 }
@@ -1839,7 +1920,8 @@ where
     }
     if let Some(entry) = stored_manifest.get("entry").and_then(Value::as_str) {
         let entry = validate_safe_entry_path(entry)?;
-        if !staging_dir.join(Path::new(&entry)).is_file() {
+        let entry_path = staging_dir.join(Path::new(&entry));
+        if !entry_path.is_file() {
             let cleanup_error = remove_path_if_exists(&staging_dir).err();
             return Err(format!(
                 "导入失败：插件入口文件不存在：{entry}。{}",
@@ -1847,6 +1929,20 @@ where
                     .map(|cleanup| format!("临时目录回滚失败：{cleanup}"))
                     .unwrap_or_default()
             ));
+        }
+        if stored_manifest.get("pluginType").and_then(Value::as_str) == Some("external-command")
+            && stored_manifest.get("runtime").and_then(Value::as_str) == Some("executable")
+        {
+            if let Err(error) = validate_executable_entry_file(&entry_path) {
+                let cleanup_error = remove_path_if_exists(&staging_dir).err();
+                return Err(format!(
+                    "导入失败：{}{}",
+                    error.message,
+                    cleanup_error
+                        .map(|cleanup| format!("；临时目录回滚失败：{cleanup}"))
+                        .unwrap_or_default()
+                ));
+            }
         }
     }
 
@@ -3273,15 +3369,20 @@ fn validate_dev_plugin_project_at(root: &Path, plugin_id: &str) -> DevPluginVali
                         "开发者工作台的 Python 模板 entry 必须是 main.py。",
                     ));
                 }
-                if plugin_type == "external-command"
-                    && result.runtime.as_deref() == Some("executable")
-                    && external_executable_entry_error_for_platform(&normalized_entry, cfg!(target_os = "windows")).is_some()
-                {
+                let executable_entry_error = (plugin_type == "external-command"
+                    && result.runtime.as_deref() == Some("executable"))
+                .then(|| {
+                    executable_entry_path_error_for_platform(
+                        &normalized_entry,
+                        cfg!(target_os = "windows"),
+                    )
+                })
+                .flatten();
+                if let Some(error) = executable_entry_error.as_ref() {
                     result.errors.push(validation_issue(
-                        "executable-entry-invalid",
+                        error.code,
                         Some("entry"),
-                        external_executable_entry_error_for_platform(&normalized_entry, cfg!(target_os = "windows"))
-                            .expect("executable entry error should be present"),
+                        error.message.clone(),
                     ));
                 }
                 let entry_path = project_dir.join(Path::new(&normalized_entry));
@@ -3291,6 +3392,17 @@ fn validate_dev_plugin_project_at(root: &Path, plugin_id: &str) -> DevPluginVali
                         Some("entry"),
                         format!("待补充 entry 文件：{normalized_entry}。entry 缺失时不可打包。"),
                     ));
+                } else if executable_entry_error.is_none()
+                    && plugin_type == "external-command"
+                    && result.runtime.as_deref() == Some("executable")
+                {
+                    if let Err(error) = validate_executable_entry_file(&entry_path) {
+                        result.errors.push(validation_issue(
+                            error.code,
+                            Some("entry"),
+                            error.message,
+                        ));
+                    }
                 }
             }
             Err(error) => {
@@ -4192,6 +4304,8 @@ enum PluginDiagnosticCategory {
 #[serde(rename_all = "camelCase")]
 struct PluginDiagnosticItem {
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
     severity: PluginDiagnosticSeverity,
     status: PluginDiagnosticStatus,
     category: PluginDiagnosticCategory,
@@ -4293,6 +4407,23 @@ fn push_diagnostic_item(
     path: Option<String>,
     fix_action: Option<String>,
 ) {
+    push_diagnostic_item_with_code(
+        items, severity, status, category, None, plugin_id, title, message, path, fix_action,
+    );
+}
+
+fn push_diagnostic_item_with_code(
+    items: &mut Vec<PluginDiagnosticItem>,
+    severity: PluginDiagnosticSeverity,
+    status: PluginDiagnosticStatus,
+    category: PluginDiagnosticCategory,
+    code: Option<&str>,
+    plugin_id: Option<String>,
+    title: impl Into<String>,
+    message: impl Into<String>,
+    path: Option<String>,
+    fix_action: Option<String>,
+) {
     let fixable = matches!(status, PluginDiagnosticStatus::Fixable) && fix_action.is_some();
     let title = title.into();
     let id_source = plugin_id
@@ -4314,6 +4445,7 @@ fn push_diagnostic_item(
             },
             &format!("{}-{}", title, id_source),
         ),
+        code: code.map(str::to_string),
         severity,
         status,
         category,
@@ -4361,26 +4493,47 @@ fn registry_sort_key(value: &Value) -> String {
 
 fn is_url_like(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower.contains("://") || lower.starts_with("http:") || lower.starts_with("https:") || lower.starts_with("file:")
+    lower.contains("://")
+        || lower.starts_with("http:")
+        || lower.starts_with("https:")
+        || lower.starts_with("file:")
 }
 
 fn entry_security_problem(entry: &str) -> Option<(&'static str, PluginDiagnosticSeverity)> {
     let normalized = entry.replace('\\', "/");
     let lower = normalized.to_ascii_lowercase();
     if is_url_like(&normalized) {
-        return Some(("entry URL is not allowed.", PluginDiagnosticSeverity::Critical));
+        return Some((
+            "entry URL is not allowed.",
+            PluginDiagnosticSeverity::Critical,
+        ));
     }
-    if normalized.starts_with('/') || normalized.starts_with("//") || normalized.as_bytes().get(1) == Some(&b':') {
-        return Some(("entry absolute path is not allowed.", PluginDiagnosticSeverity::Critical));
+    if normalized.starts_with('/')
+        || normalized.starts_with("//")
+        || normalized.as_bytes().get(1) == Some(&b':')
+    {
+        return Some((
+            "entry absolute path is not allowed.",
+            PluginDiagnosticSeverity::Critical,
+        ));
     }
     if normalized.split('/').any(|segment| segment == "..") {
-        return Some(("entry parent traversal is not allowed.", PluginDiagnosticSeverity::Critical));
+        return Some((
+            "entry parent traversal is not allowed.",
+            PluginDiagnosticSeverity::Critical,
+        ));
     }
     if normalized.split('/').any(|segment| segment.contains(':')) {
-        return Some(("entry alternate data stream or drive separator is not allowed.", PluginDiagnosticSeverity::Critical));
+        return Some((
+            "entry alternate data stream or drive separator is not allowed.",
+            PluginDiagnosticSeverity::Critical,
+        ));
     }
     if lower.ends_with(".dll") {
-        return Some(("DLL entries are not supported.", PluginDiagnosticSeverity::Critical));
+        return Some((
+            "DLL entries are not supported.",
+            PluginDiagnosticSeverity::Critical,
+        ));
     }
     None
 }
@@ -4490,7 +4643,10 @@ fn scan_registry_diagnostics(
     let installed_set = installed_dirs.iter().cloned().collect::<HashSet<_>>();
     let mut seen: HashMap<String, Vec<(usize, &Value)>> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
-        let plugin_id = entry.get("pluginId").and_then(Value::as_str).unwrap_or_default();
+        let plugin_id = entry
+            .get("pluginId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let path = Some(format!("{USER_PLUGIN_REGISTRY_PATH}#{index}"));
         if plugin_id.trim().is_empty() {
             push_diagnostic_item(
@@ -4520,7 +4676,9 @@ fn scan_registry_diagnostics(
             );
             continue;
         }
-        seen.entry(plugin_id.to_string()).or_default().push((index, entry));
+        seen.entry(plugin_id.to_string())
+            .or_default()
+            .push((index, entry));
         if entry.get("enabled").and_then(Value::as_bool).is_none() {
             push_diagnostic_item(
                 items,
@@ -4547,7 +4705,10 @@ fn scan_registry_diagnostics(
                 Some(format!("set-registry-trusted:{plugin_id}")),
             );
         }
-        if !entry.get("builtIn").and_then(Value::as_bool).unwrap_or(false)
+        if !entry
+            .get("builtIn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
             && !installed_set.contains(plugin_id)
         {
             push_diagnostic_item(
@@ -4562,7 +4723,10 @@ fn scan_registry_diagnostics(
                 Some(format!("remove-registry-orphan:{plugin_id}")),
             );
         }
-        if entry.get("trusted").and_then(Value::as_bool).unwrap_or(false)
+        if entry
+            .get("trusted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
             && !installed_set.contains(plugin_id)
         {
             push_diagnostic_item(
@@ -4710,7 +4874,11 @@ fn scan_installed_diagnostics(
             );
         }
         if let Err(error) = validate_declarative_manifest(
-            if manifest_plugin_id.is_empty() { plugin_dir_name } else { &manifest_plugin_id },
+            if manifest_plugin_id.is_empty() {
+                plugin_dir_name
+            } else {
+                &manifest_plugin_id
+            },
             &manifest,
         ) {
             push_diagnostic_item(
@@ -4718,7 +4886,11 @@ fn scan_installed_diagnostics(
                 PluginDiagnosticSeverity::Error,
                 PluginDiagnosticStatus::Failed,
                 PluginDiagnosticCategory::Manifest,
-                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                Some(if manifest_plugin_id.is_empty() {
+                    plugin_dir_name.clone()
+                } else {
+                    manifest_plugin_id.clone()
+                }),
                 "Manifest schema errors",
                 error,
                 Some(relative_manifest_path.clone()),
@@ -4753,15 +4925,25 @@ fn scan_installed_diagnostics(
                 None,
             );
         }
-        let plugin_type = manifest.get("pluginType").and_then(Value::as_str).unwrap_or_default();
-        let runtime = manifest.get("runtime").and_then(Value::as_str).unwrap_or_default();
+        let plugin_type = manifest
+            .get("pluginType")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let runtime = manifest
+            .get("runtime")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !DECLARATIVE_PLUGIN_TYPES.contains(&plugin_type) {
             push_diagnostic_item(
                 items,
                 PluginDiagnosticSeverity::Error,
                 PluginDiagnosticStatus::Failed,
                 PluginDiagnosticCategory::Runtime,
-                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                Some(if manifest_plugin_id.is_empty() {
+                    plugin_dir_name.clone()
+                } else {
+                    manifest_plugin_id.clone()
+                }),
                 "Unknown pluginType",
                 format!("pluginType `{plugin_type}` is not supported."),
                 Some(relative_manifest_path.clone()),
@@ -4775,7 +4957,11 @@ fn scan_installed_diagnostics(
                     severity,
                     PluginDiagnosticStatus::Failed,
                     PluginDiagnosticCategory::Entry,
-                    Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                    Some(if manifest_plugin_id.is_empty() {
+                        plugin_dir_name.clone()
+                    } else {
+                        manifest_plugin_id.clone()
+                    }),
                     "Entry path is unsafe",
                     message,
                     Some(relative_manifest_path.clone()),
@@ -4789,7 +4975,11 @@ fn scan_installed_diagnostics(
                         PluginDiagnosticSeverity::Error,
                         PluginDiagnosticStatus::Failed,
                         PluginDiagnosticCategory::Entry,
-                        Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                        Some(if manifest_plugin_id.is_empty() {
+                            plugin_dir_name.clone()
+                        } else {
+                            manifest_plugin_id.clone()
+                        }),
                         "Entry file missing",
                         format!("Entry file `{entry}` does not exist."),
                         Some(format!("{plugin_path}/{entry}")),
@@ -4797,28 +4987,44 @@ fn scan_installed_diagnostics(
                     );
                 }
                 if plugin_type == "external-command" && runtime == "executable" {
-                    if let Some(error) = external_executable_entry_error_for_platform(entry, cfg!(target_os = "windows")) {
-                        push_diagnostic_item(
+                    if let Some(error) =
+                        executable_entry_path_error_for_platform(entry, cfg!(target_os = "windows"))
+                    {
+                        push_diagnostic_item_with_code(
                             items,
                             PluginDiagnosticSeverity::Error,
                             PluginDiagnosticStatus::Failed,
                             PluginDiagnosticCategory::Runtime,
-                            Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
-                            if cfg!(target_os = "windows") { "Executable entry is not .exe" } else { "Executable entry is unsupported" },
-                            error,
+                            Some(error.code),
+                            Some(if manifest_plugin_id.is_empty() {
+                                plugin_dir_name.clone()
+                            } else {
+                                manifest_plugin_id.clone()
+                            }),
+                            if cfg!(target_os = "windows") {
+                                "Executable entry is not .exe"
+                            } else {
+                                "Executable entry is unsupported"
+                            },
+                            error.message,
                             Some(relative_manifest_path.clone()),
                             None,
                         );
                     } else if entry_path.is_file() {
                         if let Err(error) = validate_executable_entry_file(&entry_path) {
-                            push_diagnostic_item(
+                            push_diagnostic_item_with_code(
                                 items,
                                 PluginDiagnosticSeverity::Error,
                                 PluginDiagnosticStatus::Failed,
                                 PluginDiagnosticCategory::Runtime,
-                                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                                Some(error.code),
+                                Some(if manifest_plugin_id.is_empty() {
+                                    plugin_dir_name.clone()
+                                } else {
+                                    manifest_plugin_id.clone()
+                                }),
                                 "Executable entry is unsafe",
-                                error,
+                                error.message,
                                 Some(relative_manifest_path.clone()),
                                 None,
                             );
@@ -4832,7 +5038,11 @@ fn scan_installed_diagnostics(
                 PluginDiagnosticSeverity::Error,
                 PluginDiagnosticStatus::Failed,
                 PluginDiagnosticCategory::Entry,
-                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                Some(if manifest_plugin_id.is_empty() {
+                    plugin_dir_name.clone()
+                } else {
+                    manifest_plugin_id.clone()
+                }),
                 "Entry missing",
                 "Executable plugin types must declare an entry file.",
                 Some(relative_manifest_path.clone()),
@@ -4845,7 +5055,11 @@ fn scan_installed_diagnostics(
                 PluginDiagnosticSeverity::Warning,
                 PluginDiagnosticStatus::Failed,
                 PluginDiagnosticCategory::Runtime,
-                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                Some(if manifest_plugin_id.is_empty() {
+                    plugin_dir_name.clone()
+                } else {
+                    manifest_plugin_id.clone()
+                }),
                 "runtime/pluginType mismatch",
                 "runtime should only be declared for pluginType=external-command.",
                 Some(relative_manifest_path.clone()),
@@ -4858,7 +5072,11 @@ fn scan_installed_diagnostics(
                 PluginDiagnosticSeverity::Info,
                 PluginDiagnosticStatus::Failed,
                 PluginDiagnosticCategory::Manifest,
-                Some(if manifest_plugin_id.is_empty() { plugin_dir_name.clone() } else { manifest_plugin_id.clone() }),
+                Some(if manifest_plugin_id.is_empty() {
+                    plugin_dir_name.clone()
+                } else {
+                    manifest_plugin_id.clone()
+                }),
                 "README missing",
                 "README.md is recommended for installed plugins.",
                 Some(format!("{plugin_path}/README.md")),
@@ -4915,7 +5133,11 @@ fn scan_dev_diagnostics(root: &Path, items: &mut Vec<PluginDiagnosticItem>) -> u
                 Some(plugin_id.clone()),
                 format!("Dev {}", error.code),
                 error.message.clone(),
-                error.field.clone().map(|field| format!("{relative_path}/{field}")).or(Some(relative_path.clone())),
+                error
+                    .field
+                    .clone()
+                    .map(|field| format!("{relative_path}/{field}"))
+                    .or(Some(relative_path.clone())),
                 None,
             );
         }
@@ -4928,7 +5150,11 @@ fn scan_dev_diagnostics(root: &Path, items: &mut Vec<PluginDiagnosticItem>) -> u
                 Some(plugin_id.clone()),
                 format!("Dev {}", warning.code),
                 warning.message.clone(),
-                warning.field.clone().map(|field| format!("{relative_path}/{field}")).or(Some(relative_path.clone())),
+                warning
+                    .field
+                    .clone()
+                    .map(|field| format!("{relative_path}/{field}"))
+                    .or(Some(relative_path.clone())),
                 None,
             );
         }
@@ -4938,7 +5164,11 @@ fn scan_dev_diagnostics(root: &Path, items: &mut Vec<PluginDiagnosticItem>) -> u
             PluginDiagnosticStatus::Passed,
             PluginDiagnosticCategory::Dev,
             Some(plugin_id.clone()),
-            if validation.can_package { "Dev project packageable" } else { "Dev project not packageable" },
+            if validation.can_package {
+                "Dev project packageable"
+            } else {
+                "Dev project not packageable"
+            },
             if validation.can_package {
                 "Developer project can be packaged."
             } else {
@@ -5030,7 +5260,9 @@ fn scan_gallery_diagnostics(items: &mut Vec<PluginDiagnosticItem>) -> usize {
                                 None,
                             );
                         }
-                        if manifest.get("pluginType").and_then(Value::as_str) != Some(item.plugin_type.as_str()) {
+                        if manifest.get("pluginType").and_then(Value::as_str)
+                            != Some(item.plugin_type.as_str())
+                        {
                             push_diagnostic_item(
                                 items,
                                 PluginDiagnosticSeverity::Warning,
@@ -5045,7 +5277,10 @@ fn scan_gallery_diagnostics(items: &mut Vec<PluginDiagnosticItem>) -> usize {
                         }
                         if let Some(entry) = manifest.get("entry").and_then(Value::as_str) {
                             if let Ok(entry) = validate_safe_entry_path(entry) {
-                                let directory = Path::new(&path).parent().and_then(Path::to_str).unwrap_or_default();
+                                let directory = Path::new(&path)
+                                    .parent()
+                                    .and_then(Path::to_str)
+                                    .unwrap_or_default();
                                 let entry_path = format!("{directory}/{entry}");
                                 if bundled_gallery_asset(&entry_path).is_none() {
                                     push_diagnostic_item(
@@ -5062,7 +5297,10 @@ fn scan_gallery_diagnostics(items: &mut Vec<PluginDiagnosticItem>) -> usize {
                                 }
                             }
                         }
-                        let directory = Path::new(&path).parent().and_then(Path::to_str).unwrap_or_default();
+                        let directory = Path::new(&path)
+                            .parent()
+                            .and_then(Path::to_str)
+                            .unwrap_or_default();
                         let readme_path = format!("{directory}/README.md");
                         if bundled_gallery_asset(&readme_path).is_none() {
                             push_diagnostic_item(
@@ -5123,13 +5361,20 @@ fn scan_package_diagnostics(root: &Path, items: &mut Vec<PluginDiagnosticItem>) 
     }
 }
 
-fn scan_plugin_diagnostics_at(root: &Path, scope: Option<&str>, fix_results: Vec<PluginDiagnosticFixResult>) -> Result<PluginDiagnosticReport, String> {
+fn scan_plugin_diagnostics_at(
+    root: &Path,
+    scope: Option<&str>,
+    fix_results: Vec<PluginDiagnosticFixResult>,
+) -> Result<PluginDiagnosticReport, String> {
     let scanned_at = diagnostic_iso_like_time();
     let mut items = Vec::new();
     let installed_root = root.join(USER_PLUGIN_INSTALLED_DIR);
-    fs::create_dir_all(&installed_root).map_err(|error| format!("Failed to create installed plugin directory: {error}"))?;
-    fs::create_dir_all(root.join(USER_PLUGIN_DEV_DIR)).map_err(|error| format!("Failed to create dev plugin directory: {error}"))?;
-    fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR)).map_err(|error| format!("Failed to create quarantine directory: {error}"))?;
+    fs::create_dir_all(&installed_root)
+        .map_err(|error| format!("Failed to create installed plugin directory: {error}"))?;
+    fs::create_dir_all(root.join(USER_PLUGIN_DEV_DIR))
+        .map_err(|error| format!("Failed to create dev plugin directory: {error}"))?;
+    fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR))
+        .map_err(|error| format!("Failed to create quarantine directory: {error}"))?;
     let installed_dirs = list_directories(&installed_root);
     let (registry_value, registry_read_items) = read_registry_for_diagnostics(root);
     items.extend(registry_read_items);
@@ -5148,7 +5393,9 @@ fn scan_plugin_diagnostics_at(root: &Path, scope: Option<&str>, fix_results: Vec
     let gallery_examples = if should_scan("gallery") {
         scan_gallery_diagnostics(&mut items)
     } else {
-        load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG).items.len()
+        load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG)
+            .items
+            .len()
     };
     if should_scan("package") {
         scan_package_diagnostics(root, &mut items);
@@ -5191,7 +5438,10 @@ fn scan_plugin_diagnostics_at(root: &Path, scope: Option<&str>, fix_results: Vec
 }
 
 #[tauri::command]
-fn scan_plugin_diagnostics(app: AppHandle, scope: Option<String>) -> Result<PluginDiagnosticReport, String> {
+fn scan_plugin_diagnostics(
+    app: AppHandle,
+    scope: Option<String>,
+) -> Result<PluginDiagnosticReport, String> {
     let root = ensure_user_data_root(&app)?;
     scan_plugin_diagnostics_at(&root, scope.as_deref(), vec![])
 }
@@ -5200,7 +5450,8 @@ fn backup_diagnostics_targets(root: &Path, actions: &[String]) -> Result<String,
     let timestamp = diagnostic_timestamp();
     let backup_rel = format!("{USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR}/{timestamp}");
     let backup_dir = root.join(&backup_rel);
-    fs::create_dir_all(&backup_dir).map_err(|error| format!("Failed to create diagnostics backup: {error}"))?;
+    fs::create_dir_all(&backup_dir)
+        .map_err(|error| format!("Failed to create diagnostics backup: {error}"))?;
     let registry_path = root.join(USER_PLUGIN_REGISTRY_PATH);
     if registry_path.exists() {
         fs::copy(&registry_path, backup_dir.join("plugin-registry.json"))
@@ -5208,16 +5459,21 @@ fn backup_diagnostics_targets(root: &Path, actions: &[String]) -> Result<String,
     }
     let mut move_log = Vec::new();
     for action in actions {
-        if let Some(plugin_id) = action.strip_prefix("strip-manifest-lifecycle:")
+        if let Some(plugin_id) = action
+            .strip_prefix("strip-manifest-lifecycle:")
             .or_else(|| action.strip_prefix("quarantine-installed:"))
             .or_else(|| action.strip_prefix("add-registry:"))
         {
             if is_safe_plugin_id(plugin_id) {
-                let manifest_path = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id).join(MANIFEST_FILE_NAME);
+                let manifest_path = root
+                    .join(USER_PLUGIN_INSTALLED_DIR)
+                    .join(plugin_id)
+                    .join(MANIFEST_FILE_NAME);
                 if manifest_path.is_file() {
                     let manifest_backup_dir = backup_dir.join("installed").join(plugin_id);
-                    fs::create_dir_all(&manifest_backup_dir)
-                        .map_err(|error| format!("Failed to create manifest backup dir: {error}"))?;
+                    fs::create_dir_all(&manifest_backup_dir).map_err(|error| {
+                        format!("Failed to create manifest backup dir: {error}")
+                    })?;
                     fs::copy(&manifest_path, manifest_backup_dir.join(MANIFEST_FILE_NAME))
                         .map_err(|error| format!("Failed to back up manifest: {error}"))?;
                 }
@@ -5248,13 +5504,22 @@ fn write_registry_array_for_fix(root: &Path, entries: Vec<Value>) -> Result<(), 
 }
 
 fn manifest_plugin_id_at(root: &Path, plugin_id: &str) -> Option<String> {
-    let manifest_path = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id).join(MANIFEST_FILE_NAME);
+    let manifest_path = root
+        .join(USER_PLUGIN_INSTALLED_DIR)
+        .join(plugin_id)
+        .join(MANIFEST_FILE_NAME);
     let raw = fs::read_to_string(manifest_path).ok()?;
     let manifest: Value = parse_json_without_bom(&raw).ok()?;
-    manifest.get("pluginId").and_then(Value::as_str).map(str::to_string)
+    manifest
+        .get("pluginId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
-fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<PluginDiagnosticFixResult>, String> {
+fn fix_plugin_diagnostics_at(
+    root: &Path,
+    actions: &[String],
+) -> Result<Vec<PluginDiagnosticFixResult>, String> {
     let backup_path = backup_diagnostics_targets(root, actions)?;
     let mut results = Vec::new();
     for action in actions {
@@ -5273,19 +5538,24 @@ fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<Plug
                 }
                 return Ok("Created empty plugin-registry.json.".to_string());
             }
-            if let Some(plugin_id) = action.strip_prefix("remove-registry-orphan:")
+            if let Some(plugin_id) = action
+                .strip_prefix("remove-registry-orphan:")
                 .or_else(|| action.strip_prefix("remove-registry-plugin:"))
             {
                 let entries = read_registry_array_for_fix(root)?;
                 let next = entries
                     .into_iter()
-                    .filter(|entry| entry.get("pluginId").and_then(Value::as_str) != Some(plugin_id))
+                    .filter(|entry| {
+                        entry.get("pluginId").and_then(Value::as_str) != Some(plugin_id)
+                    })
                     .collect::<Vec<_>>();
                 write_registry_array_for_fix(root, next)?;
                 return Ok(format!("Removed registry item `{plugin_id}`."));
             }
             if let Some(index_text) = action.strip_prefix("remove-registry-item:") {
-                let index = index_text.parse::<usize>().map_err(|error| format!("Invalid registry item index: {error}"))?;
+                let index = index_text
+                    .parse::<usize>()
+                    .map_err(|error| format!("Invalid registry item index: {error}"))?;
                 let mut entries = read_registry_array_for_fix(root)?;
                 if index < entries.len() {
                     entries.remove(index);
@@ -5315,7 +5585,9 @@ fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<Plug
                     }
                 }
                 write_registry_array_for_fix(root, entries)?;
-                return Ok(format!("Set trusted=false for `{plugin_id}` where missing."));
+                return Ok(format!(
+                    "Set trusted=false for `{plugin_id}` where missing."
+                ));
             }
             if let Some(plugin_id) = action.strip_prefix("dedupe-registry:") {
                 let entries = read_registry_array_for_fix(root)?;
@@ -5323,7 +5595,9 @@ fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<Plug
                 let mut next = Vec::new();
                 for entry in entries {
                     if entry.get("pluginId").and_then(Value::as_str) == Some(plugin_id) {
-                        if best.as_ref().is_none_or(|current| registry_sort_key(&entry) >= registry_sort_key(current)) {
+                        if best.as_ref().is_none_or(|current| {
+                            registry_sort_key(&entry) >= registry_sort_key(current)
+                        }) {
                             best = Some(entry);
                         }
                     } else {
@@ -5340,10 +5614,15 @@ fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<Plug
                 if !is_safe_plugin_id(plugin_dir_name) {
                     return Err("Unsafe pluginId; registry item not added.".to_string());
                 }
-                let manifest_id = manifest_plugin_id_at(root, plugin_dir_name)
-                    .ok_or_else(|| "Cannot add registry item because manifest is missing or invalid.".to_string())?;
+                let manifest_id =
+                    manifest_plugin_id_at(root, plugin_dir_name).ok_or_else(|| {
+                        "Cannot add registry item because manifest is missing or invalid."
+                            .to_string()
+                    })?;
                 let mut entries = read_registry_array_for_fix(root)?;
-                if !entries.iter().any(|entry| entry.get("pluginId").and_then(Value::as_str) == Some(manifest_id.as_str())) {
+                if !entries.iter().any(|entry| {
+                    entry.get("pluginId").and_then(Value::as_str) == Some(manifest_id.as_str())
+                }) {
                     entries.push(json!({
                         "pluginId": manifest_id,
                         "enabled": true,
@@ -5359,17 +5638,26 @@ fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<Plug
                 if !is_safe_plugin_id(plugin_id) {
                     return Err("Unsafe pluginId; manifest not changed.".to_string());
                 }
-                let manifest_path = root.join(USER_PLUGIN_INSTALLED_DIR).join(plugin_id).join(MANIFEST_FILE_NAME);
-                let raw = fs::read_to_string(&manifest_path).map_err(|error| format!("Failed to read manifest: {error}"))?;
-                let mut manifest: Value = parse_json_without_bom(&raw).map_err(|error| format!("Manifest JSON invalid: {error}"))?;
+                let manifest_path = root
+                    .join(USER_PLUGIN_INSTALLED_DIR)
+                    .join(plugin_id)
+                    .join(MANIFEST_FILE_NAME);
+                let raw = fs::read_to_string(&manifest_path)
+                    .map_err(|error| format!("Failed to read manifest: {error}"))?;
+                let mut manifest: Value = parse_json_without_bom(&raw)
+                    .map_err(|error| format!("Manifest JSON invalid: {error}"))?;
                 if let Some(object) = manifest.as_object_mut() {
                     object.remove("trusted");
                     object.remove("installedAt");
                     object.remove("updatedAt");
                 }
-                let raw = serde_json::to_string_pretty(&manifest).map_err(|error| format!("Failed to serialize manifest: {error}"))?;
-                fs::write(&manifest_path, raw).map_err(|error| format!("Failed to write manifest: {error}"))?;
-                return Ok(format!("Removed lifecycle fields from `{plugin_id}` manifest."));
+                let raw = serde_json::to_string_pretty(&manifest)
+                    .map_err(|error| format!("Failed to serialize manifest: {error}"))?;
+                fs::write(&manifest_path, raw)
+                    .map_err(|error| format!("Failed to write manifest: {error}"))?;
+                return Ok(format!(
+                    "Removed lifecycle fields from `{plugin_id}` manifest."
+                ));
             }
             if let Some(plugin_id) = action.strip_prefix("quarantine-installed:") {
                 if !is_safe_plugin_id(plugin_id) {
@@ -5383,14 +5671,19 @@ fn fix_plugin_diagnostics_at(root: &Path, actions: &[String]) -> Result<Vec<Plug
                 let target = root.join(USER_PLUGIN_QUARANTINE_DIR).join(&target_name);
                 fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR))
                     .map_err(|error| format!("Failed to create quarantine directory: {error}"))?;
-                fs::rename(&source, &target).map_err(|error| format!("Failed to move plugin to quarantine: {error}"))?;
+                fs::rename(&source, &target)
+                    .map_err(|error| format!("Failed to move plugin to quarantine: {error}"))?;
                 let entries = read_registry_array_for_fix(root).unwrap_or_default();
                 let next = entries
                     .into_iter()
-                    .filter(|entry| entry.get("pluginId").and_then(Value::as_str) != Some(plugin_id))
+                    .filter(|entry| {
+                        entry.get("pluginId").and_then(Value::as_str) != Some(plugin_id)
+                    })
                     .collect::<Vec<_>>();
                 let _ = write_registry_array_for_fix(root, next);
-                return Ok(format!("Moved plugin directory to {USER_PLUGIN_QUARANTINE_DIR}/{target_name}."));
+                return Ok(format!(
+                    "Moved plugin directory to {USER_PLUGIN_QUARANTINE_DIR}/{target_name}."
+                ));
             }
             Err("Unsupported or unsafe diagnostic fix action.".to_string())
         })();
@@ -5454,7 +5747,10 @@ fn sanitized_diagnostic_report_markdown(report: &PluginDiagnosticReport) -> Stri
                 item.id,
                 item.plugin_id.as_deref().unwrap_or("-"),
                 item.category,
-                item.path.as_deref().map(&scrub).unwrap_or_else(|| "-".to_string()),
+                item.path
+                    .as_deref()
+                    .map(&scrub)
+                    .unwrap_or_else(|| "-".to_string()),
                 item.fixable,
                 scrub(&item.message)
             ));
@@ -5493,15 +5789,21 @@ fn export_plugin_diagnostics_report(
     let timestamp = diagnostic_timestamp();
     match format.as_str() {
         "json" => {
-            let path = root.join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR).join(format!("diagnostics-report-{timestamp}.json"));
+            let path = root
+                .join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR)
+                .join(format!("diagnostics-report-{timestamp}.json"));
             let mut report = report.clone();
             report.user_data_dir = "<USER_DATA_DIR>".to_string();
-            let raw = serde_json::to_string_pretty(&report).map_err(|error| format!("Failed to serialize JSON report: {error}"))?;
-            fs::write(&path, raw).map_err(|error| format!("Failed to write JSON report: {error}"))?;
+            let raw = serde_json::to_string_pretty(&report)
+                .map_err(|error| format!("Failed to serialize JSON report: {error}"))?;
+            fs::write(&path, raw)
+                .map_err(|error| format!("Failed to write JSON report: {error}"))?;
             Ok(path.to_string_lossy().to_string())
         }
         "markdown" | "md" => {
-            let path = root.join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR).join(format!("diagnostics-report-{timestamp}.md"));
+            let path = root
+                .join(USER_PLUGIN_DIAGNOSTIC_REPORT_DIR)
+                .join(format!("diagnostics-report-{timestamp}.md"));
             fs::write(&path, sanitized_diagnostic_report_markdown(&report))
                 .map_err(|error| format!("Failed to write Markdown report: {error}"))?;
             Ok(path.to_string_lossy().to_string())
@@ -5807,8 +6109,19 @@ fn export_plugin_package_at(
             if !entry_path.is_file() {
                 return Err(format!("导出失败：entry 文件不存在：{entry}"));
             }
+            #[cfg(unix)]
+            let entry_options = {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&entry_path)
+                    .map_err(|error| format!("导出失败：entry 权限读取失败：{error}"))?
+                    .permissions()
+                    .mode();
+                options.unix_permissions(mode & 0o777)
+            };
+            #[cfg(not(unix))]
+            let entry_options = options;
             writer
-                .start_file(&entry, options)
+                .start_file(&entry, entry_options)
                 .map_err(|error| format!("导出失败：entry 写入失败：{error}"))?;
             let mut source = fs::File::open(&entry_path)
                 .map_err(|error| format!("导出失败：entry 读取失败：{error}"))?;
@@ -6636,14 +6949,20 @@ fn python_invocation_from_setting(python_path: &str) -> Result<PythonInvocation,
 
 fn python_candidate_invocations(python_path: &str) -> Result<Vec<PythonInvocation>, String> {
     if python_path.trim().is_empty() || python_path.trim().eq_ignore_ascii_case("auto") {
-        return Ok(python_candidate_specs_for_platform(cfg!(target_os = "windows"))
-            .into_iter()
-            .map(|(program, args)| PythonInvocation {
-                program: PathBuf::from(program),
-                args: args.iter().map(|arg| (*arg).to_string()).collect(),
-                display: if args.is_empty() { program.to_string() } else { format!("{program} {}", args.join(" ")) },
-            })
-            .collect());
+        return Ok(
+            python_candidate_specs_for_platform(cfg!(target_os = "windows"))
+                .into_iter()
+                .map(|(program, args)| PythonInvocation {
+                    program: PathBuf::from(program),
+                    args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                    display: if args.is_empty() {
+                        program.to_string()
+                    } else {
+                        format!("{program} {}", args.join(" "))
+                    },
+                })
+                .collect(),
+        );
     }
     Ok(vec![python_invocation_from_setting(python_path)?])
 }
@@ -6661,16 +6980,23 @@ fn probe_python_runtime(invocation: &PythonInvocation) -> Result<ExternalProcess
     )
 }
 
-fn resolve_python_runtime(python_path: &str) -> Result<(PythonInvocation, ExternalProcessResult), String> {
+fn resolve_python_runtime(
+    python_path: &str,
+) -> Result<(PythonInvocation, ExternalProcessResult), String> {
     let candidates = python_candidate_invocations(python_path)?;
     for candidate in candidates {
         if let Ok(result) = probe_python_runtime(&candidate) {
-            if result.status == "success" && (!result.stdout.trim().is_empty() || !result.stderr.trim().is_empty()) {
+            if result.status == "success"
+                && (!result.stdout.trim().is_empty() || !result.stderr.trim().is_empty())
+            {
                 return Ok((candidate, result));
             }
         }
     }
-    Err("未检测到可用的 Python 3 解释器。请安装 Python 3，或在设置中填写受控解释器路径。".to_string())
+    Err(
+        "未检测到可用的 Python 3 解释器。请安装 Python 3，或在设置中填写受控解释器路径。"
+            .to_string(),
+    )
 }
 
 fn external_settings_at(root: &Path) -> Result<(bool, String), String> {
@@ -6754,7 +7080,7 @@ fn run_external_command_at(
         return Err(format!("插件入口文件不存在：{}", entry_path.display()));
     }
     if runtime == "executable" {
-        validate_executable_entry_file(&entry_path)?;
+        validate_executable_entry_file(&entry_path).map_err(|error| error.message)?;
     }
 
     let mut command = if runtime == "python" {
@@ -6901,6 +7227,20 @@ mod tests {
         std::env::temp_dir().join(format!("local-mindmap-{name}-{suffix}"))
     }
 
+    #[cfg(unix)]
+    fn write_native_executable_test_fixture(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = std::env::current_exe().expect("test executable path should be available");
+        fs::copy(source, path).expect("native test executable should be copied");
+        let mut permissions = fs::metadata(path)
+            .expect("native test executable metadata should be available")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)
+            .expect("native test executable permissions should be updated");
+    }
+
     #[test]
     fn python_candidate_order_is_platform_specific() {
         assert_eq!(
@@ -6915,11 +7255,27 @@ mod tests {
 
     #[test]
     fn executable_entry_rules_cover_windows_and_unix_security_boundaries() {
-        assert!(external_executable_entry_error_for_platform("plugin.bin", true).is_some());
-        assert!(external_executable_entry_error_for_platform("plugin.exe", true).is_none());
-        assert!(external_executable_entry_error_for_platform("plugin", false).is_none());
-        assert!(external_executable_entry_error_for_platform("plugin.sh", false).is_some());
-        assert!(external_executable_entry_error_for_platform("plugin.dll", false).is_some());
+        assert_eq!(
+            executable_entry_path_error_for_platform("plugin.bin", true)
+                .as_ref()
+                .map(|error| error.code),
+            Some("executable-entry-invalid")
+        );
+        assert!(executable_entry_path_error_for_platform("plugin.exe", true).is_none());
+        assert!(executable_entry_path_error_for_platform("plugin", false).is_none());
+        assert!(executable_entry_path_error_for_platform("plugin.bin", false).is_none());
+        assert_eq!(
+            executable_entry_path_error_for_platform("plugin.sh", false)
+                .as_ref()
+                .map(|error| error.code),
+            Some("executable-entry-script-forbidden")
+        );
+        assert_eq!(
+            executable_entry_path_error_for_platform("plugin.dll", false)
+                .as_ref()
+                .map(|error| error.code),
+            Some("executable-entry-dll-forbidden")
+        );
     }
 
     fn write_test_plugin_package(path: &Path, entries: &[(&str, &[u8])]) {
@@ -9185,18 +9541,67 @@ fn main() {
             .iter()
             .any(|issue| issue.code == "command-not-allowed"));
 
-        let wrong_exe_id = "localmindmap.user.wrong-executable";
-        let wrong_exe = test_external_executable_plugin(wrong_exe_id, "plugin.bin");
-        write_dev_test_project(
-            &root,
-            wrong_exe_id,
-            &wrong_exe,
-            &[("plugin.bin", b"binary")],
-        );
-        assert!(validate_dev_plugin_project_at(&root, wrong_exe_id)
-            .errors
-            .iter()
-            .any(|issue| issue.code == "executable-entry-invalid"));
+        #[cfg(target_os = "windows")]
+        {
+            let wrong_exe_id = "localmindmap.user.wrong-executable";
+            let wrong_exe = test_external_executable_plugin(wrong_exe_id, "plugin.bin");
+            write_dev_test_project(
+                &root,
+                wrong_exe_id,
+                &wrong_exe,
+                &[("plugin.bin", b"binary")],
+            );
+            assert!(validate_dev_plugin_project_at(&root, wrong_exe_id)
+                .errors
+                .iter()
+                .any(|issue| issue.code == "executable-entry-invalid"));
+            assert!(executable_entry_path_error_for_platform("plugin.exe", true).is_none());
+        }
+
+        #[cfg(unix)]
+        {
+            let native_exe_id = "localmindmap.user.native-executable";
+            let native_exe = test_external_executable_plugin(native_exe_id, "plugin");
+            write_dev_test_project(&root, native_exe_id, &native_exe, &[]);
+            let native_entry = root
+                .join(USER_PLUGIN_DEV_DIR)
+                .join(native_exe_id)
+                .join("plugin");
+            write_native_executable_test_fixture(&native_entry);
+            let native_validation = validate_dev_plugin_project_at(&root, native_exe_id);
+            assert!(native_validation.valid);
+            assert!(native_validation.can_package);
+            assert!(!native_validation
+                .errors
+                .iter()
+                .any(|issue| issue.code == "executable-entry-invalid"));
+
+            let no_permission_id = "localmindmap.user.executable-no-permission";
+            let no_permission = test_external_executable_plugin(no_permission_id, "plugin.bin");
+            write_dev_test_project(
+                &root,
+                no_permission_id,
+                &no_permission,
+                &[("plugin.bin", b"not a native binary")],
+            );
+            assert!(validate_dev_plugin_project_at(&root, no_permission_id)
+                .errors
+                .iter()
+                .any(|issue| issue.code == "executable-entry-not-executable"));
+
+            let shell_id = "localmindmap.user.executable-shell";
+            let shell = test_external_executable_plugin(shell_id, "plugin.sh");
+            write_dev_test_project(
+                &root,
+                shell_id,
+                &shell,
+                &[("plugin.sh", b"#!/bin/sh\nexit 0")],
+            );
+            assert!(validate_dev_plugin_project_at(&root, shell_id)
+                .errors
+                .iter()
+                .any(|issue| issue.code == "executable-entry-script-forbidden"));
+        }
 
         let python_id = "localmindmap.user.valid-python";
         create_dev_plugin_project_at(
@@ -9371,7 +9776,8 @@ fn main() {
         let missing = scan_plugin_diagnostics_at(&root, Some("registry"), vec![])
             .expect("diagnostics should scan missing registry");
         assert!(missing.items.iter().any(|item| {
-            item.title == "Registry missing" && item.fix_action.as_deref() == Some("create-registry")
+            item.title == "Registry missing"
+                && item.fix_action.as_deref() == Some("create-registry")
         }));
 
         fs::write(root.join(USER_PLUGIN_REGISTRY_PATH), "{broken")
@@ -9395,10 +9801,22 @@ fn main() {
         .expect("BOM registry should be written");
         let report = scan_plugin_diagnostics_at(&root, Some("registry"), vec![])
             .expect("diagnostics should parse BOM registry");
-        assert!(report.items.iter().any(|item| item.title == "Registry orphan record"));
-        assert!(report.items.iter().any(|item| item.title == "Registry enabled missing"));
-        assert!(report.items.iter().any(|item| item.title == "Registry trusted missing"));
-        assert!(report.items.iter().any(|item| item.title == "Duplicate registry pluginId"));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.title == "Registry orphan record"));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.title == "Registry enabled missing"));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.title == "Registry trusted missing"));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.title == "Duplicate registry pluginId"));
 
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
@@ -9439,17 +9857,20 @@ fn main() {
             .expect("diagnostics should scan");
         let actions = diagnostic_fix_actions_for_tests(&report);
         assert!(actions.contains(&"add-registry:localmindmap.test.valid-installed".to_string()));
-        assert!(actions.contains(&"remove-registry-orphan:localmindmap.test.registry-orphan".to_string()));
-        let results = fix_plugin_diagnostics_at(&root, &actions)
-            .expect("diagnostics fixes should apply");
+        assert!(actions
+            .contains(&"remove-registry-orphan:localmindmap.test.registry-orphan".to_string()));
+        let results =
+            fix_plugin_diagnostics_at(&root, &actions).expect("diagnostics fixes should apply");
         assert!(results.iter().all(|result| result.backup_path.is_some()));
         assert!(root.join(USER_PLUGIN_DIAGNOSTIC_BACKUP_DIR).is_dir());
 
         let registry = read_user_json_at(&root, USER_PLUGIN_REGISTRY_PATH, json!([]))
             .expect("registry should be readable");
         assert!(plugin_registry_contains(&registry, plugin_id).expect("registry should parse"));
-        assert!(!plugin_registry_contains(&registry, "localmindmap.test.registry-orphan")
-            .expect("registry should parse"));
+        assert!(
+            !plugin_registry_contains(&registry, "localmindmap.test.registry-orphan")
+                .expect("registry should parse")
+        );
         let missing_state = registry
             .as_array()
             .and_then(|items| {
@@ -9509,20 +9930,61 @@ fn main() {
         .expect("exe manifest should be written");
         fs::write(exe_dir.join("plugin.bin"), "binary").expect("entry should be written");
 
+        #[cfg(unix)]
+        let native_exe_id = "localmindmap.test.native-exe";
+        #[cfg(unix)]
+        let native_exe_dir = root.join(USER_PLUGIN_INSTALLED_DIR).join(native_exe_id);
+        #[cfg(unix)]
+        {
+            fs::create_dir_all(&native_exe_dir).expect("native plugin dir should exist");
+            fs::write(
+                native_exe_dir.join(MANIFEST_FILE_NAME),
+                serde_json::to_vec_pretty(&test_external_executable_plugin(
+                    native_exe_id,
+                    "plugin",
+                ))
+                .expect("native manifest should serialize"),
+            )
+            .expect("native manifest should be written");
+            write_native_executable_test_fixture(&native_exe_dir.join("plugin"));
+        }
+
         let report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
             .expect("diagnostics should scan installed plugins");
-        assert!(report.items.iter().any(|item| item.title == "Manifest contains lifecycle field"));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.title == "Manifest contains lifecycle field"));
         assert!(report.items.iter().any(|item| {
             item.title == "Entry path is unsafe"
                 && item.severity == PluginDiagnosticSeverity::Critical
         }));
-        assert!(report.items.iter().any(|item| item.title == "Executable entry is not .exe"));
+        #[cfg(target_os = "windows")]
+        assert!(report.items.iter().any(|item| {
+            item.plugin_id.as_deref() == Some(exe_id)
+                && item.code.as_deref() == Some("executable-entry-invalid")
+        }));
+        #[cfg(unix)]
+        {
+            assert!(report.items.iter().any(|item| {
+                item.plugin_id.as_deref() == Some(exe_id)
+                    && item.code.as_deref() == Some("executable-entry-not-executable")
+            }));
+            assert!(!report.items.iter().any(|item| {
+                item.plugin_id.as_deref() == Some(exe_id)
+                    && item.title == "Executable entry is not .exe"
+            }));
+            assert!(!report.items.iter().any(|item| {
+                item.plugin_id.as_deref() == Some(native_exe_id)
+                    && item
+                        .code
+                        .as_deref()
+                        .is_some_and(|code| code.starts_with("executable-entry-"))
+            }));
+        }
 
-        fix_plugin_diagnostics_at(
-            &root,
-            &[format!("strip-manifest-lifecycle:{lifecycle_id}")],
-        )
-        .expect("lifecycle fix should apply");
+        fix_plugin_diagnostics_at(&root, &[format!("strip-manifest-lifecycle:{lifecycle_id}")])
+            .expect("lifecycle fix should apply");
         let stripped: Value = parse_json_without_bom(
             &fs::read_to_string(lifecycle_dir.join(MANIFEST_FILE_NAME))
                 .expect("manifest should be readable"),
@@ -9558,7 +10020,9 @@ fn main() {
         report.items.iter().any(|item| {
             item.title == "Manifest contains lifecycle field"
                 && item.plugin_id.as_deref() == Some(plugin_id)
-                && field.map(|field| item.message.contains(field)).unwrap_or(true)
+                && field
+                    .map(|field| item.message.contains(field))
+                    .unwrap_or(true)
         })
     }
 
@@ -9599,7 +10063,11 @@ fn main() {
         let report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
             .expect("diagnostics should scan installed plugins");
 
-        assert!(has_lifecycle_diagnostic(&report, trusted_id, Some("trusted")));
+        assert!(has_lifecycle_diagnostic(
+            &report,
+            trusted_id,
+            Some("trusted")
+        ));
         assert!(has_lifecycle_diagnostic(
             &report,
             installed_at_id,
@@ -9634,7 +10102,11 @@ fn main() {
 
         let initial_report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
             .expect("diagnostics should scan installed plugins");
-        assert!(has_lifecycle_diagnostic(&initial_report, plugin_id, Some("trusted")));
+        assert!(has_lifecycle_diagnostic(
+            &initial_report,
+            plugin_id,
+            Some("trusted")
+        ));
         assert!(has_lifecycle_diagnostic(
             &initial_report,
             plugin_id,
@@ -9657,7 +10129,10 @@ fn main() {
         assert!(stripped.get("trusted").is_none());
         assert!(stripped.get("installedAt").is_none());
         assert!(stripped.get("updatedAt").is_none());
-        assert_eq!(stripped.get("description").and_then(Value::as_str), Some(description));
+        assert_eq!(
+            stripped.get("description").and_then(Value::as_str),
+            Some(description)
+        );
 
         let clean_report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
             .expect("diagnostics should scan installed plugins");
@@ -9672,7 +10147,11 @@ fn main() {
         .expect("manifest should be written");
         let restored_report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
             .expect("diagnostics should scan installed plugins");
-        assert!(has_lifecycle_diagnostic(&restored_report, plugin_id, Some("trusted")));
+        assert!(has_lifecycle_diagnostic(
+            &restored_report,
+            plugin_id,
+            Some("trusted")
+        ));
 
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
@@ -9702,8 +10181,7 @@ fn main() {
         bom_manifest_text.insert(0, '\u{feff}');
         fs::write(bom_dir.join(MANIFEST_FILE_NAME), bom_manifest_text)
             .expect("BOM manifest should be written");
-        fs::write(bom_dir.join("main.js"), "export default {};")
-            .expect("entry should be written");
+        fs::write(bom_dir.join("main.js"), "export default {};").expect("entry should be written");
 
         let report = scan_plugin_diagnostics_at(&root, Some("installed"), vec![])
             .expect("diagnostics should scan installed plugins");
@@ -9713,8 +10191,16 @@ fn main() {
                 && item.plugin_id.as_deref() == Some(damaged_id)
         }));
         assert!(has_lifecycle_diagnostic(&report, bom_id, Some("trusted")));
-        assert!(!has_lifecycle_diagnostic(&report, bom_id, Some("installedAt")));
-        assert!(!has_lifecycle_diagnostic(&report, bom_id, Some("updatedAt")));
+        assert!(!has_lifecycle_diagnostic(
+            &report,
+            bom_id,
+            Some("installedAt")
+        ));
+        assert!(!has_lifecycle_diagnostic(
+            &report,
+            bom_id,
+            Some("updatedAt")
+        ));
 
         fs::remove_dir_all(root).expect("test directory should be removable");
     }
@@ -9739,8 +10225,14 @@ fn main() {
             .expect("diagnostics should scan all scopes");
         assert!(report.counts.dev_projects >= 1);
         assert!(report.counts.gallery_examples >= 1);
-        assert!(report.items.iter().any(|item| item.title == "Dev readme-missing"));
-        assert!(report.items.iter().any(|item| item.category == PluginDiagnosticCategory::Package));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.title == "Dev readme-missing"));
+        assert!(report
+            .items
+            .iter()
+            .any(|item| item.category == PluginDiagnosticCategory::Package));
 
         let markdown = sanitized_diagnostic_report_markdown(&report);
         assert!(markdown.contains("Plugin Diagnostics Report"));

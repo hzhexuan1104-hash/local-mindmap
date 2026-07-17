@@ -412,7 +412,8 @@ export function validateScriptEntryPath(value: unknown) {
 export function validateExternalEntryPath(
   value: unknown,
   runtime: unknown,
-  windows = true,
+  windows =
+    typeof navigator === 'undefined' || /windows/i.test(navigator.userAgent),
 ) {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return 'pluginType=external-command 时 entry 必填。';
@@ -439,14 +440,17 @@ export function validateExternalEntryPath(
   if (runtime === 'python' && !entry.toLowerCase().endsWith('.py')) {
     return 'runtime=python 时 entry 必须是 .py 文件。';
   }
-  if (
-    runtime === 'executable' &&
-    (entry.toLowerCase().endsWith('.dll') ||
-      (windows && !entry.toLowerCase().endsWith('.exe')))
-  ) {
-    return windows
-      ? 'Windows 下 runtime=executable 时 entry 必须是 .exe 文件。'
-      : 'runtime=executable 不支持 DLL。';
+  if (runtime === 'executable') {
+    const lowerEntry = entry.toLowerCase();
+    if (lowerEntry.endsWith('.dll')) {
+      return 'runtime=executable 不支持 DLL。';
+    }
+    if (windows && !lowerEntry.endsWith('.exe')) {
+      return 'Windows 下 runtime=executable 时 entry 必须是 .exe 文件。';
+    }
+    if (!windows && lowerEntry.endsWith('.sh')) {
+      return 'macOS/Linux 下 runtime=executable 暂不支持 Shell 脚本。';
+    }
   }
   return null;
 }

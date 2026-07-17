@@ -98,6 +98,7 @@ export type PluginDiagnosticCategory =
 
 export type PluginDiagnosticItem = {
   id: string;
+  code?: string | null;
   severity: PluginDiagnosticSeverity;
   status: PluginDiagnosticStatus;
   category: PluginDiagnosticCategory;
