@@ -142,3 +142,43 @@ export function addTypedSiblingNode(
 
   return inserted ? createResult(nextRootNode, createdNode) : null;
 }
+
+/** Inserts a new node between a non-root node and its current parent. */
+export function addTypedParentNode(
+  rootNode: MindmapNode,
+  childNodeId: string,
+  nodeTypes: MindmapNodeType[],
+  nodeTypeId: string,
+  position?: MindmapNode['position'],
+): TypedNodeCreationResult | null {
+  if (childNodeId === rootNode.id || !findNodeById(rootNode, childNodeId)) {
+    return null;
+  }
+
+  const createdNode = createUniqueTypedNode(
+    rootNode,
+    nodeTypes,
+    nodeTypeId,
+    position,
+  );
+  let inserted = false;
+
+  const insertParent = (node: MindmapNode): MindmapNode => ({
+    ...node,
+    children: node.children.map((child) => {
+      if (child.id === childNodeId) {
+        inserted = true;
+        return {
+          ...createdNode,
+          children: [child],
+        };
+      }
+
+      return insertParent(child);
+    }),
+  });
+
+  const nextRootNode = insertParent(rootNode);
+
+  return inserted ? createResult(nextRootNode, createdNode) : null;
+}

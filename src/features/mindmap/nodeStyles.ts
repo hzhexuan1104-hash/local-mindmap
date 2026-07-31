@@ -4,7 +4,7 @@ import type {
   MindmapNodeType,
 } from './types';
 
-export type EffectiveNodeStyle = Required<MindmapNodeStyle>;
+export type EffectiveNodeStyle = Required<Omit<MindmapNodeStyle, 'icon'>>;
 
 export type NodeStyleCssVariables = {
   '--node-bg': string;
@@ -45,6 +45,13 @@ export function getEffectiveNodeStyle(
       node.style?.fontSize ?? nodeType?.fontSize ?? DEFAULT_NODE_STYLE.fontSize,
     bold: node.style?.bold ?? nodeType?.bold ?? DEFAULT_NODE_STYLE.bold,
   };
+}
+
+export function getEffectiveNodeIcon(
+  node: MindmapNode,
+  nodeType?: MindmapNodeType | null,
+): string {
+  return node.style?.icon ?? nodeType?.icon ?? '';
 }
 
 export function mergeNodeStyle(
@@ -92,6 +99,7 @@ export function createNodeTypeFromStyle(
   name: string,
   style: EffectiveNodeStyle,
   node: MindmapNode,
+  icon = '✅',
 ): MindmapNodeType | null {
   const trimmedName = name.trim();
 
@@ -102,7 +110,7 @@ export function createNodeTypeFromStyle(
   return {
     id: crypto.randomUUID(),
     name: trimmedName,
-    icon: '✅',
+    icon,
     shape: style.shape,
     backgroundColor: style.backgroundColor,
     borderColor: style.borderColor,

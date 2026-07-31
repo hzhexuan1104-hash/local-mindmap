@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MarkdownPreview } from './MarkdownPreview';
 import { RemarkPreviewDialog } from './remarkPreview';
-import {
-  getRemarkEditorValue,
-  shouldPersistRemarkEditorValue,
-  shouldShowVirtualRemarkTemplate,
-} from './remarkTemplate';
 import type { SearchMatch } from './searchReplace';
 import type { MindmapNode } from './types';
 
@@ -19,8 +14,7 @@ type RemarkPanelProps = {
   onCollapse?: () => void;
   embedded?: boolean;
   activeMatch?: SearchMatch | null;
-  isVirtualTemplateDismissed?: boolean;
-  onDismissVirtualTemplate?: () => void;
+  focusRequestId?: number;
 };
 
 export function RemarkPanel({
@@ -31,8 +25,7 @@ export function RemarkPanel({
   onCollapse,
   embedded = false,
   activeMatch = null,
-  isVirtualTemplateDismissed = false,
-  onDismissVirtualTemplate,
+  focusRequestId,
 }: RemarkPanelProps) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -46,14 +39,6 @@ export function RemarkPanel({
   const contextEnd = remarkMatch
     ? Math.min(selectedNode.remark.length, remarkMatch.end + 24)
     : 0;
-  const isVirtualTemplateVisible = shouldShowVirtualRemarkTemplate(
-    selectedNode.remark,
-    isVirtualTemplateDismissed,
-  );
-  const editorValue = getRemarkEditorValue(
-    selectedNode.remark,
-    isVirtualTemplateVisible,
-  );
 
   useEffect(() => {
     if (!remarkMatch || mode !== 'edit') {
@@ -73,6 +58,25 @@ export function RemarkPanel({
     mode,
     selectedNode.id,
   ]);
+
+  useEffect(() => {
+    if (!focusRequestId || mode !== 'edit') {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor || editor.disabled) {
+        return;
+      }
+
+      editor.focus();
+      const cursorPosition = editor.value.length;
+      editor.setSelectionRange(cursorPosition, cursorPosition);
+    });
+
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [focusRequestId, mode, selectedNode.id]);
 
   return (
     <>
@@ -140,32 +144,10 @@ export function RemarkPanel({
             ) : null}
             <textarea
               ref={editorRef}
-              className={
-                isVirtualTemplateVisible
-                  ? 'remark-editor is-virtual-template'
-                  : 'remark-editor'
-              }
-              value={editorValue}
-              onChange={(event) => {
-                const nextRemark = event.target.value;
-                if (isVirtualTemplateVisible) {
-                  onDismissVirtualTemplate?.();
-                }
-                if (
-                  shouldPersistRemarkEditorValue(
-                    nextRemark,
-                    isVirtualTemplateVisible,
-                  )
-                ) {
-                  onRemarkChange(nextRemark);
-                }
-              }}
+              className="remark-editor"
+              value={selectedNode.remark}
+              onChange={(event) => onRemarkChange(event.target.value)}
               aria-label={`${selectedNode.text} 的 Markdown 备注`}
-              title={
-                isVirtualTemplateVisible
-                  ? '示例内容不会保存；修改或删除后才会写入备注。'
-                  : undefined
-              }
             />
           </div>
         ) : (

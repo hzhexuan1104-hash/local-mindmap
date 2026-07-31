@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { RemarkPanel } from '../../features/mindmap/RemarkPanel';
-import { NODE_TYPE_SHAPES } from '../../features/mindmap/nodeTypes';
+import {
+  NODE_TYPE_ICONS,
+  NODE_TYPE_SHAPES,
+} from '../../features/mindmap/nodeTypes';
 import { getEffectiveNodeStyle } from '../../features/mindmap/nodeStyles';
 import type { SearchMatch } from '../../features/mindmap/searchReplace';
 import type {
@@ -11,12 +14,28 @@ import type {
 
 type InspectorTab = 'style' | 'remark';
 
+const INHERIT_NODE_TYPE_ICON = '__inherit-node-type-icon__';
+const CLEAR_NODE_ICON = '__clear-node-icon__';
+
+type NodeIconOption = {
+  value: string;
+  label: string;
+};
+
+export type RemarkFocusRequest = {
+  id: number;
+  nodeId: string;
+};
+
 type RightInspectorPanelProps = {
   selectedNode: MindmapNode;
   nodeTypes: MindmapNodeType[];
+  nodeIcons?: ReadonlyArray<NodeIconOption>;
   remarkMode: 'edit' | 'preview';
   activeRemarkMatch: SearchMatch | null;
+  remarkFocusRequest?: RemarkFocusRequest | null;
   onNodeStyleChange: (style: MindmapNodeStyle) => void;
+  onNodeIconChange: (icon: string | undefined) => void;
   onSaveStyleAsNodeType: (name: string) => void;
   onResetNodeStyle: () => void;
   onRemarkModeChange: (mode: 'edit' | 'preview') => void;
@@ -107,9 +126,12 @@ function ColorControl({
 export function RightInspectorPanel({
   selectedNode,
   nodeTypes,
+  nodeIcons = NODE_TYPE_ICONS,
   remarkMode,
   activeRemarkMatch,
+  remarkFocusRequest = null,
   onNodeStyleChange,
+  onNodeIconChange,
   onSaveStyleAsNodeType,
   onResetNodeStyle,
   onRemarkModeChange,
@@ -118,11 +140,23 @@ export function RightInspectorPanel({
 }: RightInspectorPanelProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>('style');
   const [nodeTypeName, setNodeTypeName] = useState('');
-  const [dismissedVirtualRemarkTemplateNodeIds, setDismissedVirtualRemarkTemplateNodeIds] =
-    useState<Set<string>>(() => new Set());
   const selectedNodeType =
     nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
   const effectiveStyle = getEffectiveNodeStyle(selectedNode, selectedNodeType);
+  const selectedIcon = selectedNode.style?.icon;
+  const selectedIconValue =
+    selectedIcon === undefined
+      ? INHERIT_NODE_TYPE_ICON
+      : selectedIcon === ''
+        ? CLEAR_NODE_ICON
+        : selectedIcon;
+  const iconOptions =
+    selectedIcon && !nodeIcons.some((icon) => icon.value === selectedIcon)
+      ? [
+          { value: selectedIcon, label: `${selectedIcon} 当前图标` },
+          ...nodeIcons,
+        ]
+      : nodeIcons;
 
   useEffect(() => {
     if (activeRemarkMatch?.nodeId === selectedNode.id) {
@@ -134,6 +168,14 @@ export function RightInspectorPanel({
     activeRemarkMatch?.start,
     selectedNode.id,
   ]);
+
+  const shouldFocusRemark = remarkFocusRequest?.nodeId === selectedNode.id;
+
+  useEffect(() => {
+    if (shouldFocusRemark) {
+      setActiveTab('remark');
+    }
+  }, [remarkFocusRequest?.id, shouldFocusRemark]);
 
   useEffect(() => {
     setNodeTypeName(
@@ -191,6 +233,35 @@ export function RightInspectorPanel({
               <h3>当前节点样式</h3>
               <p className="control-help">下方样式默认只影响当前节点。</p>
               <div className="aligned-form node-style-form">
+                <label>
+                  <span>当前节点图标</span>
+                  <select
+                    aria-label="当前节点图标"
+                    value={selectedIconValue}
+                    onChange={(event) => {
+                      const { value } = event.target;
+                      onNodeIconChange(
+                        value === INHERIT_NODE_TYPE_ICON
+                          ? undefined
+                          : value === CLEAR_NODE_ICON
+                            ? ''
+                            : value,
+                      );
+                    }}
+                  >
+                    <option value={INHERIT_NODE_TYPE_ICON}>
+                      {selectedNodeType?.icon
+                        ? `沿用节点类型默认（${selectedNodeType.icon}）`
+                        : '沿用节点类型默认（无）'}
+                    </option>
+                    <option value={CLEAR_NODE_ICON}>无图标</option>
+                    {iconOptions.map((icon) => (
+                      <option key={icon.value} value={icon.value}>
+                        {icon.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label>
                   <span>形状</span>
                   <select
@@ -284,15 +355,8 @@ export function RightInspectorPanel({
             onModeChange={onRemarkModeChange}
             onRemarkChange={onRemarkChange}
             activeMatch={activeRemarkMatch}
-            isVirtualTemplateDismissed={dismissedVirtualRemarkTemplateNodeIds.has(
-              selectedNode.id,
-            )}
-            onDismissVirtualTemplate={() =>
-              setDismissedVirtualRemarkTemplateNodeIds((current) => {
-                const next = new Set(current);
-                next.add(selectedNode.id);
-                return next;
-              })
+            focusRequestId={
+              shouldFocusRemark ? remarkFocusRequest?.id : undefined
             }
             embedded
           />

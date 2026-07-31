@@ -263,6 +263,22 @@ describe('mindmap layout positions', () => {
     expect(diamond.width).toBeGreaterThan(regular.width);
   });
 
+  it('grows node bounds for markers and a wrapped tag row', () => {
+    const plain = getNodeContentSize({ id: 'plain', text: '任务', remark: '', children: [] });
+    const marked = getNodeContentSize({
+      id: 'marked',
+      text: '任务',
+      remark: '已有备注',
+      priority: 1,
+      progress: 75,
+      tags: ['产品设计', '需要评审', '2026 年第三季度'],
+      children: [],
+    });
+
+    expect(marked.height).toBeGreaterThan(plain.height);
+    expect(marked.width).toBeGreaterThanOrEqual(plain.width);
+  });
+
   it('reuses content measurements for unchanged text and font attributes', () => {
     const first = measureNodeText('缓存测量', 16, true);
     const second = measureNodeText('缓存测量', 16, true);

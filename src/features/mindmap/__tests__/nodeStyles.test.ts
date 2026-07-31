@@ -11,6 +11,7 @@ import {
   DEFAULT_NODE_STYLE,
   applyStyleToNodeType,
   createNodeTypeFromStyle,
+  getEffectiveNodeIcon,
   getEffectiveNodeStyle,
   getNodeShapeClassName,
   getNodeStyleCssVariables,
@@ -81,6 +82,22 @@ describe('node style helpers', () => {
       fontSize: nodeType.fontSize,
       bold: nodeType.bold,
     });
+  });
+
+  it('uses the current node icon override before its node type icon', () => {
+    expect(getEffectiveNodeIcon(node, nodeType)).toBe('T');
+    expect(
+      getEffectiveNodeIcon(
+        { ...node, style: { icon: '💡' } },
+        nodeType,
+      ),
+    ).toBe('💡');
+    expect(
+      getEffectiveNodeIcon(
+        { ...node, style: { icon: '' } },
+        nodeType,
+      ),
+    ).toBe('');
   });
 
   it('stores a changed current-node borderColor without changing same-type siblings', () => {
@@ -346,10 +363,11 @@ describe('node style helpers', () => {
     });
   });
 
-  it('preserves current-node borderColor and shape after save and reopen', () => {
+  it('preserves current-node icon, borderColor, and shape after save and reopen', () => {
     const styledNode: MindmapNode = {
       ...node,
       style: {
+        icon: '💡',
         shape: 'diamond',
         backgroundColor: '#ebfbee',
         borderColor: '#2b8a3e',
@@ -363,6 +381,7 @@ describe('node style helpers', () => {
     const reopened = parseLmindProject(serialized);
 
     expect(reopened.rootNode.style).toMatchObject({
+      icon: '💡',
       shape: 'diamond',
       backgroundColor: '#ebfbee',
       borderColor: '#2b8a3e',
@@ -373,5 +392,8 @@ describe('node style helpers', () => {
       shape: 'diamond',
       borderColor: '#2b8a3e',
     });
+    expect(getEffectiveNodeIcon(reopened.rootNode, reopened.nodeTypes[0])).toBe(
+      '💡',
+    );
   });
 });

@@ -1,4 +1,5 @@
 export type MindmapNodeStyle = {
+  icon?: string;
   shape?: MindmapNodeType['shape'];
   backgroundColor?: string;
   borderColor?: string;
@@ -7,10 +8,17 @@ export type MindmapNodeStyle = {
   bold?: boolean;
 };
 
+export type MindmapNodeProgress = 0 | 25 | 50 | 75 | 100;
+export type MindmapNodePriority = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
 export type MindmapNode = {
   id: string;
   text: string;
   remark: string;
+  /** Compact node metadata. `remark` remains the canonical note field. */
+  priority?: MindmapNodePriority;
+  progress?: MindmapNodeProgress;
+  tags?: string[];
   nodeTypeId?: string;
   style?: MindmapNodeStyle;
   collapsed?: boolean;

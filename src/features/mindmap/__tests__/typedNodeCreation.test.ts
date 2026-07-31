@@ -12,6 +12,7 @@ import {
 import { applyNodeTypeToNodes } from '../selection';
 import {
   addTypedChildNode,
+  addTypedParentNode,
   addTypedSiblingNode,
   getNodeTypeCreationOptions,
 } from '../typedNodeCreation';
@@ -156,6 +157,34 @@ describe('typed node creation', () => {
     ).toBeNull();
   });
 
+  it('inserts a new parent between the selected node and its original parent', () => {
+    const mindmap = {
+      ...createMindmap(),
+      children: [
+        {
+          ...createMindmap().children[0],
+          children: [
+            { id: 'topic-b', text: 'Topic B', remark: '', children: [] },
+          ],
+        },
+      ],
+    };
+    const result = addTypedParentNode(mindmap, 'topic-b', [test1], test1.id);
+    const insertedParent = result?.rootNode.children[0].children[0];
+
+    expect(insertedParent).toMatchObject({
+      id: result?.createdNode.id,
+      nodeTypeId: test1.id,
+      text: test1.defaultText,
+    });
+    expect(insertedParent?.children.map((child) => child.id)).toEqual(['topic-b']);
+    expect(result?.selectedNodeId).toBe(insertedParent?.id);
+  });
+
+  it('does not create a parent above the root node', () => {
+    expect(addTypedParentNode(createMindmap(), 'root', [test1], test1.id)).toBeNull();
+  });
+
   it('falls back to a normal node when the type id does not exist', () => {
     const result = addTypedChildNode(
       createMindmap(),
@@ -234,6 +263,37 @@ describe('typed node creation', () => {
     expect(redoResult.project.rootNode.children[1].id).toBe(
       creation.createdNode.id,
     );
+  });
+
+  it('supports undo and redo after inserting an upper topic', () => {
+    const nestedRoot: MindmapNode = {
+      ...createMindmap(),
+      children: [
+        {
+          ...createMindmap().children[0],
+          children: [{ id: 'topic-b', text: 'Topic B', remark: '', children: [] }],
+        },
+      ],
+    };
+    const before: MindmapProject = {
+      rootNode: nestedRoot,
+      nodeTypes: [test1],
+      themeId: 'default-blue',
+    };
+    const creation = addTypedParentNode(
+      before.rootNode,
+      'topic-b',
+      before.nodeTypes,
+      test1.id,
+    )!;
+    const after = { ...before, rootNode: creation.rootNode };
+    const history = pushHistory(createHistoryState(), before);
+    const undoResult = undoHistory(history, after)!;
+    const redoResult = redoHistory(undoResult.history, undoResult.project)!;
+
+    expect(undoResult.project.rootNode.children[0].children[0].id).toBe('topic-b');
+    expect(redoResult.project.rootNode.children[0].children[0].id).toBe(creation.createdNode.id);
+    expect(redoResult.project.rootNode.children[0].children[0].children[0].id).toBe('topic-b');
   });
 
   it('keeps switching the current node type working', () => {

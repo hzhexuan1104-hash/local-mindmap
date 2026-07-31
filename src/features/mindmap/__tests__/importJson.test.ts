@@ -88,6 +88,35 @@ describe('parseLmindProject', () => {
     expect(project.rootNode.children[0].position).toEqual({ x: -40, y: -20 });
   });
 
+  it('restores valid node markers and normalizes saved tags', () => {
+    const project = parseLmindProject(
+      JSON.stringify({
+        version: '1.20.0',
+        meta: {
+          createTime: '2026-07-31T00:00:00.000Z',
+          updateTime: '2026-07-31T00:00:00.000Z',
+          theme: 'default-blue',
+        },
+        nodeTypes: [],
+        rootNode: {
+          id: 'root',
+          text: '中心主题',
+          remark: '项目备注',
+          priority: 2,
+          progress: 75,
+          tags: ['  规划 ', '规划', '', '评审'],
+          children: [],
+        },
+      }),
+    );
+
+    expect(project.rootNode).toMatchObject({
+      priority: 2,
+      progress: 75,
+      tags: ['规划', '评审'],
+    });
+  });
+
   it('rejects invalid JSON documents', () => {
     expect(() => parseLmindProject('{bad json')).toThrow('Invalid JSON');
     expect(() => parseLmindProject(JSON.stringify({ version: '1.0' }))).toThrow(

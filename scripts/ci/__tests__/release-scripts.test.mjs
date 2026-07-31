@@ -73,12 +73,12 @@ afterEach(() => {
 });
 
 describe('release version validation', () => {
-  it('keeps the five release version sources aligned at 1.19.0', () => {
-    expect(assertVersionState(PROJECT_ROOT, 'v1.19.0')).toMatchObject({ version: '1.19.0' });
+  it('keeps the five release version sources aligned at 1.20.0', () => {
+    expect(assertVersionState(PROJECT_ROOT, 'v1.20.0')).toMatchObject({ version: '1.20.0' });
   });
 
   it('rejects a tag that differs from the application version', () => {
-    expect(() => assertVersionState(PROJECT_ROOT, 'v1.19.1')).toThrow('不一致');
+    expect(() => assertVersionState(PROJECT_ROOT, 'v1.20.1')).toThrow('不一致');
   });
 });
 
