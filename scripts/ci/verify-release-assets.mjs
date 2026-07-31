@@ -139,7 +139,9 @@ function mountedMacApp(mountPoint) {
 }
 
 function verifyMacos(directory, arch, version, signed) {
-  const [definition] = expectedAssets('macos', arch, version, { variant: signed ? '' : '_preview' });
+  const [definition] = expectedAssets('macos', arch, version, {
+    variant: signed ? '' : '_unsigned_preview',
+  });
   const dmg = join(directory, definition.filename);
   runChecked('hdiutil', ['verify', dmg]);
   const mountPoint = mkdtempSync(join(tmpdir(), 'local-mindmap-dmg-'));
@@ -154,8 +156,10 @@ function verifyMacos(directory, arch, version, signed) {
       throw new Error(`macOS 应用架构不符合 ${arch} 单架构要求：${architecture}`);
     }
     if (signed) {
-      runChecked('codesign', ['--verify', '--deep', '--strict', app]);
+      runChecked('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
+      runChecked('spctl', ['--assess', '--type', 'execute', '--verbose=4', app]);
       runChecked('xcrun', ['stapler', 'validate', app]);
+      runChecked('xcrun', ['stapler', 'validate', dmg]);
     }
   } finally {
     try {
@@ -165,6 +169,11 @@ function verifyMacos(directory, arch, version, signed) {
     }
     rmSync(mountPoint, { recursive: true, force: true });
   }
+  return {
+    machOArchitecture: arch,
+    signed,
+    notarized: signed,
+  };
 }
 
 function verifyUos(directory, arch, version) {
@@ -191,6 +200,11 @@ function verifyUos(directory, arch, version) {
   } finally {
     rmSync(extractDirectory, { recursive: true, force: true });
   }
+  return {
+    debArchitecture: expectedDebArch,
+    appImageArchitecture: arch,
+    packageFormats: ['deb', 'appimage'],
+  };
 }
 
 export function main() {
@@ -200,7 +214,7 @@ export function main() {
     const arch = requireArg(args, 'arch');
     const version = requireArg(args, 'version');
     const directory = resolve(args['release-dir'] ?? join(args.root ?? PROJECT_ROOT, 'dist', 'release', `${platform}-${arch}`));
-    const variant = typeof args.variant === 'string' && args.variant ? `_${args.variant}` : '';
+    const variant = typeof args.variant === 'string' && args.variant ? args.variant : '';
     const signed = args['macos-signed'] === 'true';
     const records = validateAssetSet(directory, platform, arch, version, { variant });
     if (platform === 'windows' && args['skip-native'] !== undefined) {
@@ -212,8 +226,8 @@ export function main() {
         const appBinary = resolve(requireArg(args, 'app-binary'));
         nativeVerification = verifyWindows(directory, version, appBinary);
       }
-      else if (platform === 'macos') verifyMacos(directory, arch, version, signed);
-      else if (platform === 'uos') verifyUos(directory, arch, version);
+      else if (platform === 'macos') nativeVerification = verifyMacos(directory, arch, version, signed);
+      else if (platform === 'uos') nativeVerification = verifyUos(directory, arch, version);
       else throw new Error(`不支持的验证平台：${platform}`);
     }
     const verification = {
