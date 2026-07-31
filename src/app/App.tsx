@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type WheelEvent,
   useEffect,
   useMemo,
@@ -16,7 +17,11 @@ import {
   WorkspacePanelHost,
   type WorkspacePanelId,
 } from './components/WorkspacePanelHost';
-import { RightInspectorPanel } from './components/RightInspectorPanel';
+import {
+  RightInspectorPanel,
+  type RemarkFocusRequest,
+} from './components/RightInspectorPanel';
+import { NodeQuickToolbar } from './components/NodeQuickToolbar';
 import {
   TopMenuBar,
   type TopMenuGroup,
@@ -48,9 +53,11 @@ import {
 } from '../features/mindmap/canvasControls';
 import {
   getBoxSelectionGeometry,
+  getSelectionRect,
   hitTestNodesInRect,
   isCanvasInteractionBlockedTarget,
   isCanvasBlankTarget,
+  isCanvasRightPanBlockedTarget,
   isDragPastThreshold,
   screenPointToWorldPoint,
   screenToCanvasPoint,
@@ -116,6 +123,7 @@ import {
 } from '../features/mindmap/nodeTypes';
 import {
   createNodeTypeFromStyle,
+  getEffectiveNodeIcon,
   getEffectiveNodeStyle,
   getNodeShapeClassName,
   getNodeStyleCssVariables,
@@ -291,10 +299,12 @@ import {
 } from '../features/mindmap/treeOperations';
 import {
   addTypedChildNode,
+  addTypedParentNode,
   addTypedSiblingNode,
   getNodeTypeCreationOptions,
   type TypedNodeCreationResult,
 } from '../features/mindmap/typedNodeCreation';
+import { normalizeNodeTag } from '../features/mindmap/nodeMarkers';
 import {
   createSamplePlugin,
   createSampleBatchScriptPlugin,
@@ -325,7 +335,9 @@ import {
 } from '../features/storage/userDataStorage';
 import type {
   MindmapNode,
+  MindmapNodePriority,
   MindmapNodeStyle,
+  MindmapNodeProgress,
   MindmapNodeType,
   MindmapProject,
 } from '../features/mindmap/types';
@@ -446,6 +458,31 @@ const findParentNodeById = (
 const countMindmapNodes = (node: MindmapNode): number =>
   1 + node.children.reduce((sum, child) => sum + countMindmapNodes(child), 0);
 
+const safelyCapturePointer = (element: HTMLElement, pointerId: number) => {
+  try {
+    element.setPointerCapture(pointerId);
+  } catch {
+    // Pointer capture can be unavailable when the browser has already released it.
+  }
+};
+
+const safelyReleasePointer = (
+  element: HTMLElement | null,
+  pointerId: number | null,
+) => {
+  if (!element || pointerId === null) {
+    return;
+  }
+
+  try {
+    if (element.hasPointerCapture(pointerId)) {
+      element.releasePointerCapture(pointerId);
+    }
+  } catch {
+    // Releasing an already-lost capture is intentionally a no-op.
+  }
+};
+
 type DragState = {
   nodeId: string;
   pointerStart: { x: number; y: number };
@@ -500,6 +537,7 @@ type PluginRunRecord = {
 };
 
 type BoxSelectionState = {
+  pointerId: number;
   screenStart: Point;
   screenCurrent: Point;
   canvasStart: Point;
@@ -510,10 +548,11 @@ type BoxSelectionState = {
 };
 
 type CanvasPanState = {
+  pointerId: number;
+  button: number;
   screenStart: Point;
   lastScreenPoint: Point;
   hasMoved: boolean;
-  startedOnBlank: boolean;
 };
 
 type EditingSession = {
@@ -583,6 +622,7 @@ function MindmapTree({
   const hasChildren = node.children.length > 0;
   const nodeType = findNodeTypeById(nodeTypes, node.nodeTypeId);
   const effectiveNodeStyle = getEffectiveNodeStyle(node, nodeType);
+  const effectiveNodeIcon = getEffectiveNodeIcon(node, nodeType);
   const nodeStyle = getNodeStyleCssVariables(
     effectiveNodeStyle,
   ) as CSSProperties;
@@ -629,6 +669,16 @@ function MindmapTree({
             onStartDrag(node.id, event);
           }}
           onContextMenu={(event) => {
+            if (
+              isEditing ||
+              (event.target as HTMLElement).closest(
+                'textarea, input, [contenteditable="true"]',
+              )
+            ) {
+              event.stopPropagation();
+              return;
+            }
+
             event.stopPropagation();
             onOpenContextMenu(node, event);
           }}
@@ -664,24 +714,57 @@ function MindmapTree({
             />
           ) : (
             <span className="mindmap-node-content">
-              {nodeType?.icon ? (
-                <span className="node-icon" aria-hidden="true">
-                  {nodeType.icon}
+              <span className="node-content-primary">
+                {effectiveNodeIcon ? (
+                  <span className="node-icon" aria-hidden="true">
+                    {effectiveNodeIcon}
+                  </span>
+                ) : null}
+                {node.priority ? (
+                  <span
+                    className={`node-priority-badge node-priority-badge--${node.priority}`}
+                    title={`优先级 ${node.priority}`}
+                    aria-label={`优先级 ${node.priority}`}
+                  >
+                    {node.priority}
+                  </span>
+                ) : null}
+                {node.progress !== undefined ? (
+                  <span
+                    className="node-progress-badge"
+                    style={{ '--node-progress': `${node.progress}%` } as CSSProperties}
+                    title={`完成度 ${node.progress}%`}
+                    aria-label={`完成度 ${node.progress}%`}
+                  >
+                    {node.progress === 100 ? '✓' : ''}
+                  </span>
+                ) : null}
+                <span className="node-text-content">
+                  {activeTextMatch ? (
+                    <>
+                      {node.text.slice(0, activeTextMatch.start)}
+                      <mark className="node-search-highlight">
+                        {node.text.slice(activeTextMatch.start, activeTextMatch.end)}
+                      </mark>
+                      {node.text.slice(activeTextMatch.end)}
+                    </>
+                  ) : (
+                    node.text
+                  )}
+                </span>
+                {node.remark.trim() ? (
+                  <span className="node-note-indicator" title="有备注" aria-label="有备注">
+                    ▤
+                  </span>
+                ) : null}
+              </span>
+              {node.tags?.length ? (
+                <span className="node-tag-list">
+                  {node.tags.map((tag) => (
+                    <span className="node-tag" key={tag}>{tag}</span>
+                  ))}
                 </span>
               ) : null}
-              <span>
-                {activeTextMatch ? (
-                  <>
-                    {node.text.slice(0, activeTextMatch.start)}
-                    <mark className="node-search-highlight">
-                      {node.text.slice(activeTextMatch.start, activeTextMatch.end)}
-                    </mark>
-                    {node.text.slice(activeTextMatch.end)}
-                  </>
-                ) : (
-                  node.text
-                )}
-              </span>
             </span>
           )}
         </div>
@@ -792,7 +875,9 @@ export function App() {
     useState<PerformanceBenchmarkResult | null>(null);
   const [activeWorkspacePanel, setActiveWorkspacePanel] =
     useState<ToolDrawer | null>(null);
-  const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(false);
+  const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(true);
+  const [remarkFocusRequest, setRemarkFocusRequest] =
+    useState<RemarkFocusRequest | null>(null);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [focusedRootId, setFocusedRootId] = useState<string | null>(null);
   const [autoPerformanceMode, setAutoPerformanceMode] = useState(true);
@@ -807,6 +892,7 @@ export function App() {
     useState<InternalClipboardState | null>(null);
   const [boxSelection, setBoxSelection] = useState<BoxSelectionState | null>(null);
   const [boxSelectionPreviewIds, setBoxSelectionPreviewIds] = useState<string[]>([]);
+  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const [isShortcutHelpVisible, setIsShortcutHelpVisible] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [commandPaletteSettings, setCommandPaletteSettings] =
@@ -827,6 +913,11 @@ export function App() {
   const isPanningRef = useRef(false);
   const lastPanPointRef = useRef({ x: 0, y: 0 });
   const canvasPanStateRef = useRef<CanvasPanState | null>(null);
+  const boxSelectionRef = useRef<BoxSelectionState | null>(null);
+  const boxSelectionFrameRef = useRef<number | null>(null);
+  const activeCanvasPointerIdRef = useRef<number | null>(null);
+  const suppressNextContextMenuRef = useRef(false);
+  const contextMenuSuppressionTimerRef = useRef<number | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const pluginReloadRequestRef = useRef(0);
   const autoSaveTimerRef = useRef<number | null>(null);
@@ -843,6 +934,12 @@ export function App() {
   const selectedNode = selectedNodeId
     ? findNodeById(mindmap, selectedNodeId) ?? mindmap
     : mindmap;
+
+  useEffect(() => {
+    setRemarkFocusRequest((current) =>
+      current?.nodeId === selectedNodeId ? current : null,
+    );
+  }, [selectedNodeId]);
   const selectedNodeIdSet = useMemo(
     () => new Set(selectedNodeIds),
     [selectedNodeIds],
@@ -940,6 +1037,17 @@ export function App() {
         height: layoutNode.height,
       })),
     [mindmapLayout.nodes],
+  );
+  const renderedNodeHitboxes = useMemo(
+    () =>
+      renderedLayoutNodes.map((layoutNode) => ({
+        id: layoutNode.id,
+        left: layoutNode.x,
+        top: layoutNode.y,
+        width: layoutNode.width,
+        height: layoutNode.height,
+      })),
+    [renderedLayoutNodes],
   );
   const layoutNodeById = useMemo(
     () =>
@@ -1471,16 +1579,47 @@ export function App() {
   });
 
   useEffect(() => {
-    const stopDrag = () => {
+    const stopNodeDrag = () => {
       dragStateRef.current = null;
-      canvasPanStateRef.current = null;
-      isPanningRef.current = false;
       setDraggingNodeId(null);
       setDropTargetNodeId(null);
     };
 
-    window.addEventListener('mouseup', stopDrag);
-    return () => window.removeEventListener('mouseup', stopDrag);
+    const clearCanvasPointerInteraction = () => {
+      safelyReleasePointer(
+        canvasRef.current,
+        activeCanvasPointerIdRef.current,
+      );
+      activeCanvasPointerIdRef.current = null;
+      canvasPanStateRef.current = null;
+      boxSelectionRef.current = null;
+      isPanningRef.current = false;
+      if (boxSelectionFrameRef.current !== null) {
+        window.cancelAnimationFrame(boxSelectionFrameRef.current);
+        boxSelectionFrameRef.current = null;
+      }
+      if (contextMenuSuppressionTimerRef.current !== null) {
+        window.clearTimeout(contextMenuSuppressionTimerRef.current);
+        contextMenuSuppressionTimerRef.current = null;
+      }
+      suppressNextContextMenuRef.current = false;
+      setBoxSelection(null);
+      setBoxSelectionPreviewIds([]);
+      setIsCanvasPanning(false);
+    };
+
+    const handleWindowBlur = () => {
+      clearCanvasPointerInteraction();
+      stopNodeDrag();
+    };
+
+    window.addEventListener('mouseup', stopNodeDrag);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('mouseup', stopNodeDrag);
+      window.removeEventListener('blur', handleWindowBlur);
+      clearCanvasPointerInteraction();
+    };
   }, []);
 
   const showMessage = (text: string, kind: ToastKind = inferToastKind(text)) => {
@@ -1590,7 +1729,16 @@ export function App() {
     showMessage(`已全选 ${nextSelectedNodeIds.length} 个节点`);
   };
 
-  const cancelBoxSelection = () => {
+  const cancelBoxSelection = (canvasElement: HTMLElement | null = canvasRef.current) => {
+    safelyReleasePointer(canvasElement, boxSelectionRef.current?.pointerId ?? null);
+    if (activeCanvasPointerIdRef.current === boxSelectionRef.current?.pointerId) {
+      activeCanvasPointerIdRef.current = null;
+    }
+    boxSelectionRef.current = null;
+    if (boxSelectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(boxSelectionFrameRef.current);
+      boxSelectionFrameRef.current = null;
+    }
     setBoxSelection(null);
     setBoxSelectionPreviewIds([]);
   };
@@ -3354,6 +3502,7 @@ export function App() {
 
     recordHistory();
     applyTypedNodeCreation(result, options);
+    showMessage('已新增下级主题');
   };
 
   const handleAddSibling = (
@@ -3395,6 +3544,46 @@ export function App() {
 
     recordHistory();
     applyTypedNodeCreation(result, options);
+    showMessage('已新增同级主题');
+  };
+
+  const handleAddParent = (
+    nodeTypeId = childNodeTypeId,
+    options: { startEditing?: boolean } = {},
+  ) => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    if (selectedNodeId === mindmap.id) {
+      showMessage('中心主题不能新增上级主题');
+      return;
+    }
+
+    const selected = findNodeById(mindmap, selectedNodeId);
+    const position = selected?.position
+      ? {
+          x: selected.position.x - POSITIONED_LAYOUT.horizontalGap - 88,
+          y: selected.position.y,
+        }
+      : undefined;
+    const result = addTypedParentNode(
+      mindmap,
+      selectedNodeId,
+      availableNodeTypes,
+      nodeTypeId,
+      position,
+    );
+
+    if (!result) {
+      showMessage('无法新增上级主题');
+      return;
+    }
+
+    recordHistory();
+    applyTypedNodeCreation(result, options);
+    showMessage('已新增上级主题');
   };
 
   const handleDeleteNode = () => {
@@ -3602,6 +3791,127 @@ export function App() {
         remark,
       })),
     );
+  };
+
+  const handleOpenRemarkEditor = () => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    setIsFocusMode(false);
+    setIsRemarkPanelCollapsed(false);
+    setRemarkMode('edit');
+    setRemarkFocusRequest((current) => ({
+      id: (current?.id ?? 0) + 1,
+      nodeId: selectedNodeId,
+    }));
+  };
+
+  const handleAddTag = (value: string) => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return false;
+    }
+
+    const tag = normalizeNodeTag(value);
+    if (!tag) {
+      showMessage('标签不能为空');
+      return false;
+    }
+
+    const currentNode = findNodeById(mindmap, selectedNodeId);
+    if (!currentNode) {
+      return false;
+    }
+
+    if ((currentNode.tags ?? []).includes(tag)) {
+      showMessage('该标签已存在');
+      return false;
+    }
+
+    recordHistory();
+    setMindmap((currentMindmap) =>
+      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
+        ...node,
+        tags: [...(node.tags ?? []), tag],
+      })),
+    );
+    showMessage(`已添加标签「${tag}」`);
+    return true;
+  };
+
+  const handlePriorityChange = (priority?: MindmapNodePriority) => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    const currentNode = findNodeById(mindmap, selectedNodeId);
+    if (!currentNode || currentNode.priority === priority) {
+      return;
+    }
+
+    recordHistory();
+    setMindmap((currentMindmap) =>
+      updateNodeById(currentMindmap, selectedNodeId, (node) => {
+        const nextNode = { ...node };
+        if (priority === undefined) {
+          delete nextNode.priority;
+        } else {
+          nextNode.priority = priority;
+        }
+        return nextNode;
+      }),
+    );
+    showMessage(priority === undefined ? '已清除优先级' : `已设置优先级 ${priority}`);
+  };
+
+  const handleProgressChange = (progress?: MindmapNodeProgress) => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    const currentNode = findNodeById(mindmap, selectedNodeId);
+    if (!currentNode || currentNode.progress === progress) {
+      return;
+    }
+
+    recordHistory();
+    setMindmap((currentMindmap) =>
+      updateNodeById(currentMindmap, selectedNodeId, (node) => {
+        const nextNode = { ...node };
+        if (progress === undefined) {
+          delete nextNode.progress;
+        } else {
+          nextNode.progress = progress;
+        }
+        return nextNode;
+      }),
+    );
+    showMessage(progress === undefined ? '已清除完成度' : `已设置完成度 ${progress}%`);
+  };
+
+  const handleRemoveTag = (tag: string) => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    const currentNode = findNodeById(mindmap, selectedNodeId);
+    if (!currentNode?.tags?.includes(tag)) {
+      return;
+    }
+
+    recordHistory();
+    setMindmap((currentMindmap) =>
+      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
+        ...node,
+        tags: (node.tags ?? []).filter((currentTag) => currentTag !== tag),
+      })),
+    );
+    showMessage(`已删除标签「${tag}」`);
   };
 
   const handleStartEdit = (node: MindmapNode) => {
@@ -3903,6 +4213,37 @@ export function App() {
     showMessage('已修改节点样式');
   };
 
+  const handleSelectedNodeIconChange = (icon: string | undefined) => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+
+    recordHistory();
+    setMindmap((currentMindmap) =>
+      updateNodeById(currentMindmap, selectedNodeId, (node) => {
+        const nextStyle = { ...(node.style ?? {}) };
+
+        if (icon === undefined) {
+          delete nextStyle.icon;
+        } else {
+          nextStyle.icon = icon;
+        }
+
+        if (Object.keys(nextStyle).length === 0) {
+          const { style: _style, ...nodeWithoutStyle } = node;
+          return nodeWithoutStyle;
+        }
+
+        return {
+          ...node,
+          style: nextStyle,
+        };
+      }),
+    );
+    showMessage('已修改节点图标');
+  };
+
   const handleSaveSelectedStyleAsNodeType = async (name: string) => {
     if (!selectedNodeId) {
       showMessage('请先选择节点');
@@ -3917,6 +4258,7 @@ export function App() {
       name,
       getEffectiveNodeStyle(selectedNode, selectedNodeType),
       selectedNode,
+      getEffectiveNodeIcon(selectedNode, selectedNodeType),
     );
 
     if (!nextNodeType) {
@@ -4080,7 +4422,7 @@ export function App() {
   };
 
   const getCanvasPointFromMouseEvent = (
-    event: MouseEvent<HTMLElement>,
+    event: MouseEvent<HTMLElement> | ReactPointerEvent<HTMLElement>,
   ): Point => {
     const panLayerViewportRect = panLayerRef.current?.getBoundingClientRect();
 
@@ -4152,8 +4494,71 @@ export function App() {
     return dropTargetMatches[0]?.id ?? null;
   };
 
+  const clearContextMenuSuppression = () => {
+    suppressNextContextMenuRef.current = false;
+    if (contextMenuSuppressionTimerRef.current !== null) {
+      window.clearTimeout(contextMenuSuppressionTimerRef.current);
+      contextMenuSuppressionTimerRef.current = null;
+    }
+  };
+
+  const suppressNextContextMenu = () => {
+    clearContextMenuSuppression();
+    suppressNextContextMenuRef.current = true;
+    contextMenuSuppressionTimerRef.current = window.setTimeout(
+      clearContextMenuSuppression,
+      0,
+    );
+  };
+
+  const consumeSuppressedContextMenu = () => {
+    if (!suppressNextContextMenuRef.current) {
+      return false;
+    }
+
+    clearContextMenuSuppression();
+    return true;
+  };
+
+  const scheduleBoxSelectionUpdate = (selection: BoxSelectionState) => {
+    boxSelectionRef.current = selection;
+    if (boxSelectionFrameRef.current !== null) {
+      return;
+    }
+
+    boxSelectionFrameRef.current = window.requestAnimationFrame(() => {
+      boxSelectionFrameRef.current = null;
+      const pendingSelection = boxSelectionRef.current;
+      if (!pendingSelection) {
+        return;
+      }
+
+      setBoxSelection(pendingSelection);
+      if (!pendingSelection.isActive) {
+        return;
+      }
+
+      const hitNodeIds = hitTestNodesInRect(
+        getSelectionRect(
+          pendingSelection.canvasStart,
+          pendingSelection.canvasCurrent,
+        ),
+        renderedNodeHitboxes,
+      );
+      const nextPreviewSelection = resolveBoxSelectionState(
+        {
+          selectedNodeId,
+          selectedNodeIds,
+        },
+        hitNodeIds,
+        pendingSelection.append,
+      );
+      setBoxSelectionPreviewIds(nextPreviewSelection.selectedNodeIds);
+    });
+  };
+
   const handleCanvasPointerDown = (
-    event: MouseEvent<HTMLElement>,
+    event: ReactPointerEvent<HTMLElement>,
   ) => {
     const isOnInteractiveElement = isCanvasInteractionBlockedTarget(
       event.target as HTMLElement | null,
@@ -4174,15 +4579,39 @@ export function App() {
     const screenPoint = { x: event.clientX, y: event.clientY };
 
     if (
+      shouldStartCanvasPan({
+        button: event.button,
+        isOnInteractiveElement: isCanvasRightPanBlockedTarget(
+          event.target as HTMLElement | null,
+        ),
+      })
+    ) {
+      setContextMenu(null);
+      cancelBoxSelection(canvasElement);
+      stopCanvasPan(canvasElement);
+      isPanningRef.current = true;
+      lastPanPointRef.current = screenPoint;
+      canvasPanStateRef.current = {
+        pointerId: event.pointerId,
+        button: event.button,
+        screenStart: screenPoint,
+        lastScreenPoint: screenPoint,
+        hasMoved: false,
+      };
+      activeCanvasPointerIdRef.current = event.pointerId;
+      safelyCapturePointer(canvasElement, event.pointerId);
+      return;
+    }
+
+    if (
       shouldStartBoxSelection({
         button: event.button,
         isOnInteractiveElement,
-        shiftKey: event.shiftKey,
+        isBlankTarget: startedOnBlank,
       })
     ) {
       event.preventDefault();
-      isPanningRef.current = false;
-      canvasPanStateRef.current = null;
+      stopCanvasPan(canvasElement);
       const selectionGeometry = getBoxSelectionGeometry({
         screenStart: screenPoint,
         screenCurrent: screenPoint,
@@ -4196,50 +4625,35 @@ export function App() {
       });
 
       setContextMenu(null);
-      setBoxSelection({
+      const nextBoxSelection: BoxSelectionState = {
+        pointerId: event.pointerId,
         screenStart: screenPoint,
         screenCurrent: screenPoint,
         canvasStart: selectionGeometry.canvasStart,
         canvasCurrent: selectionGeometry.canvasCurrent,
-        append: false,
+        append: event.shiftKey || event.ctrlKey || event.metaKey,
         isActive: false,
         startedOnBlank,
-      });
+      };
+      boxSelectionRef.current = nextBoxSelection;
+      activeCanvasPointerIdRef.current = event.pointerId;
+      safelyCapturePointer(canvasElement, event.pointerId);
+      setBoxSelection(nextBoxSelection);
       setBoxSelectionPreviewIds([]);
       return;
-    }
-
-    if (
-      shouldStartCanvasPan({
-        button: event.button,
-        isOnInteractiveElement,
-        shiftKey: event.shiftKey,
-      })
-    ) {
-      event.preventDefault();
-      setContextMenu(null);
-      cancelBoxSelection();
-      isPanningRef.current = true;
-      lastPanPointRef.current = screenPoint;
-      canvasPanStateRef.current = {
-        screenStart: screenPoint,
-        lastScreenPoint: screenPoint,
-        hasMoved: false,
-        startedOnBlank,
-      };
     }
   };
 
   const handleCanvasPointerMove = (
-    event: MouseEvent<HTMLElement>,
+    event: ReactPointerEvent<HTMLElement>,
   ) => {
-    if (boxSelection) {
-      event.preventDefault();
+    const activeBoxSelection = boxSelectionRef.current;
+    if (activeBoxSelection?.pointerId === event.pointerId) {
       const canvasElement = event.currentTarget;
       const canvasViewportRect = canvasElement.getBoundingClientRect();
       const screenPoint = { x: event.clientX, y: event.clientY };
       const selectionGeometry = getBoxSelectionGeometry({
-        screenStart: boxSelection.screenStart,
+        screenStart: activeBoxSelection.screenStart,
         screenCurrent: screenPoint,
         canvasViewportRect,
         worldViewportRect: panLayerRef.current?.getBoundingClientRect(),
@@ -4250,32 +4664,19 @@ export function App() {
         },
       });
       const isActive =
-        boxSelection.isActive ||
-        isDragPastThreshold(boxSelection.screenStart, screenPoint);
-      const nextBoxSelection = {
-        ...boxSelection,
+        activeBoxSelection.isActive ||
+        isDragPastThreshold(activeBoxSelection.screenStart, screenPoint);
+      const nextBoxSelection: BoxSelectionState = {
+        ...activeBoxSelection,
         screenCurrent: screenPoint,
         canvasCurrent: selectionGeometry.canvasCurrent,
         isActive,
       };
 
-      setBoxSelection(nextBoxSelection);
-
       if (isActive) {
-        const hitNodeIds = hitTestNodesInRect(
-          selectionGeometry.canvasRect,
-          nodeHitboxes,
-        );
-        const nextPreviewSelection = resolveBoxSelectionState(
-          {
-            selectedNodeId,
-            selectedNodeIds,
-          },
-          hitNodeIds,
-          nextBoxSelection.append,
-        );
-        setBoxSelectionPreviewIds(nextPreviewSelection.selectedNodeIds);
+        event.preventDefault();
       }
+      scheduleBoxSelectionUpdate(nextBoxSelection);
 
       return;
     }
@@ -4313,14 +4714,21 @@ export function App() {
       return;
     }
 
-    if (!isPanningRef.current || !canvasPanStateRef.current) {
+    const canvasPanState = canvasPanStateRef.current;
+    if (
+      !isPanningRef.current ||
+      !canvasPanState ||
+      canvasPanState.pointerId !== event.pointerId
+    ) {
       return;
     }
 
-    event.preventDefault();
-
     const screenPoint = { x: event.clientX, y: event.clientY };
-    const canvasPanState = canvasPanStateRef.current;
+
+    if (canvasPanState.button === 2 && (event.buttons & 2) === 0) {
+      stopCanvasPan(event.currentTarget, { suppressContextMenu: true });
+      return;
+    }
 
     if (
       !canvasPanState.hasMoved &&
@@ -4329,6 +4737,8 @@ export function App() {
       return;
     }
 
+    event.preventDefault();
+
     const deltaX = screenPoint.x - canvasPanState.lastScreenPoint.x;
     const deltaY = screenPoint.y - canvasPanState.lastScreenPoint.y;
     canvasPanStateRef.current = {
@@ -4336,34 +4746,52 @@ export function App() {
       lastScreenPoint: screenPoint,
       hasMoved: true,
     };
+    setIsCanvasPanning(true);
     lastPanPointRef.current = screenPoint;
     setCanvasView((view) => panCanvasView(view, deltaX, deltaY));
   };
 
-  const stopCanvasPan = () => {
+  const stopCanvasPan = (
+    canvasElement: HTMLElement | null = canvasRef.current,
+    options: { suppressContextMenu?: boolean } = {},
+  ) => {
+    const panState = canvasPanStateRef.current;
+    if (
+      options.suppressContextMenu &&
+      panState?.button === 2 &&
+      panState.hasMoved
+    ) {
+      suppressNextContextMenu();
+    }
+    safelyReleasePointer(canvasElement, panState?.pointerId ?? null);
+    if (activeCanvasPointerIdRef.current === panState?.pointerId) {
+      activeCanvasPointerIdRef.current = null;
+    }
     isPanningRef.current = false;
     canvasPanStateRef.current = null;
+    setIsCanvasPanning(false);
   };
 
   const handleCanvasPointerUp = (
-    event: MouseEvent<HTMLElement>,
+    event: ReactPointerEvent<HTMLElement>,
   ) => {
-    if (boxSelection) {
+    const activeBoxSelection = boxSelectionRef.current;
+    if (activeBoxSelection?.pointerId === event.pointerId) {
       event.preventDefault();
-      if (!boxSelection.isActive) {
-        if (boxSelection.startedOnBlank) {
+      if (!activeBoxSelection.isActive) {
+        if (activeBoxSelection.startedOnBlank) {
           commitEditingAndClearSelection();
         } else {
           clearSelection();
         }
-        cancelBoxSelection();
+        cancelBoxSelection(event.currentTarget);
         return;
       }
 
       const canvasElement = event.currentTarget;
       const screenPoint = { x: event.clientX, y: event.clientY };
       const selectionGeometry = getBoxSelectionGeometry({
-        screenStart: boxSelection.screenStart,
+        screenStart: activeBoxSelection.screenStart,
         screenCurrent: screenPoint,
         canvasViewportRect: canvasElement.getBoundingClientRect(),
         worldViewportRect: panLayerRef.current?.getBoundingClientRect(),
@@ -4375,7 +4803,7 @@ export function App() {
       });
       const hitNodeIds = hitTestNodesInRect(
         selectionGeometry.canvasRect,
-        nodeHitboxes,
+        renderedNodeHitboxes,
       );
       const nextSelection = resolveBoxSelectionState(
         {
@@ -4383,12 +4811,12 @@ export function App() {
           selectedNodeIds,
         },
         hitNodeIds,
-        boxSelection.append,
+        activeBoxSelection.append,
       );
 
       setSelectedNodeId(nextSelection.selectedNodeId);
       setSelectedNodeIds(nextSelection.selectedNodeIds);
-      cancelBoxSelection();
+      cancelBoxSelection(canvasElement);
       showMessage(
         nextSelection.selectedNodeIds.length > 0
           ? `已框选 ${nextSelection.selectedNodeIds.length} 个节点`
@@ -4435,20 +4863,47 @@ export function App() {
       return;
     }
 
-    if (canvasPanStateRef.current) {
-      event.preventDefault();
+    if (canvasPanStateRef.current?.pointerId === event.pointerId) {
       const hasMoved = canvasPanStateRef.current.hasMoved;
-      const startedOnBlank = canvasPanStateRef.current.startedOnBlank;
-      stopCanvasPan();
-
-      if (!hasMoved && startedOnBlank) {
-        commitEditingAndClearSelection();
+      if (hasMoved) {
+        event.preventDefault();
       }
+      stopCanvasPan(event.currentTarget, { suppressContextMenu: hasMoved });
 
       return;
     }
+  };
 
-    stopCanvasPan();
+  const handleCanvasPointerCancel = (
+    event: ReactPointerEvent<HTMLElement>,
+  ) => {
+    if (boxSelectionRef.current?.pointerId === event.pointerId) {
+      cancelBoxSelection(event.currentTarget);
+      return;
+    }
+
+    if (canvasPanStateRef.current?.pointerId === event.pointerId) {
+      stopCanvasPan(event.currentTarget);
+    }
+
+    if (dragStateRef.current) {
+      dragStateRef.current = null;
+      setDraggingNodeId(null);
+      setDropTargetNodeId(null);
+    }
+  };
+
+  const handleCanvasLostPointerCapture = (
+    event: ReactPointerEvent<HTMLElement>,
+  ) => {
+    if (boxSelectionRef.current?.pointerId === event.pointerId) {
+      cancelBoxSelection(null);
+      return;
+    }
+
+    if (canvasPanStateRef.current?.pointerId === event.pointerId) {
+      stopCanvasPan(null);
+    }
   };
 
   const handleStartNodeDrag = (
@@ -4462,8 +4917,8 @@ export function App() {
       return;
     }
 
-    isPanningRef.current = false;
-    canvasPanStateRef.current = null;
+    cancelBoxSelection();
+    stopCanvasPan();
     setDropTargetNodeId(null);
     dragStateRef.current = {
       nodeId,
@@ -4507,11 +4962,31 @@ export function App() {
     node: MindmapNode,
     event: MouseEvent<HTMLElement>,
   ) => {
+    const isActiveRightPan = Boolean(
+      canvasPanStateRef.current?.button === 2 &&
+      canvasPanStateRef.current.hasMoved,
+    );
+    if (isActiveRightPan || consumeSuppressedContextMenu()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     selectNode(node.id, event.ctrlKey || event.shiftKey);
     openContextMenu({ type: 'node', nodeId: node.id }, event);
   };
 
   const handleCanvasContextMenu = (event: MouseEvent<HTMLElement>) => {
+    const isActiveRightPan = Boolean(
+      canvasPanStateRef.current?.button === 2 &&
+      canvasPanStateRef.current.hasMoved,
+    );
+    if (isActiveRightPan || consumeSuppressedContextMenu()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     const target = event.target as HTMLElement;
 
     if (target.closest('.mindmap-node, .collapse-toggle')) {
@@ -5480,10 +5955,7 @@ export function App() {
     },
     'node.addChild': () => handleAddChild(childNodeTypeId, { startEditing: true }),
     'node.addSibling': () => handleAddSibling(siblingNodeTypeId, { startEditing: true }),
-    'node.remark': () => {
-      setIsRemarkPanelCollapsed(false);
-      setRemarkMode('edit');
-    },
+    'node.remark': handleOpenRemarkEditor,
     'node.collapse': () => {
       if (!selectedNodeId) return;
       recordHistory();
@@ -5767,9 +6239,12 @@ export function App() {
           { id: 'normal', label: '普通节点', execute: () => handleAddChild('') },
           ...availableNodeTypes.map((nodeType) => ({ id: `type-${nodeType.id}`, label: nodeType.name, execute: () => handleAddChild(nodeType.id) })),
         ] },
-        { id: 'sibling', label: '新建同级节点', shortcut: 'Enter', disabled: !selectedNodeId || selectedNodeId === mindmap.id, execute: () => handleAddSibling(siblingNodeTypeId) },
+        { id: 'sibling', label: '新建同级节点', shortcut: 'Enter', disabled: !selectedNodeId || selectedNodeId === mindmap.id, children: [
+          { id: 'normal', label: '普通节点', execute: () => handleAddSibling('') },
+          ...availableNodeTypes.map((nodeType) => ({ id: `type-${nodeType.id}`, label: nodeType.name, execute: () => handleAddSibling(nodeType.id) })),
+        ] },
       ] },
-      { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: () => setIsRemarkPanelCollapsed(false) }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId, execute: handleDeleteNode }] },
+      { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: handleOpenRemarkEditor }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId, execute: handleDeleteNode }] },
       { id: 'structure', label: '结构', children: [{ id: 'collapse', label: '折叠当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'expand', label: '展开当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'focus', label: '聚焦当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleFocusBranch(selectedNodeId); } }, { id: 'exit-focus', label: '退出分支聚焦', disabled: !focusedRootId, execute: handleExitBranchFocus }] },
       { id: 'locate', label: '定位', children: [{ id: 'current', label: '定位当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true }); } }, { id: 'parent', label: '选择父节点', disabled: !selectedNodeId || !mindmapIndex.parentById.get(selectedNodeId), execute: () => { const id = selectedNodeId && mindmapIndex.parentById.get(selectedNodeId); if (id) locateNode(id, { exitFocusIfNeeded: true }); } }, { id: 'first-child', label: '选择第一个子节点', disabled: !selectedNodeId || !mindmapIndex.childrenById.get(selectedNodeId)?.length, execute: () => { const id = selectedNodeId && mindmapIndex.childrenById.get(selectedNodeId)?.[0]; if (id) locateNode(id, { exitFocusIfNeeded: true }); } }] },
       { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: activeWorkspacePanel === 'node-types', execute: () => setActiveWorkspacePanel('node-types') }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }, { id: 'save-style', label: '保存当前样式为节点类型', disabled: !selectedNodeId, execute: () => handleSaveSelectedStyleAsNodeType(selectedNode.text.trim() ? `${selectedNode.text.trim()}样式` : '节点样式') }] },
@@ -5819,6 +6294,19 @@ export function App() {
           onOpenFileStatus={() => setIsFileStatusVisible(true)}
         />
       ) : null}
+
+      <NodeQuickToolbar
+        selectedNode={selectedNodeId ? selectedNode : null}
+        hasSelection={Boolean(selectedNodeId)}
+        onAddChild={() => handleAddChild(childNodeTypeId, { startEditing: true })}
+        onAddSibling={() => handleAddSibling(siblingNodeTypeId, { startEditing: true })}
+        onAddParent={() => handleAddParent(childNodeTypeId, { startEditing: true })}
+        onOpenRemark={handleOpenRemarkEditor}
+        onSetPriority={handlePriorityChange}
+        onSetProgress={handleProgressChange}
+        onAddTag={handleAddTag}
+        onRemoveTag={handleRemoveTag}
+      />
 
       {isCommandPaletteOpen ? (
         <CommandPalette
@@ -6504,16 +6992,18 @@ export function App() {
         <section
           className={[
             'mindmap-canvas',
-            boxSelection ? 'is-box-selecting' : '',
+            boxSelection?.isActive ? 'is-box-selecting' : '',
+            isCanvasPanning ? 'is-canvas-panning' : '',
           ]
             .filter(Boolean)
             .join(' ')}
           aria-label="思维导图画布"
           ref={canvasRef}
-          onMouseDown={handleCanvasPointerDown}
-          onMouseMove={handleCanvasPointerMove}
-          onMouseUp={handleCanvasPointerUp}
-          onMouseLeave={stopCanvasPan}
+          onPointerDown={handleCanvasPointerDown}
+          onPointerMove={handleCanvasPointerMove}
+          onPointerUp={handleCanvasPointerUp}
+          onPointerCancel={handleCanvasPointerCancel}
+          onLostPointerCapture={handleCanvasLostPointerCapture}
           onWheel={handleCanvasWheel}
           onContextMenu={handleCanvasContextMenu}
         >
@@ -6651,11 +7141,14 @@ export function App() {
             <RightInspectorPanel
               selectedNode={selectedNode}
               nodeTypes={availableNodeTypes}
+              nodeIcons={availableNodeTypeIcons}
               remarkMode={remarkMode}
               activeRemarkMatch={
                 activeMatch?.field === 'remark' ? activeMatch : null
               }
+              remarkFocusRequest={remarkFocusRequest}
               onNodeStyleChange={handleSelectedNodeStyleChange}
+              onNodeIconChange={handleSelectedNodeIconChange}
               onSaveStyleAsNodeType={handleSaveSelectedStyleAsNodeType}
               onResetNodeStyle={handleResetSelectedNodeStyle}
               onRemarkModeChange={setRemarkMode}

@@ -5,6 +5,11 @@ import type {
   MindmapNodeType,
   MindmapProject,
 } from './types';
+import {
+  isNodePriority,
+  isNodeProgress,
+  normalizeNodeTags,
+} from './nodeMarkers';
 import { selectLocalFile } from './fileUtils';
 
 const OPEN_FILE_ACCEPT = '.lmind,application/json';
@@ -36,6 +41,7 @@ function normalizeNodeStyle(value: unknown): MindmapNodeStyle | undefined {
       ? value.shape
       : undefined;
   const style: MindmapNodeStyle = {
+    ...(typeof value.icon === 'string' ? { icon: value.icon } : {}),
     ...(shape ? { shape } : {}),
     ...(typeof value.backgroundColor === 'string'
       ? { backgroundColor: value.backgroundColor }
@@ -59,6 +65,9 @@ function isRawMindmapNode(value: unknown): value is {
   id: string;
   text: string;
   remark?: unknown;
+  priority?: unknown;
+  progress?: unknown;
+  tags?: unknown;
   nodeTypeId?: unknown;
   style?: unknown;
   collapsed?: unknown;
@@ -75,6 +84,9 @@ function isRawMindmapNode(value: unknown): value is {
     typeof value.text === 'string' &&
     Array.isArray(value.children) &&
     (value.remark === undefined || typeof value.remark === 'string') &&
+    (value.priority === undefined || isNodePriority(value.priority)) &&
+    (value.progress === undefined || isNodeProgress(value.progress)) &&
+    (value.tags === undefined || Array.isArray(value.tags)) &&
     (value.nodeTypeId === undefined || typeof value.nodeTypeId === 'string') &&
     (value.style === undefined || isRecord(value.style)) &&
     (value.collapsed === undefined || typeof value.collapsed === 'boolean') &&
@@ -87,6 +99,9 @@ function normalizeMindmapNode(node: {
   id: string;
   text: string;
   remark?: unknown;
+  priority?: unknown;
+  progress?: unknown;
+  tags?: unknown;
   nodeTypeId?: unknown;
   style?: unknown;
   collapsed?: unknown;
@@ -94,11 +109,15 @@ function normalizeMindmapNode(node: {
   children: unknown[];
 }): MindmapNode {
   const style = normalizeNodeStyle(node.style);
+  const tags = normalizeNodeTags(node.tags);
 
   return {
     id: node.id,
     text: node.text,
     remark: typeof node.remark === 'string' ? node.remark : '',
+    ...(isNodePriority(node.priority) ? { priority: node.priority } : {}),
+    ...(isNodeProgress(node.progress) ? { progress: node.progress } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
     ...(typeof node.nodeTypeId === 'string' && node.nodeTypeId
       ? { nodeTypeId: node.nodeTypeId }
       : {}),
@@ -113,6 +132,9 @@ function normalizeMindmapNode(node: {
           id: string;
           text: string;
           remark?: unknown;
+          priority?: unknown;
+          progress?: unknown;
+          tags?: unknown;
           nodeTypeId?: unknown;
           style?: unknown;
           collapsed?: unknown;

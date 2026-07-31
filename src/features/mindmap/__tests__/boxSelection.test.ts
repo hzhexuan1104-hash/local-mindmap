@@ -5,6 +5,8 @@ import {
   hitTestNodesInRect,
   isCanvasBlankTarget,
   isCanvasInteractionBlockedTarget,
+  isCanvasRightPanBlockedTarget,
+  isDragPastThreshold,
   mergeBoxSelection,
   screenToCanvasPoint,
   shouldStartCanvasPan,
@@ -30,7 +32,7 @@ describe('box selection helpers', () => {
     });
   });
 
-  it('hit-tests nodes by center point inside the selection rectangle', () => {
+  it('hit-tests every node whose bounds intersect the selection rectangle', () => {
     const selectedIds = hitTestNodesInRect(
       { left: 50, top: 50, width: 100, height: 100 },
       [
@@ -40,10 +42,10 @@ describe('box selection helpers', () => {
       ],
     );
 
-    expect(selectedIds).toEqual(['inside']);
+    expect(selectedIds).toEqual(['inside', 'edge-overlap']);
   });
 
-  it('does not hit an edge-overlapping node whose center is outside the selection rectangle', () => {
+  it('includes edge-overlapping nodes instead of requiring their centers', () => {
     const selectedIds = hitTestNodesInRect(
       { left: 0, top: 0, width: 100, height: 100 },
       [
@@ -53,7 +55,7 @@ describe('box selection helpers', () => {
       ],
     );
 
-    expect(selectedIds).toEqual(['first', 'second']);
+    expect(selectedIds).toEqual(['first', 'second', 'edge-only']);
   });
 
   it('does not hit nodes outside the selection rectangle', () => {
@@ -154,7 +156,7 @@ describe('box selection helpers', () => {
     ).toEqual(['upper-child', 'middle-child']);
   });
 
-  it('selects a node whose center is inside the visual selection after zoom and pan', () => {
+  it('keeps intersecting-node hit-testing aligned after zoom and pan', () => {
     const geometry = getBoxSelectionGeometry({
       screenStart: { x: 220, y: 180 },
       screenCurrent: { x: 520, y: 420 },
@@ -165,12 +167,12 @@ describe('box selection helpers', () => {
     expect(
       hitTestNodesInRect(geometry.canvasRect, [
         { id: 'inside', left: 100, top: 100, width: 80, height: 60 },
-        { id: 'outside-center', left: 240, top: 120, width: 120, height: 80 },
+        { id: 'outside', left: 241, top: 120, width: 120, height: 80 },
       ]),
     ).toEqual(['inside']);
   });
 
-  it('keeps center-point hit-testing aligned after canvas scroll', () => {
+  it('keeps intersecting-node hit-testing aligned after canvas scroll', () => {
     const geometry = getBoxSelectionGeometry({
       screenStart: { x: 180, y: 140 },
       screenCurrent: { x: 380, y: 300 },
@@ -182,7 +184,7 @@ describe('box selection helpers', () => {
     expect(
       hitTestNodesInRect(geometry.canvasRect, [
         { id: 'inside', left: 220, top: 150, width: 80, height: 60 },
-        { id: 'edge-only', left: 390, top: 150, width: 120, height: 60 },
+        { id: 'outside', left: 431, top: 150, width: 120, height: 60 },
       ]),
     ).toEqual(['inside']);
   });
@@ -196,64 +198,67 @@ describe('box selection helpers', () => {
     expect(mergeBoxSelection(['root', 'a'], ['b'], false)).toEqual(['b']);
   });
 
-  it('starts box selection only from a shift-left-button empty canvas area', () => {
+  it('starts box selection only from a left-button empty canvas area', () => {
     expect(
       shouldStartBoxSelection({
         button: 0,
         isOnInteractiveElement: false,
-        shiftKey: true,
+        isBlankTarget: true,
       }),
     ).toBe(true);
     expect(
       shouldStartBoxSelection({
         button: 0,
         isOnInteractiveElement: false,
-        shiftKey: false,
+        isBlankTarget: false,
       }),
     ).toBe(false);
     expect(
       shouldStartBoxSelection({
         button: 2,
         isOnInteractiveElement: false,
-        shiftKey: true,
+        isBlankTarget: true,
       }),
     ).toBe(false);
     expect(
       shouldStartBoxSelection({
         button: 0,
         isOnInteractiveElement: true,
-        shiftKey: true,
+        isBlankTarget: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldStartBoxSelection({
+        button: 0,
+        isOnInteractiveElement: false,
+        isBlankTarget: false,
       }),
     ).toBe(false);
   });
 
-  it('starts canvas pan only from a non-shift left-button empty canvas area', () => {
+  it('starts canvas pan from the right button, including non-control node areas', () => {
     expect(
       shouldStartCanvasPan({
-        button: 0,
+        button: 2,
         isOnInteractiveElement: false,
-        shiftKey: false,
       }),
     ).toBe(true);
     expect(
       shouldStartCanvasPan({
         button: 0,
         isOnInteractiveElement: false,
-        shiftKey: true,
       }),
     ).toBe(false);
     expect(
       shouldStartCanvasPan({
         button: 2,
-        isOnInteractiveElement: false,
-        shiftKey: false,
+        isOnInteractiveElement: true,
       }),
     ).toBe(false);
     expect(
       shouldStartCanvasPan({
-        button: 0,
-        isOnInteractiveElement: true,
-        shiftKey: false,
+        button: 1,
+        isOnInteractiveElement: false,
       }),
     ).toBe(false);
   });
@@ -274,6 +279,22 @@ describe('box selection helpers', () => {
     expect(isCanvasInteractionBlockedTarget({ closest: () => null })).toBe(
       false,
     );
+  });
+
+  it('allows right-button pan from node content but blocks editors and controls', () => {
+    const createTarget = (selectorToken: string) => ({
+      closest: (selector: string) =>
+        selector.includes(selectorToken) ? {} : null,
+    });
+
+    expect(isCanvasRightPanBlockedTarget(createTarget('.mindmap-node'))).toBe(false);
+    expect(isCanvasRightPanBlockedTarget(createTarget('textarea'))).toBe(true);
+    expect(isCanvasRightPanBlockedTarget(createTarget('button'))).toBe(true);
+  });
+
+  it('uses a four-pixel pointer threshold before a drag becomes active', () => {
+    expect(isDragPastThreshold({ x: 10, y: 10 }, { x: 13, y: 13 })).toBe(false);
+    expect(isDragPastThreshold({ x: 10, y: 10 }, { x: 14, y: 10 })).toBe(true);
   });
 
   it('recognizes only explicit canvas background layers as blank clicks', () => {

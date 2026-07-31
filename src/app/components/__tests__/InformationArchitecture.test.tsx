@@ -49,13 +49,15 @@ describe('v1.18 information architecture components', () => {
   });
 
   it('limits the inspector to visual style and remark tabs', () => {
-    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onSaveStyleAsNodeType={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
+    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} nodeIcons={[{ value: '✅', label: '✅ Task' }, { value: '💡', label: '💡 Idea' }]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onNodeIconChange={noop} onSaveStyleAsNodeType={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
     expect(html).toContain('样式');
     expect(html).toContain('备注');
     expect(html).not.toContain('信息');
     expect(html).not.toContain('当前节点类型');
     expect(html).not.toContain('应用到当前节点类型');
     expect(html).not.toContain('管理全局节点类型');
+    expect(html).toContain('__inherit-node-type-icon__');
+    expect(html).toContain('value="💡"');
   });
 
   it('normalizes editable hex values and rejects invalid colors', () => {

@@ -1,5 +1,10 @@
 import { normalizeImportedNodeType } from './nodeTypePacks';
 import {
+  isNodePriority,
+  isNodeProgress,
+  normalizeNodeTags,
+} from './nodeMarkers';
+import {
   createTemplateThumbnail,
   type MindmapTemplate,
 } from './templates';
@@ -113,11 +118,15 @@ function normalizeMindmapNode(value: unknown): MindmapNode | null {
 
   const position = normalizeNodePosition(value.position);
   const style = normalizeNodeStyle(value.style);
+  const tags = normalizeNodeTags(value.tags);
 
   return {
     id,
     text,
     remark: asString(value.remark),
+    ...(isNodePriority(value.priority) ? { priority: value.priority } : {}),
+    ...(isNodeProgress(value.progress) ? { progress: value.progress } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
     ...(typeof value.nodeTypeId === 'string' && value.nodeTypeId
       ? { nodeTypeId: value.nodeTypeId }
       : {}),

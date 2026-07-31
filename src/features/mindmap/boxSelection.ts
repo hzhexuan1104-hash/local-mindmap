@@ -20,7 +20,7 @@ export type NodeHitbox = {
   height: number;
 };
 
-const BOX_SELECTION_THRESHOLD = 5;
+export const POINTER_DRAG_THRESHOLD = 4;
 export const CANVAS_INTERACTION_BLOCK_SELECTOR = [
   'button',
   'input',
@@ -59,6 +59,46 @@ export const CANVAS_INTERACTION_BLOCK_SELECTOR = [
   '.mindmap-lines path',
 ].join(',');
 
+/**
+ * Right-button panning may start on a node, but never from a real control or
+ * an editor. This deliberately excludes `.mindmap-node` and node marker spans.
+ */
+export const CANVAS_RIGHT_PAN_BLOCK_SELECTOR = [
+  'button',
+  'input',
+  'textarea',
+  'select',
+  '[contenteditable="true"]',
+  '.toolbar',
+  '.floating-toolbar',
+  '.side-panel',
+  '.modal',
+  '.app-header',
+  '.node-toolbar',
+  '.toolbar-group',
+  '.side-toolrail',
+  '.tool-sidebar',
+  '.tool-drawer',
+  '.feature-panel',
+  '.remark-panel',
+  '.remark-panel-shell',
+  '.remark-collapsed-bar',
+  '.canvas-floating-toolbar',
+  '.context-menu',
+  '.shortcut-help-dialog',
+  '.shortcut-help-backdrop',
+  '.remark-preview-dialog',
+  '.remark-preview-backdrop',
+  '.excel-mapping-dialog',
+  '.excel-mapping-backdrop',
+  '.plugin-manager-dialog',
+  '.plugin-manager-backdrop',
+  '.collapse-toggle',
+  '.mini-map',
+  '.canvas-controls',
+  '.focus-mode-banner',
+].join(',');
+
 export function getSelectionRect(start: Point, end: Point): Rect {
   const left = Math.min(start.x, end.x);
   const top = Math.min(start.y, end.y);
@@ -73,8 +113,8 @@ export function getSelectionRect(start: Point, end: Point): Rect {
 
 export function isDragPastThreshold(start: Point, current: Point) {
   return (
-    Math.abs(current.x - start.x) >= BOX_SELECTION_THRESHOLD ||
-    Math.abs(current.y - start.y) >= BOX_SELECTION_THRESHOLD
+    Math.abs(current.x - start.x) >= POINTER_DRAG_THRESHOLD ||
+    Math.abs(current.y - start.y) >= POINTER_DRAG_THRESHOLD
   );
 }
 
@@ -98,14 +138,7 @@ export function isPointInRect(point: Point, rect: Rect) {
 
 export function hitTestNodesInRect(rect: Rect, nodes: NodeHitbox[]) {
   return nodes
-    .filter((node) => {
-      const centerPoint = {
-        x: node.left + node.width / 2,
-        y: node.top + node.height / 2,
-      };
-
-      return isPointInRect(centerPoint, rect);
-    })
+    .filter((node) => doRectsIntersect(rect, node))
     .map((node) => node.id);
 }
 
@@ -222,23 +255,32 @@ export function mergeBoxSelection(
 export function shouldStartBoxSelection(input: {
   button: number;
   isOnInteractiveElement: boolean;
-  shiftKey: boolean;
+  isBlankTarget: boolean;
 }) {
-  return input.button === 0 && input.shiftKey && !input.isOnInteractiveElement;
+  return (
+    input.button === 0 &&
+    input.isBlankTarget &&
+    !input.isOnInteractiveElement
+  );
 }
 
 export function shouldStartCanvasPan(input: {
   button: number;
   isOnInteractiveElement: boolean;
-  shiftKey: boolean;
 }) {
-  return input.button === 0 && !input.shiftKey && !input.isOnInteractiveElement;
+  return input.button === 2 && !input.isOnInteractiveElement;
 }
 
 export function isCanvasInteractionBlockedTarget(
   target: { closest: (selector: string) => unknown } | null,
 ) {
   return Boolean(target?.closest(CANVAS_INTERACTION_BLOCK_SELECTOR));
+}
+
+export function isCanvasRightPanBlockedTarget(
+  target: { closest: (selector: string) => unknown } | null,
+) {
+  return Boolean(target?.closest(CANVAS_RIGHT_PAN_BLOCK_SELECTOR));
 }
 
 /** Only explicit canvas background layers may clear canvas selection. */

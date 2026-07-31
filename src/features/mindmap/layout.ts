@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
-import { getEffectiveNodeStyle } from './nodeStyles';
+import { getEffectiveNodeIcon, getEffectiveNodeStyle } from './nodeStyles';
+import { normalizeNodeTags } from './nodeMarkers';
 import { findNodeTypeById } from './nodeTypes';
 import type { MindmapNode, MindmapNodeType } from './types';
 
@@ -18,6 +19,11 @@ const MINDMAP_LAYOUT = {
   rootVerticalPadding: 12,
   iconGap: 7,
   iconWidth: 18,
+  markerGap: 4,
+  markerWidth: 16,
+  tagFontSize: 11,
+  tagHeight: 20,
+  tagGap: 4,
 } as const;
 
 export const POSITIONED_LAYOUT = {
@@ -150,6 +156,47 @@ function getNodeShape(node: MindmapNode, nodeTypes: MindmapNodeType[]) {
   return getEffectiveNodeStyle(node, getNodeType(node, nodeTypes)).shape;
 }
 
+function getNodeMarkerWidth(node: MindmapNode, nodeType: MindmapNodeType | null) {
+  const markerCount = [
+    Boolean(getEffectiveNodeIcon(node, nodeType)),
+    Boolean(node.priority),
+    node.progress !== undefined,
+    Boolean(node.remark.trim()),
+  ].filter(Boolean).length;
+
+  return markerCount === 0
+    ? 0
+    : markerCount * MINDMAP_LAYOUT.markerWidth +
+      Math.max(0, markerCount - 1) * MINDMAP_LAYOUT.markerGap +
+      MINDMAP_LAYOUT.iconGap;
+}
+
+function getTagRowCount(tags: string[], availableWidth: number) {
+  if (tags.length === 0) {
+    return 0;
+  }
+
+  let rows = 1;
+  let rowWidth = 0;
+  tags.forEach((tag) => {
+    const tagWidth = Math.min(
+      availableWidth,
+      Math.ceil(measureNodeText(tag, MINDMAP_LAYOUT.tagFontSize, false)) + 14,
+    );
+    const nextWidth = rowWidth === 0 ? tagWidth : rowWidth + MINDMAP_LAYOUT.tagGap + tagWidth;
+
+    if (rowWidth > 0 && nextWidth > availableWidth) {
+      rows += 1;
+      rowWidth = tagWidth;
+      return;
+    }
+
+    rowWidth = nextWidth;
+  });
+
+  return rows;
+}
+
 export function getNodeContentSize(
   node: MindmapNode,
   nodeTypes: MindmapNodeType[] = [],
@@ -162,20 +209,28 @@ export function getNodeContentSize(
   const verticalPadding = isRoot ? MINDMAP_LAYOUT.rootVerticalPadding : MINDMAP_LAYOUT.nodeVerticalPadding;
   const minWidth = isRoot ? MINDMAP_LAYOUT.rootMinWidth : MINDMAP_LAYOUT.nodeMinWidth;
   const minHeight = isRoot ? MINDMAP_LAYOUT.rootMinHeight : MINDMAP_LAYOUT.nodeMinHeight;
-  const iconWidth = nodeType?.icon ? MINDMAP_LAYOUT.iconWidth + MINDMAP_LAYOUT.iconGap : 0;
+  const markerWidth = getNodeMarkerWidth(node, nodeType);
   const diamondFactor = shape === 'diamond' ? 1.34 : 1;
   const pillExtra = shape === 'pill' ? 8 : 0;
   const availableTextWidth = Math.max(
     48,
-    (MINDMAP_LAYOUT.nodeMaxWidth - horizontalPadding * 2 - iconWidth - pillExtra) / diamondFactor,
+    (MINDMAP_LAYOUT.nodeMaxWidth - horizontalPadding * 2 - markerWidth - pillExtra) / diamondFactor,
   );
   const lines = wrapText(node.text, availableTextWidth, style.fontSize, style.bold);
   const widestLine = Math.max(...lines.map((line) => measureNodeText(line, style.fontSize, style.bold)));
   const lineHeight = Math.ceil(style.fontSize * 1.4);
-  const contentWidth = widestLine + iconWidth;
+  const contentWidth = widestLine + markerWidth;
   const unclampedWidth = (contentWidth + horizontalPadding * 2 + pillExtra) * diamondFactor;
   const width = Math.max(minWidth, Math.min(MINDMAP_LAYOUT.nodeMaxWidth, Math.ceil(unclampedWidth)));
-  const baseHeight = lines.length * lineHeight + verticalPadding * 2;
+  const tags = normalizeNodeTags(node.tags);
+  const tagRows = getTagRowCount(
+    tags,
+    Math.max(48, width - horizontalPadding * 2),
+  );
+  const tagHeight = tagRows
+    ? tagRows * MINDMAP_LAYOUT.tagHeight + (tagRows - 1) * MINDMAP_LAYOUT.tagGap + 6
+    : 0;
+  const baseHeight = lines.length * lineHeight + tagHeight + verticalPadding * 2;
   const height = Math.max(
     minHeight,
     Math.ceil(shape === 'diamond' ? baseHeight + Math.max(18, width * 0.12) : baseHeight),
