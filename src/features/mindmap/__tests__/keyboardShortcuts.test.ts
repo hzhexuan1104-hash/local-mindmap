@@ -38,7 +38,7 @@ describe('keyboard shortcut helpers', () => {
         ),
       ).toBeNull();
       expect(
-        getKeyboardShortcutAction({ key: 'Insert', target }, defaultState),
+        getKeyboardShortcutAction({ key: 'Tab', target }, defaultState),
       ).toBeNull();
       expect(
         getKeyboardShortcutAction({ key: 'Enter', target }, defaultState),
@@ -62,20 +62,20 @@ describe('keyboard shortcut helpers', () => {
     ).toBeNull();
   });
 
-  it('maps Insert and Enter to node creation shortcuts outside editable elements', () => {
-    expect(getKeyboardShortcutAction({ key: 'Insert' }, defaultState)).toBe(
+  it('maps Tab and Enter to node creation shortcuts outside editable elements', () => {
+    expect(getKeyboardShortcutAction({ key: 'Tab' }, defaultState)).toBe(
       'add-child',
     );
-    expect(getKeyboardShortcutAction({ key: 'Tab' }, defaultState)).toBeNull();
+    expect(getKeyboardShortcutAction({ key: 'Insert' }, defaultState)).toBeNull();
     expect(getKeyboardShortcutAction({ key: 'Enter' }, defaultState)).toBe(
       'add-sibling',
     );
   });
 
-  it('does not map Insert or Enter while editing, without selection, or while UI overlays are active', () => {
+  it('does not map Tab or Enter while editing, without selection, or while UI overlays are active', () => {
     expect(
       getKeyboardShortcutAction(
-        { key: 'Insert' },
+        { key: 'Tab' },
         { ...defaultState, isEditingNodeText: true },
       ),
     ).toBeNull();
@@ -87,7 +87,7 @@ describe('keyboard shortcut helpers', () => {
     ).toBeNull();
     expect(
       getKeyboardShortcutAction(
-        { key: 'Insert' },
+        { key: 'Tab' },
         { ...defaultState, hasModalOpen: true },
       ),
     ).toBeNull();

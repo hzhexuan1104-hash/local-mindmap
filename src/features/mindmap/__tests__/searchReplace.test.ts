@@ -6,6 +6,7 @@ import {
   replaceAllInMindmap,
   replaceMatchInMindmap,
   SEARCH_SCOPE_LABELS,
+  shouldResetSearchOnPanelClose,
   type SearchMatch,
 } from '../searchReplace';
 import type { MindmapNode } from '../types';
@@ -182,6 +183,12 @@ describe('search and replace', () => {
         activeIndex: 0,
       }),
     ).toBe('未找到匹配项');
+  });
+
+  it('resets transient search state only when closing the search panel', () => {
+    expect(shouldResetSearchOnPanelClose('search')).toBe(true);
+    expect(shouldResetSearchOnPanelClose('outline')).toBe(false);
+    expect(shouldResetSearchOnPanelClose(null)).toBe(false);
   });
 
   it('searches current branch as text and remark content', () => {

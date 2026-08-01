@@ -12,8 +12,11 @@ import {
 import { applyNodeTypeToNodes } from '../selection';
 import {
   addTypedChildNode,
+  addTypedChildNodes,
   addTypedParentNode,
+  addTypedParentNodes,
   addTypedSiblingNode,
+  addTypedSiblingNodes,
   getNodeTypeCreationOptions,
 } from '../typedNodeCreation';
 import type {
@@ -157,6 +160,55 @@ describe('typed node creation', () => {
     ).toBeNull();
   });
 
+  it('creates a child for every selected parent node', () => {
+    const mindmap = {
+      ...createMindmap(),
+      children: [
+        createMindmap().children[0],
+        { id: 'topic-b', text: 'Topic B', remark: '', children: [] },
+      ],
+    };
+    const result = addTypedChildNodes(
+      mindmap,
+      ['root', 'topic-b'],
+      [test1],
+      test1.id,
+    );
+
+    expect(result?.createdNodes).toHaveLength(2);
+    expect(result?.rootNode.children).toHaveLength(3);
+    expect(result?.rootNode.children.find((node) => node.id === 'topic-b')?.children)
+      .toHaveLength(1);
+    expect(result?.selectedNodeIds).toEqual(
+      result?.createdNodes.map((node) => node.id),
+    );
+  });
+
+  it('creates siblings for selected non-root nodes and skips the root', () => {
+    const mindmap = {
+      ...createMindmap(),
+      children: [
+        createMindmap().children[0],
+        { id: 'topic-b', text: 'Topic B', remark: '', children: [] },
+      ],
+    };
+    const result = addTypedSiblingNodes(
+      mindmap,
+      ['root', 'topic-a', 'topic-b'],
+      [test1],
+      test1.id,
+    );
+
+    expect(result?.createdNodes).toHaveLength(2);
+    expect(result?.rootNode.children).toHaveLength(4);
+    expect(result?.rootNode.children.map((node) => node.id)).toEqual([
+      'topic-a',
+      result?.createdNodes[0].id,
+      'topic-b',
+      result?.createdNodes[1].id,
+    ]);
+  });
+
   it('inserts a new parent between the selected node and its original parent', () => {
     const mindmap = {
       ...createMindmap(),
@@ -183,6 +235,36 @@ describe('typed node creation', () => {
 
   it('does not create a parent above the root node', () => {
     expect(addTypedParentNode(createMindmap(), 'root', [test1], test1.id)).toBeNull();
+  });
+
+  it('creates parents for selected non-root nodes and skips the root', () => {
+    const mindmap: MindmapNode = {
+      ...createMindmap(),
+      children: [
+        {
+          ...createMindmap().children[0],
+          children: [
+            { id: 'topic-b', text: 'Topic B', remark: '', children: [] },
+          ],
+        },
+      ],
+    };
+    const result = addTypedParentNodes(
+      mindmap,
+      ['root', 'topic-a', 'topic-b'],
+      [test1],
+      test1.id,
+    );
+    const parentOfTopicA = result?.rootNode.children[0];
+    const topicA = parentOfTopicA?.children[0];
+    const parentOfTopicB = topicA?.children[0];
+
+    expect(result?.createdNodes).toHaveLength(2);
+    expect(parentOfTopicA?.children.map((node) => node.id)).toEqual(['topic-a']);
+    expect(parentOfTopicB?.children.map((node) => node.id)).toEqual(['topic-b']);
+    expect(result?.selectedNodeIds).toEqual(
+      result?.createdNodes.map((node) => node.id),
+    );
   });
 
   it('falls back to a normal node when the type id does not exist', () => {

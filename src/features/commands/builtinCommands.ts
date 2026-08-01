@@ -74,7 +74,7 @@ export function createBuiltinCommands(): CommandDefinition[] {
     builtin('node.delete', '删除当前节点', 'node', 'node.delete', { keywords: ['删除', 'delete'], disabledReason: hasSelection, riskLevel: 'medium' }),
     builtin('node.edit', '编辑当前节点', 'node', 'node.edit', { keywords: ['编辑', 'edit'], disabledReason: hasPrimarySelection }),
 
-    builtin('node.addChild', '新建子节点', 'node', 'node.addChild', { shortcut: 'Insert', keywords: ['新建', '添加', '子节点'], disabledReason: hasPrimarySelection }),
+    builtin('node.addChild', '新建子节点', 'node', 'node.addChild', { shortcut: 'Tab', keywords: ['新建', '添加', '子节点'], disabledReason: hasPrimarySelection }),
     builtin('node.addSibling', '新建同级节点', 'node', 'node.addSibling', { shortcut: 'Enter', keywords: ['新建', '添加', '同级'], disabledReason: notRootSelection }),
     builtin('node.remark', '打开节点备注', 'node', 'node.remark', { keywords: ['备注', 'remark', 'markdown'], disabledReason: hasPrimarySelection }),
     builtin('node.collapse', '折叠当前分支', 'node', 'node.collapse', { keywords: ['折叠', '收起'], disabledReason: hasPrimarySelection }),

@@ -113,3 +113,19 @@ export function applyNodeTypeToNodes(
     ),
   };
 }
+
+/** Applies a non-structural node update to every selected node in one tree pass. */
+export function updateSelectedNodes(
+  node: MindmapNode,
+  selectedNodeIds: Set<string>,
+  updater: (node: MindmapNode) => MindmapNode,
+): MindmapNode {
+  const updatedNode = selectedNodeIds.has(node.id) ? updater(node) : node;
+
+  return {
+    ...updatedNode,
+    children: node.children.map((child) =>
+      updateSelectedNodes(child, selectedNodeIds, updater),
+    ),
+  };
+}

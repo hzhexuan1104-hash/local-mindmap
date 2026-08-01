@@ -89,7 +89,7 @@ export function getKeyboardShortcutAction(
       return null;
     }
 
-    if (event.key === 'Insert') {
+    if (event.key === 'Tab') {
       return 'add-child';
     }
 

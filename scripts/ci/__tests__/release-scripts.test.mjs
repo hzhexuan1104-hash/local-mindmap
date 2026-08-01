@@ -85,12 +85,12 @@ afterEach(() => {
 });
 
 describe('release version validation', () => {
-  it('keeps the five release version sources aligned at 1.20.0', () => {
-    expect(assertVersionState(PROJECT_ROOT, 'v1.20.0')).toMatchObject({ version: '1.20.0' });
+  it('keeps the five release version sources aligned at 1.21.0', () => {
+    expect(assertVersionState(PROJECT_ROOT, 'v1.21.0')).toMatchObject({ version: '1.21.0' });
   });
 
   it('rejects a tag that differs from the application version', () => {
-    expect(() => assertVersionState(PROJECT_ROOT, 'v1.20.1')).toThrow('不一致');
+    expect(() => assertVersionState(PROJECT_ROOT, 'v1.21.1')).toThrow('不一致');
   });
 });
 
@@ -104,22 +104,22 @@ describe('release source and Apple signing decisions', () => {
     })).toBe('refs/heads/main');
   });
 
-  it('resolves v1.20.0 to its immutable release source commit while keeping workflow commit separate', () => {
+  it('resolves v1.21.0 to its immutable release source commit while keeping workflow commit separate', () => {
     const calls = [];
     const gitRunner = (_root, args) => {
       calls.push(args);
-      if (args[0] === 'rev-parse' && args[2] === 'v1.20.0^{commit}') return V120_RELEASE_COMMIT;
+      if (args[0] === 'rev-parse' && args[2] === 'v1.21.0^{commit}') return V120_RELEASE_COMMIT;
       if (args[0] === 'rev-list') return V120_RELEASE_COMMIT;
       throw new Error(`Unexpected git call: ${args.join(' ')}`);
     };
     expect(resolveReleaseRef({
       eventName: 'workflow_dispatch',
-      releaseRef: 'v1.20.0',
+      releaseRef: 'v1.21.0',
       workflowCommit: 'f'.repeat(40),
       gitRunner,
     })).toEqual({
-      release_ref: 'v1.20.0',
-      release_tag: 'v1.20.0',
+      release_ref: 'v1.21.0',
+      release_tag: 'v1.21.0',
       release_commit: V120_RELEASE_COMMIT,
       workflow_commit: 'f'.repeat(40),
       is_tag_release: true,
@@ -418,7 +418,7 @@ describe('release metadata', () => {
 
 describe('Draft Release safety and notes', () => {
   const unsignedManifest = {
-    tag: 'v1.20.0',
+    tag: 'v1.21.0',
     releaseSourceCommit: 'a'.repeat(40),
     workflowCommit: 'b'.repeat(40),
     assets: [
@@ -446,19 +446,19 @@ describe('Draft Release safety and notes', () => {
       body: '<!-- local-mindmap-workflow-managed: true -->\n<!-- local-mindmap-release-source-commit: ' + 'a'.repeat(40) + ' -->',
     };
     expect(() => assertSafeDraftUpdate(release, {
-      tag: 'v1.20.0',
+      tag: 'v1.21.0',
       releaseSourceCommit: 'a'.repeat(40),
     })).not.toThrow();
     expect(() => assertSafeDraftUpdate({ ...release, isDraft: false }, {
-      tag: 'v1.20.0',
+      tag: 'v1.21.0',
       releaseSourceCommit: 'a'.repeat(40),
     })).toThrow('published');
     expect(() => assertSafeDraftUpdate({ ...release, targetCommitish: 'c'.repeat(40) }, {
-      tag: 'v1.20.0',
+      tag: 'v1.21.0',
       releaseSourceCommit: 'a'.repeat(40),
     })).toThrow('not');
     expect(() => assertSafeDraftUpdate({ ...release, body: '' }, {
-      tag: 'v1.20.0',
+      tag: 'v1.21.0',
       releaseSourceCommit: 'a'.repeat(40),
     })).toThrow('unknown asset provenance');
   });

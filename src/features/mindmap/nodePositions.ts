@@ -7,17 +7,28 @@ export function updateNodePositionById(
   nodeId: string,
   position: NodePosition,
 ): MindmapNode {
-  if (node.id === nodeId) {
-    return {
-      ...node,
-      position: { ...position },
-    };
+  return updateNodePositionsById(node, new Map([[nodeId, position]]));
+}
+
+export function updateNodePositionsById(
+  node: MindmapNode,
+  positionsByNodeId: ReadonlyMap<string, NodePosition>,
+): MindmapNode {
+  const nextPosition = positionsByNodeId.get(node.id);
+  const nextChildren = node.children.map((child) =>
+    updateNodePositionsById(child, positionsByNodeId),
+  );
+  const childrenChanged = nextChildren.some(
+    (child, index) => child !== node.children[index],
+  );
+
+  if (!nextPosition && !childrenChanged) {
+    return node;
   }
 
   return {
     ...node,
-    children: node.children.map((child) =>
-      updateNodePositionById(child, nodeId, position),
-    ),
+    ...(nextPosition ? { position: { ...nextPosition } } : {}),
+    ...(childrenChanged ? { children: nextChildren } : {}),
   };
 }

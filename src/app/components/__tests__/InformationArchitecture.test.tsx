@@ -1,4 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkspacePanelHost } from '../WorkspacePanelHost';
 import { RightInspectorPanel, normalizeHexColorInput } from '../RightInspectorPanel';
@@ -16,6 +18,18 @@ const selectedNode: MindmapNode = {
 };
 
 describe('v1.18 information architecture components', () => {
+  it('uses a crisp native Chinese UI font stack with regular menu weight', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+
+    expect(css).toContain('"Microsoft YaHei UI", "Microsoft YaHei"');
+    expect(css).toMatch(
+      /\.top-menu-trigger\s*\{[^}]*font-size: 12px;[^}]*font-weight: 500;/,
+    );
+    expect(css).toMatch(
+      /\.node-quick-toolbar button\s*\{[^}]*font-size: 12px;[^}]*font-weight: 500;/,
+    );
+  });
+
   it('renders a single on-demand workspace panel with no navigation rail', () => {
     const html = renderToStaticMarkup(
       <WorkspacePanelHost id="templates" title="Templates" onClose={noop}><div>content</div></WorkspacePanelHost>,

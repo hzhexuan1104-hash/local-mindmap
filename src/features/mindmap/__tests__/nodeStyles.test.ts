@@ -9,6 +9,7 @@ import {
 } from '../history';
 import {
   DEFAULT_NODE_STYLE,
+  DEFAULT_ROOT_NODE_STYLE,
   applyStyleToNodeType,
   createNodeTypeFromStyle,
   getEffectiveNodeIcon,
@@ -74,6 +75,9 @@ describe('node style helpers', () => {
     expect(getEffectiveNodeStyle({ ...node, nodeTypeId: undefined }, null)).toEqual(
       DEFAULT_NODE_STYLE,
     );
+    expect(
+      getEffectiveNodeStyle({ ...node, nodeTypeId: undefined }, null, true),
+    ).toEqual(DEFAULT_ROOT_NODE_STYLE);
     expect(getEffectiveNodeStyle(node, nodeType)).toMatchObject({
       shape: nodeType.shape,
       backgroundColor: nodeType.backgroundColor,
@@ -167,7 +171,8 @@ describe('node style helpers', () => {
     expect(css).toContain('.mindmap-node.shape-diamond .mindmap-node-shape');
     expect(css).toContain('clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)');
     expect(css).toContain('.mindmap-node.shape-diamond.is-selected');
-    expect(css).toContain('drop-shadow(0 0 9px rgb(55 124 246 / 34%))');
+    expect(css).toContain('drop-shadow(0 0 12px rgb(37 99 235 / 58%))');
+    expect(css).not.toContain('is-primary-selected');
     expect(css).toMatch(
       /\.mindmap-node\.shape-diamond\.is-selected[\s\S]*?box-shadow: none;[\s\S]*?outline: 0;/,
     );
@@ -199,17 +204,14 @@ describe('node style helpers', () => {
     expect(diamondStateRule).toContain('outline-offset: 0;');
   });
 
-  it('uses diamond shape-layer highlights for selected, box-select, and drop states', () => {
+  it('uses the same diamond shape-layer highlight for selected, box-selected, and searched nodes', () => {
     const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
 
     expect(css).toMatch(
-      /\.mindmap-node\.shape-diamond\.is-selected \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.is-primary-selected \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 9px rgb\(55 124 246 \/ 34%\)\)/,
+      /\.mindmap-node\.shape-diamond\.is-selected \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.is-box-selection-preview \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.is-search-match \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 12px rgb\(37 99 235 \/ 58%\)\)/,
     );
     expect(css).toMatch(
-      /\.mindmap-node\.shape-diamond\.is-box-selection-preview \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 7px rgb\(55 124 246 \/ 24%\)\)/,
-    );
-    expect(css).toMatch(
-      /\.mindmap-node\.shape-diamond\.is-search-match \.mindmap-node-shape,[\s\S]*?\.mindmap-node\.shape-diamond\.is-drop-target \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 8px rgb\(96 170 122 \/ 28%\)\)/,
+      /\.mindmap-node\.shape-diamond\.is-drop-target \.mindmap-node-shape\s*\{[\s\S]*?drop-shadow\(0 0 8px rgb\(96 170 122 \/ 28%\)\)/,
     );
   });
 
@@ -235,15 +237,13 @@ describe('node style helpers', () => {
     });
   });
 
-  it('keeps non-diamond selected and shape styles stable', () => {
+  it('uses one prominent selection style for clicked, box-selected, and searched non-diamond nodes', () => {
     const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
 
     expect(css).toMatch(
-      /\.mindmap-node\.is-selected,[\s\S]*?\.mindmap-node\.has-node-type\.is-selected\s*\{[\s\S]*?box-shadow:/,
+      /\.mindmap-node\.is-selected,[\s\S]*?\.mindmap-node\.has-node-type\.is-selected,[\s\S]*?\.mindmap-node\.is-box-selection-preview,[\s\S]*?\.mindmap-node\.is-search-match\s*\{[\s\S]*?outline: 3px solid rgb\(37 99 235 \/ 68%\);[\s\S]*?box-shadow:/,
     );
-    expect(css).toMatch(
-      /\.mindmap-node\.is-primary-selected,[\s\S]*?\.mindmap-node\.is-selected\.is-primary-selected\s*\{[\s\S]*?outline:/,
-    );
+    expect(css).not.toContain('is-primary-selected');
     expect(css).toMatch(
       /\.mindmap-node \.mindmap-node-shape\s*\{[\s\S]*?border-radius: var\(--radius-md\);/,
     );

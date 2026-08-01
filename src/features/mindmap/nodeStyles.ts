@@ -16,34 +16,46 @@ export type NodeStyleCssVariables = {
 
 export const DEFAULT_NODE_STYLE: EffectiveNodeStyle = {
   shape: 'rounded',
-  backgroundColor: '#ffffff',
-  borderColor: '#c9d8f0',
-  textColor: '#14315f',
+  backgroundColor: '#edf4f7',
+  borderColor: '#8ab3ca',
+  textColor: '#23333f',
   fontSize: 16,
   bold: false,
+};
+
+export const DEFAULT_ROOT_NODE_STYLE: EffectiveNodeStyle = {
+  shape: 'rounded',
+  backgroundColor: '#70a4c3',
+  borderColor: '#6297b7',
+  textColor: '#ffffff',
+  fontSize: 17,
+  bold: true,
 };
 
 export function getEffectiveNodeStyle(
   node: MindmapNode,
   nodeType?: MindmapNodeType | null,
+  isRoot = false,
 ): EffectiveNodeStyle {
+  const defaultStyle = isRoot ? DEFAULT_ROOT_NODE_STYLE : DEFAULT_NODE_STYLE;
+
   return {
-    shape: node.style?.shape ?? nodeType?.shape ?? DEFAULT_NODE_STYLE.shape,
+    shape: node.style?.shape ?? nodeType?.shape ?? defaultStyle.shape,
     backgroundColor:
       node.style?.backgroundColor ??
       nodeType?.backgroundColor ??
-      DEFAULT_NODE_STYLE.backgroundColor,
+      defaultStyle.backgroundColor,
     borderColor:
       node.style?.borderColor ??
       nodeType?.borderColor ??
-      DEFAULT_NODE_STYLE.borderColor,
+      defaultStyle.borderColor,
     textColor:
       node.style?.textColor ??
       nodeType?.textColor ??
-      DEFAULT_NODE_STYLE.textColor,
+      defaultStyle.textColor,
     fontSize:
-      node.style?.fontSize ?? nodeType?.fontSize ?? DEFAULT_NODE_STYLE.fontSize,
-    bold: node.style?.bold ?? nodeType?.bold ?? DEFAULT_NODE_STYLE.bold,
+      node.style?.fontSize ?? nodeType?.fontSize ?? defaultStyle.fontSize,
+    bold: node.style?.bold ?? nodeType?.bold ?? defaultStyle.bold,
   };
 }
 

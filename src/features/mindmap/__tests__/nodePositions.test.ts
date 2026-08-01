@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { updateNodePositionById } from '../nodePositions';
+import {
+  updateNodePositionById,
+  updateNodePositionsById,
+} from '../nodePositions';
 import { moveNodeAsChild } from '../treeOperations';
 import type { MindmapNode } from '../types';
 
@@ -53,5 +56,50 @@ describe('node position helpers', () => {
 
     expect(moveNodeAsChild(positionedMindmap, 'root', 'child')).toBeNull();
     expect(positionedMindmap.position).toEqual({ x: -120, y: -90 });
+  });
+
+  it('moves every selected node position by applying a batch without touching others', () => {
+    const mindmap: MindmapNode = {
+      ...createMindmap(),
+      children: [
+        {
+          id: 'child-a',
+          text: 'Child A',
+          remark: '',
+          position: { x: 120, y: 60 },
+          children: [
+            {
+              id: 'grandchild',
+              text: 'Grandchild',
+              remark: '',
+              position: { x: 240, y: 80 },
+              children: [],
+            },
+          ],
+        },
+        {
+          id: 'child-b',
+          text: 'Child B',
+          remark: '',
+          position: { x: 140, y: 180 },
+          children: [],
+        },
+      ],
+    };
+
+    const nextMindmap = updateNodePositionsById(
+      mindmap,
+      new Map([
+        ['child-a', { x: 150, y: 100 }],
+        ['grandchild', { x: 270, y: 120 }],
+      ]),
+    );
+
+    expect(nextMindmap.children[0].position).toEqual({ x: 150, y: 100 });
+    expect(nextMindmap.children[0].children[0].position).toEqual({
+      x: 270,
+      y: 120,
+    });
+    expect(nextMindmap.children[1].position).toEqual({ x: 140, y: 180 });
   });
 });

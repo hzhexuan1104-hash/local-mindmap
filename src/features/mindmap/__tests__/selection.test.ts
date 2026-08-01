@@ -6,6 +6,7 @@ import {
   normalizeSelectionState,
   resolveBoxSelectionState,
   resolveNodeClickSelection,
+  updateSelectedNodes,
   updateSelection,
 } from '../selection';
 import type { MindmapNode } from '../types';
@@ -227,5 +228,26 @@ describe('selection helpers', () => {
     expect(nextMindmap.children.every((node) => node.nodeTypeId === 'type-task')).toBe(
       true,
     );
+  });
+
+  it('applies style and icon updates to all selected nodes without touching others', () => {
+    const nextMindmap = updateSelectedNodes(
+      mindmap,
+      new Set(['root', 'child-2']),
+      (node) => ({
+        ...node,
+        style: { ...node.style, icon: '💡', backgroundColor: '#e7f5ff' },
+      }),
+    );
+
+    expect(nextMindmap.style).toMatchObject({
+      icon: '💡',
+      backgroundColor: '#e7f5ff',
+    });
+    expect(nextMindmap.children[1].style).toMatchObject({
+      icon: '💡',
+      backgroundColor: '#e7f5ff',
+    });
+    expect(nextMindmap.children[0].style).toBeUndefined();
   });
 });

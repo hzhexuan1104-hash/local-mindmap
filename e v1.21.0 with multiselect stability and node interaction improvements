@@ -1,0 +1,47 @@
+warning: in the working copy of 'scripts/ci/__tests__/release-scripts.test.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src-tauri/Cargo.lock', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/App.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/components/RightInspectorPanel.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/components/__tests__/InformationArchitecture.test.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/commands/builtinCommands.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/keyboardShortcuts.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/layout.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/nodePositions.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/nodeStyles.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/searchReplace.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/selection.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/__tests__/typedNodeCreation.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/keyboardShortcuts.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/layout.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/nodePositions.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/nodeStyles.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/searchReplace.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/selection.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/features/mindmap/typedNodeCreation.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/styles/global.css', LF will be replaced by CRLF the next time Git touches it
+ package-lock.json                                  |   4 [32m+[m[31m-[m
+ package.json                                       |   2 [32m+[m[31m-[m
+ scripts/ci/__tests__/release-scripts.test.mjs      |  26 [32m+[m[31m-[m
+ src-tauri/Cargo.lock                               |   2 [32m+[m[31m-[m
+ src-tauri/Cargo.toml                               |   2 [32m+[m[31m-[m
+ src-tauri/tauri.conf.json                          |   2 [32m+[m[31m-[m
+ src/app/App.tsx                                    | 352 [32m+++++++++++++[m[31m--------[m
+ src/app/components/RightInspectorPanel.tsx         |  12 [32m+[m[31m-[m
+ .../__tests__/InformationArchitecture.test.tsx     |  14 [32m+[m
+ src/features/commands/builtinCommands.ts           |   2 [32m+[m[31m-[m
+ .../mindmap/__tests__/keyboardShortcuts.test.ts    |  14 [32m+[m[31m-[m
+ src/features/mindmap/__tests__/layout.test.ts      |  18 [32m++[m
+ .../mindmap/__tests__/nodePositions.test.ts        |  50 [32m++[m[31m-[m
+ src/features/mindmap/__tests__/nodeStyles.test.ts  |  24 [32m+[m[31m-[m
+ .../mindmap/__tests__/searchReplace.test.ts        |   7 [32m+[m
+ src/features/mindmap/__tests__/selection.test.ts   |  22 [32m++[m
+ .../mindmap/__tests__/typedNodeCreation.test.ts    |  82 [32m+++++[m
+ src/features/mindmap/keyboardShortcuts.ts          |   2 [32m+[m[31m-[m
+ src/features/mindmap/layout.ts                     |  16 [32m+[m[31m-[m
+ src/features/mindmap/nodePositions.ts              |  27 [32m+[m[31m-[m
+ src/features/mindmap/nodeStyles.ts                 |  30 [32m+[m[31m-[m
+ src/features/mindmap/searchReplace.ts              |   5 [32m+[m
+ src/features/mindmap/selection.ts                  |  16 [32m+[m
+ src/features/mindmap/typedNodeCreation.ts          | 182 [32m+++++++++++[m
+ src/styles/global.css                              | 173 [32m+++++[m[31m-----[m
+ 25 files changed, 789 insertions(+), 297 deletions(-)

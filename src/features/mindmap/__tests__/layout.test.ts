@@ -252,6 +252,24 @@ describe('mindmap layout positions', () => {
     expect(long.width).toBeGreaterThan(short.width);
   });
 
+  it('uses compact child node proportions while preserving a larger root node', () => {
+    const child = getNodeContentSize({
+      id: 'child',
+      text: '分支主题',
+      remark: '',
+      children: [],
+    });
+    const root = getNodeContentSize(
+      { id: 'root', text: '新建脑图', remark: '', children: [] },
+      [],
+      true,
+    );
+
+    expect(child.height).toBe(36);
+    expect(root.height).toBe(52);
+    expect(root.height).toBeGreaterThan(child.height);
+  });
+
   it('wraps long content at the maximum width and gives diamonds a safe width allowance', () => {
     const longText = '一个很长的节点文本 '.repeat(40);
     const rounded = getNodeContentSize({ id: 'rounded', text: longText, remark: '', children: [] });

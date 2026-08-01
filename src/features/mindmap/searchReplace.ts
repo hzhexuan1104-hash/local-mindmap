@@ -9,6 +9,11 @@ export const SEARCH_SCOPE_LABELS: Record<SearchScope, string> = {
   remark: '仅备注',
 };
 
+/** Search selection and highlighting are transient and end with the search panel. */
+export function shouldResetSearchOnPanelClose(panelId: string | null) {
+  return panelId === 'search';
+}
+
 export function getSearchPanelStatusText(options: {
   query: string;
   hasRun: boolean;

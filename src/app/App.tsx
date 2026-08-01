@@ -129,7 +129,7 @@ import {
   getNodeStyleCssVariables,
   mergeNodeStyle,
 } from '../features/mindmap/nodeStyles';
-import { updateNodePositionById } from '../features/mindmap/nodePositions';
+import { updateNodePositionsById } from '../features/mindmap/nodePositions';
 import {
   resolveCommittedNodeText,
   resolveEditingNodeId,
@@ -266,6 +266,7 @@ import {
   replaceAllInMindmap,
   replaceMatchInMindmap,
   SEARCH_SCOPE_LABELS,
+  shouldResetSearchOnPanelClose,
   type SearchMatch,
   type SearchScope,
 } from '../features/mindmap/searchReplace';
@@ -275,6 +276,7 @@ import {
   getDeletableSelectedNodeIds,
   resolveBoxSelectionState,
   resolveNodeClickSelection,
+  updateSelectedNodes,
 } from '../features/mindmap/selection';
 import {
   cloneTemplateProject,
@@ -298,11 +300,11 @@ import {
   moveNodeAsChild,
 } from '../features/mindmap/treeOperations';
 import {
-  addTypedChildNode,
-  addTypedParentNode,
-  addTypedSiblingNode,
+  addTypedChildNodes,
+  addTypedParentNodes,
+  addTypedSiblingNodes,
   getNodeTypeCreationOptions,
-  type TypedNodeCreationResult,
+  type TypedNodeBatchCreationResult,
 } from '../features/mindmap/typedNodeCreation';
 import { normalizeNodeTag } from '../features/mindmap/nodeMarkers';
 import {
@@ -485,8 +487,9 @@ const safelyReleasePointer = (
 
 type DragState = {
   nodeId: string;
+  nodeIds: string[];
   pointerStart: { x: number; y: number };
-  nodeStart: { x: number; y: number };
+  nodeStarts: Map<string, { x: number; y: number }>;
   hasRecordedHistory: boolean;
 };
 
@@ -567,10 +570,9 @@ type MindmapTreeProps = {
   layoutNode: MindmapLayoutNode;
   isRoot: boolean;
   nodeTypes: MindmapNodeType[];
-  selectedNodeId: string | null;
   selectedNodeIds: Set<string>;
   boxSelectionPreviewIds: Set<string>;
-  draggingNodeId: string | null;
+  draggingNodeIds: Set<string>;
   dropTargetNodeId: string | null;
   editingNodeId: string | null;
   editingText: string;
@@ -590,10 +592,9 @@ function MindmapTree({
   layoutNode,
   isRoot,
   nodeTypes,
-  selectedNodeId,
   selectedNodeIds,
   boxSelectionPreviewIds,
-  draggingNodeId,
+  draggingNodeIds,
   dropTargetNodeId,
   editingNodeId,
   editingText,
@@ -611,7 +612,6 @@ function MindmapTree({
   const node = layoutNode.node;
   const isSelected = selectedNodeIds.has(node.id);
   const isBoxSelectionPreview = boxSelectionPreviewIds.has(node.id);
-  const isPrimarySelected = isSelected && node.id === selectedNodeId;
   const isDropTarget = node.id === dropTargetNodeId;
   const isEditing = node.id === editingNodeId;
   const isSearchMatch = searchMatchNodeIds.has(node.id);
@@ -621,7 +621,7 @@ function MindmapTree({
       : null;
   const hasChildren = node.children.length > 0;
   const nodeType = findNodeTypeById(nodeTypes, node.nodeTypeId);
-  const effectiveNodeStyle = getEffectiveNodeStyle(node, nodeType);
+  const effectiveNodeStyle = getEffectiveNodeStyle(node, nodeType, isRoot);
   const effectiveNodeIcon = getEffectiveNodeIcon(node, nodeType);
   const nodeStyle = getNodeStyleCssVariables(
     effectiveNodeStyle,
@@ -644,8 +644,7 @@ function MindmapTree({
             'mindmap-node',
             isSelected ? 'is-selected' : '',
             isBoxSelectionPreview ? 'is-box-selection-preview' : '',
-            isPrimarySelected ? 'is-primary-selected' : '',
-            draggingNodeId === node.id ? 'is-dragging' : '',
+            draggingNodeIds.has(node.id) ? 'is-dragging' : '',
             isDropTarget ? 'is-drop-target' : '',
             isSearchMatch ? 'is-search-match' : '',
             isRoot ? 'is-root' : '',
@@ -655,7 +654,7 @@ function MindmapTree({
             .filter(Boolean)
             .join(' ')}
           style={{ ...nodeStyle, width: '100%', height: '100%' }}
-          aria-pressed={isSelected || isPrimarySelected}
+          aria-pressed={isSelected}
           onClick={(event) => {
             event.stopPropagation();
             onSelectNode(node.id, event.ctrlKey || event.shiftKey);
@@ -917,6 +916,7 @@ export function App() {
   const boxSelectionFrameRef = useRef<number | null>(null);
   const activeCanvasPointerIdRef = useRef<number | null>(null);
   const suppressNextContextMenuRef = useRef(false);
+  const suppressNextNodeClickRef = useRef(false);
   const contextMenuSuppressionTimerRef = useRef<number | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const pluginReloadRequestRef = useRef(0);
@@ -928,7 +928,7 @@ export function App() {
   const commandPaletteSuspendsEditingRef = useRef(false);
   const editingTextRef = useRef('');
   const nodeEditorRef = useRef<HTMLTextAreaElement | null>(null);
-  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [draggingNodeIds, setDraggingNodeIds] = useState<string[]>([]);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const selectedNode = selectedNodeId
@@ -943,6 +943,10 @@ export function App() {
   const selectedNodeIdSet = useMemo(
     () => new Set(selectedNodeIds),
     [selectedNodeIds],
+  );
+  const draggingNodeIdSet = useMemo(
+    () => new Set(draggingNodeIds),
+    [draggingNodeIds],
   );
   const boxSelectionPreviewIdSet = useMemo(
     () => new Set(boxSelectionPreviewIds),
@@ -1016,8 +1020,8 @@ export function App() {
     [canvasView, canvasViewport],
   );
   const forcedRenderNodeIds = useMemo(
-    () => [selectedNodeId, editingNodeId, draggingNodeId, dropTargetNodeId, focusedRootId].filter((id): id is string => Boolean(id)),
-    [draggingNodeId, dropTargetNodeId, editingNodeId, focusedRootId, selectedNodeId],
+    () => [selectedNodeId, editingNodeId, ...draggingNodeIds, dropTargetNodeId, focusedRootId].filter((id): id is string => Boolean(id)),
+    [draggingNodeIds, dropTargetNodeId, editingNodeId, focusedRootId, selectedNodeId],
   );
   const visibleNodeIds = useMemo(
     () => isViewportCullingEnabled ? getVisibleNodeIds(mindmapLayout.nodes, worldViewport, forcedRenderNodeIds) : new Set(mindmapLayout.nodes.map((node) => node.id)),
@@ -1581,7 +1585,7 @@ export function App() {
   useEffect(() => {
     const stopNodeDrag = () => {
       dragStateRef.current = null;
-      setDraggingNodeId(null);
+      setDraggingNodeIds([]);
       setDropTargetNodeId(null);
     };
 
@@ -1696,6 +1700,11 @@ export function App() {
   };
 
   const selectNode = (nodeId: string, append: boolean) => {
+    if (suppressNextNodeClickRef.current) {
+      suppressNextNodeClickRef.current = false;
+      return;
+    }
+
     const nextSelection = resolveNodeClickSelection(
       {
         selectedNodeId,
@@ -1714,6 +1723,17 @@ export function App() {
     setSelectedNodeId(null);
     setSelectedNodeIds([]);
     setContextMenu(null);
+  };
+
+  const handleCloseWorkspacePanel = () => {
+    if (shouldResetSearchOnPanelClose(activeWorkspacePanel)) {
+      setSearchQuery('');
+      setReplacementText('');
+      setSearchHasRun(false);
+      setActiveMatchIndex(0);
+      clearSelection();
+    }
+    setActiveWorkspacePanel(null);
   };
 
   const handleSelectAllNodes = () => {
@@ -1793,11 +1813,11 @@ export function App() {
         return;
       case 'cancel-drag':
         dragStateRef.current = null;
-        setDraggingNodeId(null);
+        setDraggingNodeIds([]);
         setDropTargetNodeId(null);
         return;
       case 'close-workspace-panel':
-        setActiveWorkspacePanel(null);
+        handleCloseWorkspacePanel();
         return;
       case 'clear-selection':
         clearSelection();
@@ -3459,40 +3479,41 @@ export function App() {
     }
   };
 
-  const applyTypedNodeCreation = (
-    result: TypedNodeCreationResult,
+  const applyTypedNodeBatchCreation = (
+    result: TypedNodeBatchCreationResult,
     options: { startEditing?: boolean } = {},
   ) => {
     const shouldStartEditing = Boolean(options.startEditing);
+    const editingNode = result.createdNodes[result.createdNodes.length - 1]!;
+
     setMindmap(result.rootNode);
     setSelectedNodeId(result.selectedNodeId);
     setSelectedNodeIds(result.selectedNodeIds);
     editingSessionRef.current = shouldStartEditing
-      ? { nodeId: result.createdNode.id }
+      ? { nodeId: editingNode.id }
       : null;
-    editingTextRef.current = shouldStartEditing ? result.createdNode.text : '';
-    setEditingNodeId(shouldStartEditing ? result.createdNode.id : null);
-    setEditingText(shouldStartEditing ? result.createdNode.text : '');
+    editingTextRef.current = shouldStartEditing ? editingNode.text : '';
+    setEditingNodeId(shouldStartEditing ? editingNode.id : null);
+    setEditingText(shouldStartEditing ? editingNode.text : '');
   };
 
   const handleAddChild = (
     nodeTypeId = childNodeTypeId,
     options: { startEditing?: boolean } = {},
   ) => {
-    const parentNodeId = selectedNodeId ?? mindmap.id;
-    const parentNode = findNodeById(mindmap, parentNodeId) ?? mindmap;
-    const position = parentNode.position
-      ? {
-          x: parentNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
-          y: parentNode.position.y + parentNode.children.length * 96,
-        }
-      : undefined;
-    const result = addTypedChildNode(
+    const parentNodeIds = selectedNodeIds.length > 0 ? selectedNodeIds : [mindmap.id];
+    const result = addTypedChildNodes(
       mindmap,
-      parentNodeId,
+      parentNodeIds,
       availableNodeTypes,
       nodeTypeId,
-      position,
+      (parentNode, childIndex) =>
+        parentNode.position
+          ? {
+              x: parentNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
+              y: parentNode.position.y + childIndex * 96,
+            }
+          : undefined,
     );
 
     if (!result) {
@@ -3501,7 +3522,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeCreation(result, options);
+    applyTypedNodeBatchCreation(result, options);
     showMessage('已新增下级主题');
   };
 
@@ -3509,32 +3530,37 @@ export function App() {
     nodeTypeId = childNodeTypeId,
     options: { startEditing?: boolean } = {},
   ) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
-    if (selectedNodeId === mindmap.id) {
-      showMessage('中心主题不能新建同级节点，请使用 Insert 新建子节点');
+    const hasEligibleSiblingTarget = selectedNodeIds.some(
+      (nodeId) => nodeId !== mindmap.id && Boolean(findNodeById(mindmap, nodeId)),
+    );
+
+    if (!hasEligibleSiblingTarget) {
+      showMessage('中心主题不能新建同级节点，请使用 Tab 新建子节点');
       return;
     }
 
-    const parentNode = findParentNodeById(mindmap, selectedNodeId);
-    const selectedLayoutNode = layoutNodeById.get(selectedNodeId);
-    const siblingPosition =
-      parentNode?.position && selectedLayoutNode
-        ? {
-            x: parentNode.position.x,
-            y:
-              selectedLayoutNode.y - POSITIONED_LAYOUT.canvasPadding + 96,
-          }
-        : undefined;
-    const result = addTypedSiblingNode(
+    const result = addTypedSiblingNodes(
       mindmap,
-      selectedNodeId,
+      selectedNodeIds,
       availableNodeTypes,
       nodeTypeId,
-      siblingPosition,
+      (siblingNode) => {
+        const parentNode = findParentNodeById(mindmap, siblingNode.id);
+        const siblingLayoutNode = layoutNodeById.get(siblingNode.id);
+
+        return parentNode?.position && siblingLayoutNode
+          ? {
+              x: parentNode.position.x,
+              y:
+                siblingLayoutNode.y - POSITIONED_LAYOUT.canvasPadding + 96,
+            }
+          : undefined;
+      },
     );
 
     if (!result) {
@@ -3543,7 +3569,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeCreation(result, options);
+    applyTypedNodeBatchCreation(result, options);
     showMessage('已新增同级主题');
   };
 
@@ -3551,29 +3577,32 @@ export function App() {
     nodeTypeId = childNodeTypeId,
     options: { startEditing?: boolean } = {},
   ) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
-    if (selectedNodeId === mindmap.id) {
+    const hasEligibleParentTarget = selectedNodeIds.some(
+      (nodeId) => nodeId !== mindmap.id && Boolean(findNodeById(mindmap, nodeId)),
+    );
+
+    if (!hasEligibleParentTarget) {
       showMessage('中心主题不能新增上级主题');
       return;
     }
 
-    const selected = findNodeById(mindmap, selectedNodeId);
-    const position = selected?.position
-      ? {
-          x: selected.position.x - POSITIONED_LAYOUT.horizontalGap - 88,
-          y: selected.position.y,
-        }
-      : undefined;
-    const result = addTypedParentNode(
+    const result = addTypedParentNodes(
       mindmap,
-      selectedNodeId,
+      selectedNodeIds,
       availableNodeTypes,
       nodeTypeId,
-      position,
+      (selected) =>
+        selected.position
+          ? {
+              x: selected.position.x - POSITIONED_LAYOUT.horizontalGap - 88,
+              y: selected.position.y,
+            }
+          : undefined,
     );
 
     if (!result) {
@@ -3582,7 +3611,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeCreation(result, options);
+    applyTypedNodeBatchCreation(result, options);
     showMessage('已新增上级主题');
   };
 
@@ -3809,7 +3838,7 @@ export function App() {
   };
 
   const handleAddTag = (value: string) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return false;
     }
@@ -3820,41 +3849,55 @@ export function App() {
       return false;
     }
 
-    const currentNode = findNodeById(mindmap, selectedNodeId);
+    const currentNode = selectedNodeIds
+      .map((nodeId) => findNodeById(mindmap, nodeId))
+      .find((node): node is MindmapNode => Boolean(node));
     if (!currentNode) {
       return false;
     }
 
-    if ((currentNode.tags ?? []).includes(tag)) {
+    if (
+      selectedNodeIds.every((nodeId) =>
+        (findNodeById(mindmap, nodeId)?.tags ?? []).includes(tag),
+      )
+    ) {
       showMessage('该标签已存在');
       return false;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
-        ...node,
-        tags: [...(node.tags ?? []), tag],
-      })),
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) =>
+        (node.tags ?? []).includes(tag)
+          ? node
+          : { ...node, tags: [...(node.tags ?? []), tag] },
+      ),
     );
     showMessage(`已添加标签「${tag}」`);
     return true;
   };
 
   const handlePriorityChange = (priority?: MindmapNodePriority) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
-    const currentNode = findNodeById(mindmap, selectedNodeId);
-    if (!currentNode || currentNode.priority === priority) {
+    const currentNode = selectedNodeIds
+      .map((nodeId) => findNodeById(mindmap, nodeId))
+      .find((node): node is MindmapNode => Boolean(node));
+    if (
+      !currentNode ||
+      selectedNodeIds.every(
+        (nodeId) => findNodeById(mindmap, nodeId)?.priority === priority,
+      )
+    ) {
       return;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => {
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => {
         const nextNode = { ...node };
         if (priority === undefined) {
           delete nextNode.priority;
@@ -3868,19 +3911,26 @@ export function App() {
   };
 
   const handleProgressChange = (progress?: MindmapNodeProgress) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
-    const currentNode = findNodeById(mindmap, selectedNodeId);
-    if (!currentNode || currentNode.progress === progress) {
+    const currentNode = selectedNodeIds
+      .map((nodeId) => findNodeById(mindmap, nodeId))
+      .find((node): node is MindmapNode => Boolean(node));
+    if (
+      !currentNode ||
+      selectedNodeIds.every(
+        (nodeId) => findNodeById(mindmap, nodeId)?.progress === progress,
+      )
+    ) {
       return;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => {
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => {
         const nextNode = { ...node };
         if (progress === undefined) {
           delete nextNode.progress;
@@ -3894,22 +3944,29 @@ export function App() {
   };
 
   const handleRemoveTag = (tag: string) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
-    const currentNode = findNodeById(mindmap, selectedNodeId);
-    if (!currentNode?.tags?.includes(tag)) {
+    if (
+      !selectedNodeIds.some((nodeId) =>
+        findNodeById(mindmap, nodeId)?.tags?.includes(tag),
+      )
+    ) {
       return;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
-        ...node,
-        tags: (node.tags ?? []).filter((currentTag) => currentTag !== tag),
-      })),
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) =>
+        (node.tags ?? []).includes(tag)
+          ? {
+              ...node,
+              tags: (node.tags ?? []).filter((currentTag) => currentTag !== tag),
+            }
+          : node,
+      ),
     );
     showMessage(`已删除标签「${tag}」`);
   };
@@ -4198,14 +4255,14 @@ export function App() {
   };
 
   const handleSelectedNodeStyleChange = (style: MindmapNodeStyle) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => ({
         ...node,
         style: mergeNodeStyle(node.style, style),
       })),
@@ -4214,14 +4271,14 @@ export function App() {
   };
 
   const handleSelectedNodeIconChange = (icon: string | undefined) => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => {
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => {
         const nextStyle = { ...(node.style ?? {}) };
 
         if (icon === undefined) {
@@ -4256,7 +4313,11 @@ export function App() {
     );
     const nextNodeType = createNodeTypeFromStyle(
       name,
-      getEffectiveNodeStyle(selectedNode, selectedNodeType),
+      getEffectiveNodeStyle(
+        selectedNode,
+        selectedNodeType,
+        selectedNode.id === mindmap.id,
+      ),
       selectedNode,
       getEffectiveNodeIcon(selectedNode, selectedNodeType),
     );
@@ -4279,14 +4340,14 @@ export function App() {
   };
 
   const handleResetSelectedNodeStyle = () => {
-    if (!selectedNodeId) {
+    if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateNodeById(currentMindmap, selectedNodeId, (node) => ({
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => ({
         ...node,
         style: undefined,
       })),
@@ -4694,22 +4755,29 @@ export function App() {
 
         recordHistory();
         dragState.hasRecordedHistory = true;
-        setDraggingNodeId(dragState.nodeId);
+        setDraggingNodeIds(dragState.nodeIds);
       }
 
-      const nextPosition = {
-        x: dragState.nodeStart.x + pointerDeltaX / canvasView.scale,
-        y: dragState.nodeStart.y + pointerDeltaY / canvasView.scale,
-      };
+      const nextPositionsByNodeId = new Map(
+        Array.from(dragState.nodeStarts, ([nodeId, nodeStart]) => [
+          nodeId,
+          {
+            x: nodeStart.x + pointerDeltaX / canvasView.scale,
+            y: nodeStart.y + pointerDeltaY / canvasView.scale,
+          },
+        ]),
+      );
 
       setMindmap((currentMindmap) =>
-        updateNodePositionById(currentMindmap, dragState.nodeId, nextPosition),
+        updateNodePositionsById(currentMindmap, nextPositionsByNodeId),
       );
       setDropTargetNodeId(
-        findDropTargetNodeId(
-          dragState.nodeId,
-          getCanvasPointFromMouseEvent(event),
-        ),
+        dragState.nodeIds.length === 1
+          ? findDropTargetNodeId(
+              dragState.nodeId,
+              getCanvasPointFromMouseEvent(event),
+            )
+          : null,
       );
       return;
     }
@@ -4828,11 +4896,19 @@ export function App() {
     if (dragStateRef.current) {
       event.preventDefault();
       const dragState = dragStateRef.current;
+      if (dragState.hasRecordedHistory && dragState.nodeIds.length > 1) {
+        suppressNextNodeClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextNodeClickRef.current = false;
+        }, 0);
+      }
       const finalDropTargetNodeId =
-        findDropTargetNodeId(
-          dragState.nodeId,
-          getCanvasPointFromMouseEvent(event),
-        ) ?? dropTargetNodeId;
+        dragState.nodeIds.length === 1
+          ? findDropTargetNodeId(
+              dragState.nodeId,
+              getCanvasPointFromMouseEvent(event),
+            ) ?? dropTargetNodeId
+          : null;
       const canMoveNode =
         finalDropTargetNodeId !== null &&
         moveNodeAsChild(mindmap, dragState.nodeId, finalDropTargetNodeId) !== null;
@@ -4857,7 +4933,7 @@ export function App() {
       }
 
       dragStateRef.current = null;
-      setDraggingNodeId(null);
+      setDraggingNodeIds([]);
       setDropTargetNodeId(null);
       stopCanvasPan();
       return;
@@ -4888,7 +4964,7 @@ export function App() {
 
     if (dragStateRef.current) {
       dragStateRef.current = null;
-      setDraggingNodeId(null);
+      setDraggingNodeIds([]);
       setDropTargetNodeId(null);
     }
   };
@@ -4910,10 +4986,29 @@ export function App() {
     nodeId: string,
     event: MouseEvent<HTMLElement>,
   ) => {
-    const layoutNode = layoutNodeById.get(nodeId);
-    const node = findNodeById(mindmap, nodeId);
+    const selectedDragNodeIds = selectedNodeIds.includes(nodeId)
+      ? selectedNodeIds
+      : [nodeId];
+    const nodeStarts = new Map(
+      selectedDragNodeIds.flatMap((selectedId) => {
+        const layoutNode = layoutNodeById.get(selectedId);
+        const node = findNodeById(mindmap, selectedId);
 
-    if (!layoutNode || !node) {
+        if (!layoutNode || !node) {
+          return [];
+        }
+
+        return [[
+          selectedId,
+          node.position ?? {
+            x: layoutNode.x - POSITIONED_LAYOUT.canvasPadding,
+            y: layoutNode.y - POSITIONED_LAYOUT.canvasPadding,
+          },
+        ]] as const;
+      }),
+    );
+
+    if (nodeStarts.size === 0) {
       return;
     }
 
@@ -4922,11 +5017,9 @@ export function App() {
     setDropTargetNodeId(null);
     dragStateRef.current = {
       nodeId,
+      nodeIds: Array.from(nodeStarts.keys()),
       pointerStart: { x: event.clientX, y: event.clientY },
-      nodeStart: node.position ?? {
-        x: layoutNode.x - POSITIONED_LAYOUT.canvasPadding,
-        y: layoutNode.y - POSITIONED_LAYOUT.canvasPadding,
-      },
+      nodeStarts,
       hasRecordedHistory: false,
     };
   };
@@ -6235,7 +6328,7 @@ export function App() {
     ] },
     { id: 'node', label: '节点', items: [
       { id: 'new', label: '新建', children: [
-        { id: 'child', label: '新建子节点', shortcut: 'Insert', children: [
+        { id: 'child', label: '新建子节点', shortcut: 'Tab', children: [
           { id: 'normal', label: '普通节点', execute: () => handleAddChild('') },
           ...availableNodeTypes.map((nodeType) => ({ id: `type-${nodeType.id}`, label: nodeType.name, execute: () => handleAddChild(nodeType.id) })),
         ] },
@@ -6297,7 +6390,7 @@ export function App() {
 
       <NodeQuickToolbar
         selectedNode={selectedNodeId ? selectedNode : null}
-        hasSelection={Boolean(selectedNodeId)}
+        hasSelection={selectedNodeIds.length > 0}
         onAddChild={() => handleAddChild(childNodeTypeId, { startEditing: true })}
         onAddSibling={() => handleAddSibling(siblingNodeTypeId, { startEditing: true })}
         onAddParent={() => handleAddParent(childNodeTypeId, { startEditing: true })}
@@ -6342,12 +6435,12 @@ export function App() {
               type="button"
               className="workspace-panel-backdrop"
               aria-label="关闭工作面板"
-              onClick={() => setActiveWorkspacePanel(null)}
+              onClick={handleCloseWorkspacePanel}
             />
             <WorkspacePanelHost
               id={activeWorkspacePanel}
               title={drawerTitle[activeWorkspacePanel]}
-              onClose={() => setActiveWorkspacePanel(null)}
+              onClose={handleCloseWorkspacePanel}
             >
 
             {activeWorkspacePanel === 'templates' ? (
@@ -7011,7 +7104,7 @@ export function App() {
           {shouldShowCanvasGuide ? (
             <aside className="canvas-guide" aria-label="画布新手引导">
               <span>双击节点编辑内容</span>
-              <span>Insert 新建子节点</span>
+              <span>Tab 新建子节点</span>
               <span>Enter 新建同级节点</span>
               <span>拖拽节点调整结构</span>
               <span>Ctrl+F 查找节点</span>
@@ -7088,10 +7181,9 @@ export function App() {
                   layoutNode={layoutNode}
                   isRoot={layoutNode.id === mindmap.id}
                   nodeTypes={availableNodeTypes}
-                  selectedNodeId={selectedNodeId}
                   selectedNodeIds={selectedNodeIdSet}
                   boxSelectionPreviewIds={boxSelectionPreviewIdSet}
-                  draggingNodeId={draggingNodeId}
+                  draggingNodeIds={draggingNodeIdSet}
                   dropTargetNodeId={dropTargetNodeId}
                   editingNodeId={editingNodeId}
                   editingText={editingText}
@@ -7140,6 +7232,8 @@ export function App() {
           ) : (
             <RightInspectorPanel
               selectedNode={selectedNode}
+              selectedNodeCount={selectedNodeIds.length}
+              isRoot={selectedNode.id === mindmap.id}
               nodeTypes={availableNodeTypes}
               nodeIcons={availableNodeTypeIcons}
               remarkMode={remarkMode}
@@ -7438,7 +7532,7 @@ export function App() {
                 <kbd>Ctrl</kbd> + <kbd>O</kbd>：打开 .lmind
               </span>
               <span>
-                <kbd>Insert</kbd>：新建子节点
+                <kbd>Tab</kbd>：新建子节点
               </span>
               <span>
                 <kbd>Enter</kbd>：新建同级节点

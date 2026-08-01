@@ -29,6 +29,8 @@ export type RemarkFocusRequest = {
 
 type RightInspectorPanelProps = {
   selectedNode: MindmapNode;
+  selectedNodeCount?: number;
+  isRoot?: boolean;
   nodeTypes: MindmapNodeType[];
   nodeIcons?: ReadonlyArray<NodeIconOption>;
   remarkMode: 'edit' | 'preview';
@@ -125,6 +127,8 @@ function ColorControl({
 
 export function RightInspectorPanel({
   selectedNode,
+  selectedNodeCount = 1,
+  isRoot = false,
   nodeTypes,
   nodeIcons = NODE_TYPE_ICONS,
   remarkMode,
@@ -142,7 +146,7 @@ export function RightInspectorPanel({
   const [nodeTypeName, setNodeTypeName] = useState('');
   const selectedNodeType =
     nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
-  const effectiveStyle = getEffectiveNodeStyle(selectedNode, selectedNodeType);
+  const effectiveStyle = getEffectiveNodeStyle(selectedNode, selectedNodeType, isRoot);
   const selectedIcon = selectedNode.style?.icon;
   const selectedIconValue =
     selectedIcon === undefined
@@ -231,7 +235,11 @@ export function RightInspectorPanel({
           <div className="inspector-section">
             <section className="inspector-control-group">
               <h3>当前节点样式</h3>
-              <p className="control-help">下方样式默认只影响当前节点。</p>
+              <p className="control-help">
+                {selectedNodeCount > 1
+                  ? `下方样式将应用到全部 ${selectedNodeCount} 个选中节点。`
+                  : '下方样式仅影响当前节点。'}
+              </p>
               <div className="aligned-form node-style-form">
                 <label>
                   <span>当前节点图标</span>

@@ -10,9 +10,9 @@ const MINDMAP_LAYOUT = {
   childVerticalGap: 80,
   nodeMinWidth: 88,
   nodeMaxWidth: 340,
-  nodeMinHeight: 44,
+  nodeMinHeight: 36,
   nodeHorizontalPadding: 16,
-  nodeVerticalPadding: 10,
+  nodeVerticalPadding: 6,
   rootMinWidth: 120,
   rootMinHeight: 52,
   rootHorizontalPadding: 20,
@@ -152,8 +152,12 @@ function getNodeType(node: MindmapNode, nodeTypes: MindmapNodeType[]) {
   return findNodeTypeById(nodeTypes, node.nodeTypeId);
 }
 
-function getNodeShape(node: MindmapNode, nodeTypes: MindmapNodeType[]) {
-  return getEffectiveNodeStyle(node, getNodeType(node, nodeTypes)).shape;
+function getNodeShape(
+  node: MindmapNode,
+  nodeTypes: MindmapNodeType[],
+  isRoot = false,
+) {
+  return getEffectiveNodeStyle(node, getNodeType(node, nodeTypes), isRoot).shape;
 }
 
 function getNodeMarkerWidth(node: MindmapNode, nodeType: MindmapNodeType | null) {
@@ -203,7 +207,7 @@ export function getNodeContentSize(
   isRoot = false,
 ): NodeContentSize {
   const nodeType = getNodeType(node, nodeTypes);
-  const style = getEffectiveNodeStyle(node, nodeType);
+  const style = getEffectiveNodeStyle(node, nodeType, isRoot);
   const shape = style.shape;
   const horizontalPadding = isRoot ? MINDMAP_LAYOUT.rootHorizontalPadding : MINDMAP_LAYOUT.nodeHorizontalPadding;
   const verticalPadding = isRoot ? MINDMAP_LAYOUT.rootVerticalPadding : MINDMAP_LAYOUT.nodeVerticalPadding;
@@ -311,7 +315,7 @@ export function createMindmapLayout(rootNode: MindmapNode, nodeTypes: MindmapNod
   const nodes = visibleNodes.map((node) => {
     const size = sizeById.get(node.id)!;
     const autoPosition = autoPositionById.get(node.id) ?? { x: 0, y: 0 };
-    return { id: node.id, node, x: node.position?.x ?? autoPosition.x, y: node.position?.y ?? autoPosition.y, width: size.width, height: size.height, shape: getNodeShape(node, nodeTypes) };
+    return { id: node.id, node, x: node.position?.x ?? autoPosition.x, y: node.position?.y ?? autoPosition.y, width: size.width, height: size.height, shape: getNodeShape(node, nodeTypes, node.id === rootNode.id) };
   });
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const lines: MindmapLayoutLine[] = [];
