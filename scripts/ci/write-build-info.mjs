@@ -11,6 +11,11 @@ try {
   const version = args.version ?? readPackageVersion(root);
   const gitSha = args['git-sha'] ?? process.env.GITHUB_SHA ?? runChecked('git', ['rev-parse', 'HEAD'], { cwd: root });
   const tag = args.tag ?? process.env.RELEASE_TAG ?? '';
+  const releaseSourceCommit = args['release-source-commit'] ?? gitSha;
+  const workflowCommit = args['workflow-commit'] ?? process.env.GITHUB_SHA ?? null;
+  const distributionStatus = args['distribution-status'] ?? 'candidate';
+  const signed = args.signed === 'true';
+  const notarized = args.notarized === 'true';
   const nodeVersion = runChecked(process.execPath, ['--version']);
   const rustcVersion = runChecked('rustc', ['--version']);
   const tauriVersion = readJson(join(root, 'node_modules', '@tauri-apps', 'cli', 'package.json')).version;
@@ -18,9 +23,14 @@ try {
     version,
     tag,
     gitSha,
+    releaseSourceCommit,
+    workflowCommit,
     platform,
     arch,
     rustTarget,
+    distributionStatus,
+    signed,
+    notarized,
     nodeVersion,
     rustcVersion,
     tauriVersion,

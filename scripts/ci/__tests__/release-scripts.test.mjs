@@ -10,6 +10,18 @@ import {
   sha256,
 } from '../release-utils.mjs';
 import { buildReleaseMetadata } from '../create-release-metadata.mjs';
+import { buildReleaseNotes, UNSIGNED_MACOS_WARNING } from '../generate-release-notes.mjs';
+import {
+  APPLE_SIGNING_SECRETS,
+  getAppleSigningState,
+  getMacosDistributionMode,
+} from '../check-apple-signing-state.mjs';
+import {
+  resolveReleaseRef,
+  selectReleaseRef,
+  V120_RELEASE_COMMIT,
+} from '../resolve-release-ref.mjs';
+import { assertSafeDraftUpdate } from '../publish-draft-release.mjs';
 import {
   assertPeArchitecture,
   assertValidPe,
@@ -79,6 +91,82 @@ describe('release version validation', () => {
 
   it('rejects a tag that differs from the application version', () => {
     expect(() => assertVersionState(PROJECT_ROOT, 'v1.20.1')).toThrow('不一致');
+  });
+});
+
+describe('release source and Apple signing decisions', () => {
+  it('uses the selected workflow branch when a manual release_ref is empty', () => {
+    expect(selectReleaseRef({
+      eventName: 'workflow_dispatch',
+      releaseRef: '',
+      githubRef: 'refs/heads/main',
+      githubRefName: 'main',
+    })).toBe('refs/heads/main');
+  });
+
+  it('resolves v1.20.0 to its immutable release source commit while keeping workflow commit separate', () => {
+    const calls = [];
+    const gitRunner = (_root, args) => {
+      calls.push(args);
+      if (args[0] === 'rev-parse' && args[2] === 'v1.20.0^{commit}') return V120_RELEASE_COMMIT;
+      if (args[0] === 'rev-list') return V120_RELEASE_COMMIT;
+      throw new Error(`Unexpected git call: ${args.join(' ')}`);
+    };
+    expect(resolveReleaseRef({
+      eventName: 'workflow_dispatch',
+      releaseRef: 'v1.20.0',
+      workflowCommit: 'f'.repeat(40),
+      gitRunner,
+    })).toEqual({
+      release_ref: 'v1.20.0',
+      release_tag: 'v1.20.0',
+      release_commit: V120_RELEASE_COMMIT,
+      workflow_commit: 'f'.repeat(40),
+      is_tag_release: true,
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it('rejects a moved v1.20.0 tag', () => {
+    const gitRunner = (_root, args) => {
+      if (args[0] === 'rev-parse') return 'a'.repeat(40);
+      return 'a'.repeat(40);
+    };
+    expect(() => resolveReleaseRef({
+      eventName: 'workflow_dispatch',
+      releaseRef: 'v1.20.0',
+      workflowCommit: 'f'.repeat(40),
+      gitRunner,
+    })).toThrow(V120_RELEASE_COMMIT);
+  });
+
+  it('fails when the requested tag cannot be resolved', () => {
+    expect(() => resolveReleaseRef({
+      eventName: 'workflow_dispatch',
+      releaseRef: 'v9.9.9',
+      workflowCommit: 'f'.repeat(40),
+      gitRunner: () => { throw new Error('unknown revision'); },
+    })).toThrow('unknown revision');
+  });
+
+  it('requires all seven Apple secrets and never returns their values', () => {
+    const complete = Object.fromEntries(APPLE_SIGNING_SECRETS.map((name) => [name, `secret-${name}`]));
+    expect(getAppleSigningState(complete)).toEqual({
+      apple_signing_ready: true,
+      missing_apple_secrets: [],
+    });
+    const incomplete = getAppleSigningState({ ...complete, APPLE_PASSWORD: '' });
+    expect(incomplete).toEqual({
+      apple_signing_ready: false,
+      missing_apple_secrets: ['APPLE_PASSWORD'],
+    });
+    expect(JSON.stringify(incomplete)).not.toContain('secret-');
+  });
+
+  it('only selects unsigned preview after an explicit opt-in', () => {
+    expect(getMacosDistributionMode({ signingReady: true, allowUnsigned: true })).toBe('release');
+    expect(getMacosDistributionMode({ signingReady: false, allowUnsigned: true })).toBe('unsigned-preview');
+    expect(getMacosDistributionMode({ signingReady: false, allowUnsigned: false })).toBe('rejected');
   });
 });
 
@@ -255,20 +343,32 @@ describe('release metadata', () => {
       assetsDirectory,
       version: '1.19.0',
       tag: 'v1.19.0',
-      commit: 'a'.repeat(40),
+      releaseRef: 'v1.19.0',
+      releaseSourceCommit: 'a'.repeat(40),
+      workflowCommit: 'b'.repeat(40),
+      releaseMode: 'manual-tag-repair',
+      macosDistributionStatus: 'release',
       workflowRunId: '123',
-      builtAt: '2026-07-16T00:00:00.000Z',
+      generatedAt: '2026-07-16T00:00:00.000Z',
     });
-    expect(manifest.artifacts).toHaveLength(8);
+    expect(manifest.assets).toHaveLength(8);
     expect(
-      manifest.artifacts
+      manifest.assets
         .filter((artifact) => artifact.platform === 'uos')
         .every((artifact) => artifact.compatibilityStatus === 'candidate'),
+    ).toBe(true);
+    expect(manifest.releaseSourceCommit).toBe('a'.repeat(40));
+    expect(manifest.workflowCommit).toBe('b'.repeat(40));
+    expect(
+      manifest.assets
+        .filter((artifact) => artifact.platform === 'macos')
+        .every((artifact) => artifact.signed === true && artifact.notarized === true),
     ).toBe(true);
     expect(checksumLines).toEqual([...checksumLines].sort());
     const windowsExe = join(assetsDirectory, 'Local-Mindmap_1.19.0_windows_x64-setup.exe');
     expect(checksumLines.join('\n')).toContain(sha256(windowsExe));
     expect(JSON.stringify(manifest)).not.toContain(assetsDirectory);
+    expect(JSON.stringify(manifest)).not.toContain('secret-');
     expect(readFileSync(windowsExe).length).toBeGreaterThan(1024);
   });
 
@@ -279,14 +379,93 @@ describe('release metadata', () => {
       assetsDirectory,
       version: '1.19.0',
       tag: 'v1.19.0',
-      commit: 'a'.repeat(40),
+      releaseRef: 'v1.19.0',
+      releaseSourceCommit: 'a'.repeat(40),
+      workflowCommit: 'b'.repeat(40),
+      releaseMode: 'manual-tag-repair',
+      macosDistributionStatus: 'release',
       workflowRunId: '123',
     })).toThrow('旧版本');
+  });
+  it('labels unsigned macOS preview assets without using formal filenames', () => {
+    const assetsDirectory = temporaryDirectory();
+    for (const [platform, arch] of [
+      ['windows', 'x64'], ['macos', 'arm64'], ['macos', 'x64'], ['uos', 'x64'], ['uos', 'arm64'],
+    ]) {
+      const variant = platform === 'macos' ? '_unsigned_preview' : '';
+      for (const asset of expectedAssets(platform, arch, '1.19.0', { variant })) {
+        writeAsset(join(assetsDirectory, asset.filename));
+      }
+    }
+    const { manifest } = buildReleaseMetadata({
+      assetsDirectory,
+      version: '1.19.0',
+      tag: 'v1.19.0',
+      releaseRef: 'v1.19.0',
+      releaseSourceCommit: 'a'.repeat(40),
+      workflowCommit: 'b'.repeat(40),
+      releaseMode: 'manual-tag-repair',
+      macosDistributionStatus: 'unsigned-preview',
+      workflowRunId: '123',
+    });
+    const macosAssets = manifest.assets.filter((asset) => asset.platform === 'macos');
+    expect(macosAssets.every((asset) => asset.filename.includes('_unsigned_preview.dmg'))).toBe(true);
+    expect(macosAssets.every((asset) => asset.signed === false && asset.notarized === false)).toBe(true);
+    expect(macosAssets.every((asset) => asset.distributionStatus === 'unsigned-preview')).toBe(true);
+    expect(macosAssets.every((asset) => asset.userActionRequired?.includes('not notarized'))).toBe(true);
+  });
+});
+
+describe('Draft Release safety and notes', () => {
+  const unsignedManifest = {
+    tag: 'v1.20.0',
+    releaseSourceCommit: 'a'.repeat(40),
+    workflowCommit: 'b'.repeat(40),
+    assets: [
+      { platform: 'macos', arch: 'arm64', filename: 'Local-Mindmap_1.20.0_macos_arm64_unsigned_preview.dmg', distributionStatus: 'unsigned-preview' },
+      { platform: 'macos', arch: 'x64', filename: 'Local-Mindmap_1.20.0_macos_x64_unsigned_preview.dmg', distributionStatus: 'unsigned-preview' },
+      { platform: 'windows', arch: 'x64', filename: 'Local-Mindmap_1.20.0_windows_x64.msi', distributionStatus: 'release' },
+    ],
+  };
+
+  it('adds the required warning only when a macOS asset is unsigned preview', () => {
+    const unsignedNotes = buildReleaseNotes(unsignedManifest);
+    expect(unsignedNotes).toContain(UNSIGNED_MACOS_WARNING);
+    expect(unsignedNotes).toContain('Unsigned Preview');
+    const signedNotes = buildReleaseNotes({
+      ...unsignedManifest,
+      assets: unsignedManifest.assets.map((asset) => ({ ...asset, distributionStatus: 'release' })),
+    });
+    expect(signedNotes).not.toContain(UNSIGNED_MACOS_WARNING);
+  });
+
+  it('only permits update of a workflow-managed Draft with the same source commit', () => {
+    const release = {
+      isDraft: true,
+      targetCommitish: 'a'.repeat(40),
+      body: '<!-- local-mindmap-workflow-managed: true -->\n<!-- local-mindmap-release-source-commit: ' + 'a'.repeat(40) + ' -->',
+    };
+    expect(() => assertSafeDraftUpdate(release, {
+      tag: 'v1.20.0',
+      releaseSourceCommit: 'a'.repeat(40),
+    })).not.toThrow();
+    expect(() => assertSafeDraftUpdate({ ...release, isDraft: false }, {
+      tag: 'v1.20.0',
+      releaseSourceCommit: 'a'.repeat(40),
+    })).toThrow('published');
+    expect(() => assertSafeDraftUpdate({ ...release, targetCommitish: 'c'.repeat(40) }, {
+      tag: 'v1.20.0',
+      releaseSourceCommit: 'a'.repeat(40),
+    })).toThrow('not');
+    expect(() => assertSafeDraftUpdate({ ...release, body: '' }, {
+      tag: 'v1.20.0',
+      releaseSourceCommit: 'a'.repeat(40),
+    })).toThrow('unknown asset provenance');
   });
 });
 
 describe('release workflow contract', () => {
-  it('contains the five native targets and a tag-only Draft Release gate', () => {
+  it('contains five native targets, immutable release source checkout, and unsigned macOS safeguards', () => {
     const workflow = readFileSync(join(PROJECT_ROOT, '.github', 'workflows', 'release-multiplatform.yml'), 'utf8');
     expect(workflow).toContain("- 'v*.*.*'");
     expect(workflow).toContain('windows-x64');
@@ -297,9 +476,17 @@ describe('release workflow contract', () => {
     expect(workflow).toContain('ubuntu-22.04-arm');
     expect(workflow).toContain('actions/upload-artifact@v7');
     expect(workflow).toContain('actions/download-artifact@v8');
-    expect(workflow).toContain("github.event_name == 'push'");
+    expect(workflow).toContain('release_ref:');
+    expect(workflow).toContain('allow_unsigned_macos:');
+    expect(workflow).toContain('resolve-release-ref.mjs');
+    expect(workflow).toContain('check-apple-signing-state.mjs');
+    expect(workflow).toContain('needs.preflight.outputs.release_commit');
+    expect(workflow).toContain('needs.preflight.outputs.workflow_commit');
+    expect(workflow).toContain('_unsigned_preview');
+    expect(workflow).toContain('notarytool submit');
+    expect(workflow).toContain("github.event_name == 'workflow_dispatch' && inputs.create_draft_release");
     expect(workflow).toContain('--draft');
     expect(workflow).toContain('if [ "${{ matrix.user_platform }}" = "windows" ]');
-    expect(workflow).toContain('--app-binary "src-tauri/target/${{ matrix.rust_target }}/release/local-mindmap.exe"');
+    expect(workflow).toContain('--app-binary "$GITHUB_WORKSPACE/release-source/src-tauri/target/${{ matrix.rust_target }}/release/local-mindmap.exe"');
   });
 });

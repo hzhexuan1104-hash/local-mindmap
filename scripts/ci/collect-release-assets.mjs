@@ -51,7 +51,9 @@ try {
   const arch = requireArg(args, 'arch');
   const target = requireArg(args, 'target');
   const version = args.version ?? readPackageVersion(root);
-  const variant = typeof args.variant === 'string' && args.variant ? `_${args.variant}` : '';
+  const variant = typeof args.variant === 'string' && args.variant
+    ? (args.variant.startsWith('_') ? args.variant : `_${args.variant}`)
+    : '';
   const buildStart = parseBuildStart(args['build-start'] ?? process.env.RELEASE_BUILD_STARTED_AT);
   const outputDirectory = assertInside(root, resolve(args.out ?? join(root, 'dist', 'release', `${platform}-${arch}`)));
   const directories = sourceDirectories(root, target);

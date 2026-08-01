@@ -132,7 +132,7 @@ export function assertVersionState(root = PROJECT_ROOT, tag) {
 export function expectedAssets(platform, arch, version, { variant = '' } = {}) {
   const definitions = RELEASE_ASSET_DEFINITIONS[platform]?.[arch];
   if (!definitions) fail(`不支持的发布目标：${platform}-${arch}`);
-  if (variant && !['_preview', '_unsigned'].includes(variant)) fail(`不支持的产物变体：${variant}`);
+  if (variant && !['_unsigned_preview'].includes(variant)) fail(`不支持的产物变体：${variant}`);
   return definitions.map((definition) => ({
     ...definition,
     filename: definition.filename(version, platform === 'macos' ? variant : ''),
