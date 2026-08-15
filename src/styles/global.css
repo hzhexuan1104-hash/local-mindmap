@@ -3594,6 +3594,234 @@ h3 {
   }
 }
 
+/* v1.22: keep canvas controls, node content, and transient management surfaces compact. */
+.mindmap-canvas {
+  position: relative;
+  overflow: hidden;
+}
+
+.mindmap-node-content,
+.node-content-primary,
+.node-tag-list {
+  justify-content: center;
+  text-align: center;
+}
+
+.mindmap-node-content,
+.node-content-primary {
+  align-items: center;
+}
+
+.node-text-content,
+.mindmap-node .node-editor {
+  text-align: center;
+}
+
+.node-note-indicator {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  padding: 1px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.node-note-indicator:hover,
+.node-note-indicator:focus-visible {
+  color: var(--accent-strong);
+  outline: none;
+}
+
+.node-quick-toolbar-scroll {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.node-quick-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.node-quick-select select {
+  width: 72px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: var(--surface);
+  font: inherit;
+}
+
+.node-quick-toolbar .node-tag-group {
+  width: auto;
+  min-width: 96px;
+}
+
+.mini-map {
+  right: 14px;
+  bottom: 76px;
+  z-index: 12;
+}
+
+.canvas-controls {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 13;
+}
+
+.canvas-guide-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.inspector-content {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.inspector-content .remark-panel.is-embedded {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.remark-panel.is-embedded .remark-edit-layout,
+.remark-panel.is-embedded .remark-preview-content {
+  min-height: 0;
+  flex: 1;
+}
+
+.remark-panel.is-embedded .remark-editor,
+.remark-panel.is-embedded .remark-preview-content {
+  min-height: 0;
+  height: 100%;
+}
+
+.node-manager-backdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(31 39 52 / 28%);
+}
+
+.node-manager-drawer {
+  width: min(920px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--surface-elevated);
+  box-shadow: 0 24px 80px rgb(20 28 40 / 18%);
+}
+
+.node-manager-header,
+.node-manager-body,
+.node-manager-actions,
+.node-manager-list-item,
+.node-manager-item-actions,
+.node-manager-color-row {
+  display: flex;
+}
+
+.node-manager-header {
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.node-manager-header h2,
+.node-manager-list h3 {
+  margin: 0;
+}
+
+.node-manager-body {
+  min-height: 0;
+  max-height: calc(min(760px, 100vh - 48px) - 80px);
+  gap: 18px;
+  overflow: auto;
+  padding: 18px;
+}
+
+.node-manager-form,
+.node-manager-list {
+  min-width: 0;
+  flex: 1;
+}
+
+.node-manager-form {
+  display: grid;
+  gap: 10px;
+}
+
+.node-manager-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.node-manager-color-row,
+.node-manager-actions,
+.node-manager-item-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.node-manager-color-row label {
+  flex: 1;
+}
+
+.node-manager-checkbox {
+  display: flex !important;
+  grid-auto-flow: column;
+  justify-content: start;
+}
+
+.node-manager-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.node-manager-list-item {
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.node-manager-list-item > div:first-of-type {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.node-manager-item-actions {
+  justify-content: end;
+}
+
+@media (max-width: 720px) {
+  .node-manager-backdrop {
+    padding: 10px;
+  }
+
+  .node-manager-body {
+    flex-direction: column;
+  }
+}
+
 /* v1.20: compact, always-available node actions beneath the top menu. */
 .node-quick-toolbar {
   position: relative;
@@ -5793,4 +6021,441 @@ textarea::placeholder {
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-panel);
   }
+}
+
+/* Node content must share the layout model: fixed-size markers and a bounded
+   text column prevent type icons or large imported fonts escaping the frame. */
+.mindmap-node-content,
+.node-content-primary {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mindmap-node-content {
+  overflow: hidden;
+}
+
+.node-content-primary {
+  align-items: center;
+}
+
+.node-icon,
+.node-priority-badge,
+.node-progress-badge,
+.node-note-indicator {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.node-icon {
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.node-text-content {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Keep the quick-action disclosure alongside the File/Edit/Node menu layer. */
+.topbar-quick-toolbar-toggle {
+  position: relative;
+  z-index: 2;
+  min-height: 28px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.topbar-quick-toolbar-toggle:hover,
+.topbar-quick-toolbar-toggle:focus-visible {
+  border-color: rgb(55 124 246 / 15%);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.topbar-quick-toolbar-toggle > span {
+  font-size: 13px;
+  line-height: 1;
+}
+
+@media (max-width: 940px) {
+  .topbar-quick-toolbar-toggle {
+    width: 28px;
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+}
+
+/* Keep remark actions in a dedicated band between the panel header and editor. */
+.remark-inline-action-band {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.remark-content-frame {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+}
+
+.remark-panel.is-embedded .remark-content-frame {
+  height: 100%;
+}
+
+.remark-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgb(148 163 184 / 22%);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 2px 7px rgb(20 28 40 / 8%);
+}
+
+.remark-inline-action {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.remark-inline-action svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.remark-inline-action:hover,
+.remark-inline-action:focus-visible,
+.remark-inline-action.is-active {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.remark-inline-action.is-active {
+  box-shadow: inset 0 0 0 1px rgb(55 124 246 / 12%);
+}
+
+.remark-inline-action-divider {
+  width: 1px;
+  height: 15px;
+  margin-inline: 1px;
+  background: var(--border-subtle);
+}
+
+.remark-panel.is-embedded .remark-content-frame > .remark-edit-layout {
+  min-height: 0;
+  height: 100%;
+}
+
+.remark-panel.is-embedded .remark-content-frame > .markdown-preview,
+.remark-panel.is-embedded .remark-content-frame > .remark-empty {
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  box-shadow: inset 0 1px 2px rgb(20 28 40 / 2%);
+}
+
+.remark-panel.is-embedded .remark-content-frame > .remark-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Give node styling controls their own visual groups instead of one dense toolbar. */
+.inspector-style-tools {
+  gap: 14px;
+}
+
+.inspector-style-form {
+  display: grid;
+  gap: 12px;
+}
+
+.inspector-style-field-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.inspector-style-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.inspector-style-field select,
+.inspector-style-number-field input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: var(--surface);
+  box-shadow: inset 0 1px 1px rgb(20 28 40 / 2%);
+  font: inherit;
+}
+
+.inspector-style-field select {
+  padding: 0 30px 0 10px;
+}
+
+.inspector-style-appearance {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.inspector-style-color-group,
+.inspector-style-text-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.inspector-style-sub-label,
+.inspector-style-number-field {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.inspector-style-color-swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.inspector-style-color-swatch {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+.inspector-style-number-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspector-style-number-field input {
+  width: 54px;
+  padding: 0 6px;
+  text-align: center;
+}
+
+.inspector-style-compact-action,
+.inspector-style-reset {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(20 28 40 / 4%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.inspector-style-compact-action {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+}
+
+.inspector-style-compact-action strong {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.inspector-style-compact-action:hover,
+.inspector-style-compact-action:focus-visible,
+.inspector-style-compact-action.is-active {
+  border-color: rgb(55 124 246 / 22%);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.inspector-style-reset {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.inspector-style-reset:hover,
+.inspector-style-reset:focus-visible {
+  border-color: rgb(55 124 246 / 22%);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+/* A single compact rhythm for all quick node actions and selector controls. */
+.node-quick-toolbar {
+  border-color: rgb(148 163 184 / 22%);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 97%);
+  box-shadow: 0 2px 8px rgb(20 28 40 / 5%);
+}
+
+.node-quick-toolbar-scroll {
+  min-height: 42px;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 4px 10px;
+}
+
+.node-quick-toolbar-group {
+  min-height: 30px;
+  gap: 2px;
+  padding: 0 10px;
+}
+
+.node-quick-toolbar-group:first-child {
+  padding-left: 0;
+}
+
+.node-quick-toolbar-group + .node-quick-toolbar-group {
+  margin-left: 0;
+  padding-left: 12px;
+  border-left-color: rgb(148 163 184 / 24%);
+}
+
+.node-quick-toolbar,
+.node-quick-toolbar button,
+.node-quick-toolbar select,
+.node-quick-toolbar .node-quick-select {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.node-quick-toolbar button {
+  min-height: 30px;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-weight: 560;
+}
+
+.node-quick-toolbar-structure-actions {
+  gap: 1px;
+}
+
+.node-quick-toolbar .node-quick-toolbar-structure-action {
+  padding-inline: 7px;
+}
+
+.node-quick-action-symbol {
+  width: 14px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.node-quick-toolbar button:hover:not(:disabled) .node-quick-action-symbol,
+.node-quick-toolbar button:focus-visible .node-quick-action-symbol,
+.node-quick-toolbar button.has-value .node-quick-action-symbol {
+  color: currentColor;
+}
+
+.node-quick-select {
+  min-height: 30px;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-weight: 560;
+}
+
+.node-quick-select > span {
+  color: var(--text-muted);
+}
+
+.node-quick-select select {
+  width: 72px;
+  min-height: 30px;
+  padding: 0 26px 0 8px;
+  border-color: rgb(148 163 184 / 25%);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.node-quick-select select:hover:not(:disabled),
+.node-quick-select select:focus-visible {
+  border-color: rgb(55 124 246 / 30%);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgb(55 124 246 / 8%);
+}
+
+.node-quick-toolbar .node-tag-group {
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
+  flex: 0 0 120px;
+}
+
+.node-quick-toolbar .node-quick-toolbar-tag-trigger {
+  min-height: 30px;
+  padding-inline: 8px;
 }

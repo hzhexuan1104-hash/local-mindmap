@@ -10,6 +10,8 @@ import {
 import {
   DEFAULT_NODE_STYLE,
   DEFAULT_ROOT_NODE_STYLE,
+  MAX_NODE_FONT_SIZE,
+  MIN_NODE_FONT_SIZE,
   applyStyleToNodeType,
   createNodeTypeFromStyle,
   getEffectiveNodeIcon,
@@ -86,6 +88,43 @@ describe('node style helpers', () => {
       fontSize: nodeType.fontSize,
       bold: nodeType.bold,
     });
+  });
+
+  it('keeps rendered font sizes within the node layout bounds', () => {
+    const oversizedStyle = getEffectiveNodeStyle(
+      { ...node, style: { fontSize: 96 } },
+      nodeType,
+    );
+    const undersizedStyle = getEffectiveNodeStyle(
+      { ...node, style: { fontSize: 4 } },
+      nodeType,
+    );
+
+    expect(oversizedStyle.fontSize).toBe(MAX_NODE_FONT_SIZE);
+    expect(undersizedStyle.fontSize).toBe(MIN_NODE_FONT_SIZE);
+    expect(getNodeStyleCssVariables(oversizedStyle)['--node-font-size']).toBe(
+      `${MAX_NODE_FONT_SIZE}px`,
+    );
+  });
+
+  it('renders node type icons as fixed, vertically centered markers', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+    const contentGuard = css.slice(
+      css.lastIndexOf('/* Node content must share the layout model:'),
+    );
+
+    expect(contentGuard).toMatch(
+      /\.node-content-primary\s*\{[\s\S]*?align-items: center;/,
+    );
+    expect(contentGuard).toMatch(
+      /\.node-icon,[\s\S]*?\.node-note-indicator\s*\{[\s\S]*?width: 16px;[\s\S]*?height: 16px;[\s\S]*?flex: 0 0 16px;/,
+    );
+    expect(contentGuard).toMatch(
+      /\.node-icon\s*\{[\s\S]*?font-size: 14px;[\s\S]*?line-height: 16px;/,
+    );
+    expect(contentGuard).toMatch(
+      /\.node-text-content\s*\{[\s\S]*?flex: 1 1 0;[\s\S]*?overflow-wrap: anywhere;/,
+    );
   });
 
   it('uses the current node icon override before its node type icon', () => {

@@ -3,7 +3,10 @@ import {
   collectNodeIds,
   findParentNode,
   isDescendant,
+  getSiblingMoveState,
   moveNodeAsChild,
+  moveNodeToSiblingIndex,
+  moveNodeWithinSiblings,
   validateTreeIntegrity,
 } from '../treeOperations';
 import type { MindmapNode } from '../types';
@@ -64,6 +67,23 @@ describe('mindmap tree operations', () => {
     const result = moveNodeAsChild(createMindmap(), 'root', 'topic-a');
 
     expect(result).toBeNull();
+  });
+
+  it('reports sibling position and blocks root ordering', () => {
+    expect(getSiblingMoveState(createMindmap(), 'root')).toBeNull();
+    expect(getSiblingMoveState(createMindmap(), 'topic-b')).toMatchObject({ index: 1 });
+  });
+
+  it('moves a sibling one step and preserves tree integrity', () => {
+    const result = moveNodeWithinSiblings(createMindmap(), 'topic-b', 'up');
+    expect(result?.children.map((node) => node.id)).toEqual(['topic-b', 'topic-a']);
+    expect(validateTreeIntegrity(result!).valid).toBe(true);
+  });
+
+  it('moves a sibling to a drag-derived target index', () => {
+    const result = moveNodeToSiblingIndex(createMindmap(), 'topic-a', 1);
+    expect(result?.children.map((node) => node.id)).toEqual(['topic-b', 'topic-a']);
+    expect(moveNodeToSiblingIndex(createMindmap(), 'root', 0)).toBeNull();
   });
 
   it('does not move a node under itself', () => {

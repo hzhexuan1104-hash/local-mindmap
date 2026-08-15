@@ -8,6 +8,9 @@ describe('NodeQuickToolbar', () => {
       <NodeQuickToolbar
         selectedNode={null}
         hasSelection={false}
+        priorityValue="none"
+        progressValue="none"
+        availableTags={[]}
         onAddChild={() => undefined}
         onAddSibling={() => undefined}
         onAddParent={() => undefined}
@@ -19,14 +22,16 @@ describe('NodeQuickToolbar', () => {
       />,
     );
 
-    expect(html).toContain('节点快捷工具条');
+    expect(html).toContain('节点快捷工具栏');
     expect(html).toContain('下级');
     expect(html).toContain('优先级');
     expect(html).toContain('完成度');
     expect(html).toContain('添加标签');
     expect(html).toContain('disabled=""');
-    expect(html).toContain('priority-choice--1');
-    expect(html).toContain('priority-choice--9');
+    expect(html).toContain('node-quick-toolbar-structure-actions');
+    expect(html).toContain('node-quick-action-symbol');
+    expect(html).toContain('aria-label="设置优先级"');
+    expect(html).toContain('aria-label="设置完成度"');
     expect(html).not.toContain('node-note-popover');
     expect(html).not.toContain('<textarea');
   });
@@ -42,6 +47,9 @@ describe('NodeQuickToolbar', () => {
           children: [],
         }}
         hasSelection
+        priorityValue="mixed"
+        progressValue="mixed"
+        availableTags={['需求', '高优先级', '第一阶段', '可复用']}
         onAddChild={() => undefined}
         onAddSibling={() => undefined}
         onAddParent={() => undefined}
@@ -56,5 +64,7 @@ describe('NodeQuickToolbar', () => {
     expect(html).toContain('3 个');
     expect(html).not.toContain('高优先级');
     expect(html).toContain('node-quick-toolbar-tag-trigger');
+    expect(html).toContain('value="mixed"');
   });
+
 });

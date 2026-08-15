@@ -32,6 +32,22 @@ export const DEFAULT_ROOT_NODE_STYLE: EffectiveNodeStyle = {
   bold: true,
 };
 
+// Keep the rendered type style within the same bounds exposed by the editor.
+// Imported or hand-edited .lmind files can otherwise provide an arbitrarily
+// large value that no node layout can safely reserve space for.
+export const MIN_NODE_FONT_SIZE = 12;
+export const MAX_NODE_FONT_SIZE = 28;
+
+export function normalizeNodeFontSize(value: unknown, fallback: number): number {
+  const fontSize = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isFinite(fontSize) || fontSize <= 0) {
+    return fallback;
+  }
+
+  return Math.min(MAX_NODE_FONT_SIZE, Math.max(MIN_NODE_FONT_SIZE, fontSize));
+}
+
 export function getEffectiveNodeStyle(
   node: MindmapNode,
   nodeType?: MindmapNodeType | null,
@@ -53,8 +69,10 @@ export function getEffectiveNodeStyle(
       node.style?.textColor ??
       nodeType?.textColor ??
       defaultStyle.textColor,
-    fontSize:
+    fontSize: normalizeNodeFontSize(
       node.style?.fontSize ?? nodeType?.fontSize ?? defaultStyle.fontSize,
+      defaultStyle.fontSize,
+    ),
     bold: node.style?.bold ?? nodeType?.bold ?? defaultStyle.bold,
   };
 }
