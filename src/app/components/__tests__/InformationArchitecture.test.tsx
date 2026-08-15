@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkspacePanelHost } from '../WorkspacePanelHost';
 import { RightInspectorPanel, normalizeHexColorInput } from '../RightInspectorPanel';
+import { NodeManagerDrawer } from '../NodeManagerDrawer';
+import { createEmptyNodeTypeDraft } from '../../../features/mindmap/nodeTypes';
 import { getMenuHoverPath, TopMenuBar, type TopMenuGroup } from '../TopMenuBar';
 import type { MindmapNode, MindmapNodeType } from '../../../features/mindmap/types';
 
@@ -57,26 +59,84 @@ describe('v1.18 information architecture components', () => {
     expect(html).toContain('aria-haspopup="menu"');
   });
 
+  it('places the quick-action disclosure in the top menu layer', () => {
+    const expanded = renderToStaticMarkup(
+      <TopMenuBar
+        currentTitle="Document"
+        menus={[]}
+        isDirty={false}
+        isQuickToolbarExpanded
+        onToggleQuickToolbar={noop}
+      />,
+    );
+    const collapsed = renderToStaticMarkup(
+      <TopMenuBar
+        currentTitle="Document"
+        menus={[]}
+        isDirty={false}
+        isQuickToolbarExpanded={false}
+        onToggleQuickToolbar={noop}
+      />,
+    );
+
+    expect(expanded).toContain('topbar-quick-toolbar-toggle');
+    expect(expanded).toContain('aria-expanded="true"');
+    expect(collapsed).toContain('aria-expanded="false"');
+  });
+
   it('closes an open sibling submenu when hovering a leaf action', () => {
     expect(getMenuHoverPath(['file', 'location'], true)).toEqual(['file', 'location']);
     expect(getMenuHoverPath(['file', 'settings'], false)).toEqual(['file']);
   });
 
   it('limits the inspector to visual style and remark tabs', () => {
-    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} nodeIcons={[{ value: '✅', label: '✅ Task' }, { value: '💡', label: '💡 Idea' }]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onNodeIconChange={noop} onSaveStyleAsNodeType={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
+    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} nodeIcons={[{ value: '✅', label: '✅ Task' }, { value: '💡', label: '💡 Idea' }]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
     expect(html).toContain('样式');
     expect(html).toContain('备注');
     expect(html).not.toContain('信息');
     expect(html).not.toContain('当前节点类型');
     expect(html).not.toContain('应用到当前节点类型');
     expect(html).not.toContain('管理全局节点类型');
+    expect(html).not.toContain('另存为节点类型');
     expect(html).toContain('__inherit-node-type-icon__');
     expect(html).toContain('value="💡"');
+  });
+
+  it('groups node style controls into fields and appearance actions', () => {
+    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
+
+    expect(html).toContain('inspector-style-form');
+    expect(html).toContain('inspector-style-field-grid');
+    expect(html).toContain('inspector-style-color-swatches');
+    expect(html).toContain('inspector-style-reset');
+    expect(html).not.toContain('inspector-icon-toolbar');
   });
 
   it('normalizes editable hex values and rejects invalid colors', () => {
     expect(normalizeHexColorInput('#ffffff')).toBe('#FFFFFF');
     expect(normalizeHexColorInput('14315f')).toBe('#14315F');
     expect(normalizeHexColorInput('#bad')).toBeNull();
+  });
+
+  it('keeps node-type management in a modal without a current-node switcher', () => {
+    const html = renderToStaticMarkup(
+      <NodeManagerDrawer
+        nodeTypes={[nodeType]}
+        draft={createEmptyNodeTypeDraft()}
+        editingNodeTypeId={null}
+        onDraftChange={noop}
+        onSave={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onImport={noop}
+        onExport={noop}
+        onRequestClose={noop}
+      />,
+    );
+
+    expect(html).toContain('node-manager-drawer');
+    expect(html).toContain('节点类型列表');
+    expect(html).toContain('导入类型包');
+    expect(html).not.toContain('切换节点类型');
   });
 });

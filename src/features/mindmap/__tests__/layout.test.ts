@@ -281,6 +281,26 @@ describe('mindmap layout positions', () => {
     expect(diamond.width).toBeGreaterThan(regular.width);
   });
 
+  it('measures oversized imported fonts using the same capped rendered font size', () => {
+    const capped = getNodeContentSize({
+      id: 'capped-font',
+      text: 'A long label that needs to stay inside the node frame',
+      remark: '',
+      style: { fontSize: 28 },
+      children: [],
+    });
+    const oversized = getNodeContentSize({
+      id: 'oversized-font',
+      text: 'A long label that needs to stay inside the node frame',
+      remark: '',
+      style: { fontSize: 96 },
+      children: [],
+    });
+
+    expect(oversized).toEqual(capped);
+    expect(oversized.width).toBeLessThanOrEqual(340);
+  });
+
   it('grows node bounds for markers and a wrapped tag row', () => {
     const plain = getNodeContentSize({ id: 'plain', text: '任务', remark: '', children: [] });
     const marked = getNodeContentSize({

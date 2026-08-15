@@ -21,6 +21,7 @@ export type KeyboardShortcutState = {
   isBoxSelecting: boolean;
   hasSelection: boolean;
   isEditingNodeText?: boolean;
+  isFocusMode?: boolean;
 };
 
 export type KeyboardShortcutEventLike = {
@@ -55,7 +56,7 @@ export function getKeyboardShortcutAction(
 ): KeyboardShortcutAction | null {
   if (event.key === 'Escape') {
     if (isEditableShortcutTarget(event.target)) {
-      return state.hasModalOpen || state.hasContextMenuOpen
+      return state.hasModalOpen || state.hasContextMenuOpen || state.isFocusMode
         ? 'close-or-clear'
         : null;
     }
@@ -63,6 +64,7 @@ export function getKeyboardShortcutAction(
     return state.hasModalOpen ||
       state.hasContextMenuOpen ||
       state.isBoxSelecting ||
+      state.isFocusMode ||
       state.hasSelection
       ? 'close-or-clear'
       : null;

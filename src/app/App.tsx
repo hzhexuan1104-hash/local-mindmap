@@ -22,6 +22,7 @@ import {
   type RemarkFocusRequest,
 } from './components/RightInspectorPanel';
 import { NodeQuickToolbar } from './components/NodeQuickToolbar';
+import { NodeManagerDrawer } from './components/NodeManagerDrawer';
 import {
   TopMenuBar,
   type TopMenuGroup,
@@ -271,7 +272,6 @@ import {
   type SearchScope,
 } from '../features/mindmap/searchReplace';
 import {
-  applyNodeTypeToNodes,
   deleteNodesByIds,
   getDeletableSelectedNodeIds,
   resolveBoxSelectionState,
@@ -297,7 +297,10 @@ import {
 import { createThemeStyle, MINDMAP_THEMES } from '../features/mindmap/themes';
 import {
   isDescendant as isTreeDescendant,
+  getSiblingMoveState,
   moveNodeAsChild,
+  moveNodeToSiblingIndex,
+  moveNodeWithinSiblings,
 } from '../features/mindmap/treeOperations';
 import {
   addTypedChildNodes,
@@ -585,6 +588,7 @@ type MindmapTreeProps = {
   onEditorRef: (element: HTMLTextAreaElement | null) => void;
   onCommitEdit: () => void;
   onStartDrag: (nodeId: string, event: MouseEvent<HTMLElement>) => void;
+  onOpenRemark: (nodeId: string) => void;
   onOpenContextMenu: (node: MindmapNode, event: MouseEvent<HTMLElement>) => void;
 };
 
@@ -607,6 +611,7 @@ function MindmapTree({
   onEditorRef,
   onCommitEdit,
   onStartDrag,
+  onOpenRemark,
   onOpenContextMenu,
 }: MindmapTreeProps) {
   const node = layoutNode.node;
@@ -752,9 +757,19 @@ function MindmapTree({
                   )}
                 </span>
                 {node.remark.trim() ? (
-                  <span className="node-note-indicator" title="有备注" aria-label="有备注">
+                  <button
+                    type="button"
+                    className="node-note-indicator"
+                    title="打开备注"
+                    aria-label="打开备注"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenRemark(node.id);
+                    }}
+                  >
                     ▤
-                  </span>
+                  </button>
                 ) : null}
               </span>
               {node.tags?.length ? (
@@ -838,9 +853,13 @@ export function App() {
     useState<TemplateSortMode>('created-desc');
   const [childNodeTypeId, setChildNodeTypeId] = useState('');
   const [siblingNodeTypeId, setSiblingNodeTypeId] = useState('');
+  const [isNodeQuickToolbarExpanded, setIsNodeQuickToolbarExpanded] =
+    useState(true);
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
     createEmptyNodeTypeDraft,
   );
+  const [isNodeManagerVisible, setIsNodeManagerVisible] = useState(false);
+  const [editingNodeTypeId, setEditingNodeTypeId] = useState<string | null>(null);
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [lastPluginInstallError, setLastPluginInstallError] = useState('');
   const [lastPluginExport, setLastPluginExport] = useState<{
@@ -903,6 +922,7 @@ export function App() {
       return false;
     }
   });
+  const [isCanvasGuideVisible, setIsCanvasGuideVisible] = useState(true);
   const [hasUsedShortcutCreation, setHasUsedShortcutCreation] = useState(false);
   const [hasEditedNode, setHasEditedNode] = useState(false);
   const messageTimerRef = useRef<number | undefined>(undefined);
@@ -954,6 +974,7 @@ export function App() {
   );
   const allNodeIds = useMemo(() => Array.from(collectNodeIds(mindmap)), [mindmap]);
   const shouldShowCanvasGuide =
+    isCanvasGuideVisible &&
     !isCanvasGuideDismissed &&
     allNodeIds.length < 3 &&
     !hasUsedShortcutCreation &&
@@ -995,6 +1016,34 @@ export function App() {
     [nodeTypes, pluginNodeTypes],
   );
   const mindmapIndex = useMemo(() => createMindmapIndex(mindmap), [mindmap]);
+  const availableTags = useMemo(
+    () => Array.from(
+      new Set(
+        Array.from(mindmapIndex.nodeById.values()).flatMap((node) => node.tags ?? []),
+      ),
+    ).sort((left, right) => left.localeCompare(right, 'zh-CN')),
+    [mindmapIndex],
+  );
+  const selectedMetadataNodes = useMemo(
+    () => selectedNodeIds
+      .map((nodeId) => mindmapIndex.nodeById.get(nodeId))
+      .filter((node): node is MindmapNode => Boolean(node)),
+    [mindmapIndex, selectedNodeIds],
+  );
+  const selectedPriorityValue = useMemo(() => {
+    if (selectedMetadataNodes.length === 0) return 'none' as const;
+    const [first] = selectedMetadataNodes;
+    return selectedMetadataNodes.every((node) => node.priority === first!.priority)
+      ? first!.priority ?? 'none'
+      : 'mixed';
+  }, [selectedMetadataNodes]);
+  const selectedProgressValue = useMemo(() => {
+    if (selectedMetadataNodes.length === 0) return 'none' as const;
+    const [first] = selectedMetadataNodes;
+    return selectedMetadataNodes.every((node) => node.progress === first!.progress)
+      ? first!.progress ?? 'none'
+      : 'mixed';
+  }, [selectedMetadataNodes]);
   const commandNodeSearchIndex = useMemo(
     () => createNodeSearchIndex(mindmapIndex),
     [mindmapIndex],
@@ -1511,12 +1560,14 @@ export function App() {
             isRecoveryCenterVisible ||
             isVersionHistoryVisible ||
             isFileStatusVisible ||
+            isNodeManagerVisible ||
             activeWorkspacePanel,
         ),
         hasContextMenuOpen: Boolean(contextMenu),
         isBoxSelecting: Boolean(boxSelection),
         hasSelection: selectedNodeIds.length > 0,
         isEditingNodeText: Boolean(editingNodeId),
+        isFocusMode,
       });
 
       if (!action) {
@@ -1563,11 +1614,11 @@ export function App() {
           return;
         case 'add-child':
           setHasUsedShortcutCreation(true);
-          handleAddChild(childNodeTypeId, { startEditing: true });
+          handleAddChild('', { startEditing: true });
           return;
         case 'add-sibling':
           setHasUsedShortcutCreation(true);
-          handleAddSibling(childNodeTypeId, { startEditing: true });
+          handleAddSibling('', { startEditing: true });
           return;
         case 'save':
           handleSaveMindmap();
@@ -1683,7 +1734,19 @@ export function App() {
     });
   };
 
+  const closeTransientUi = () => {
+    setContextMenu(null);
+    setIsCommandPaletteOpen(false);
+    window.dispatchEvent(new Event('mindmap:close-transient-ui'));
+  };
+
+  const closeCanvasGuide = () => {
+    setIsCanvasGuideVisible(false);
+    showMessage('已关闭画布提示');
+  };
+
   const dismissCanvasGuide = () => {
+    setIsCanvasGuideVisible(false);
     setIsCanvasGuideDismissed(true);
     try {
       localStorage.setItem(CANVAS_GUIDE_DISMISSED_KEY, 'true');
@@ -1764,6 +1827,11 @@ export function App() {
   };
 
   const handleEscapeShortcut = () => {
+    if (isNodeManagerVisible) {
+      handleCloseNodeManager();
+      return;
+    }
+
     const action = getEscapeNavigationAction({
       isCommandPaletteOpen,
       hasExcelImportPreview: Boolean(excelImportPreview),
@@ -1777,6 +1845,7 @@ export function App() {
       isBoxSelecting: Boolean(boxSelection),
       isDragging: Boolean(dragStateRef.current),
       hasWorkspacePanel: Boolean(activeWorkspacePanel),
+      isFocusMode,
       hasSelection: selectedNodeIds.length > 0,
     });
 
@@ -1815,6 +1884,11 @@ export function App() {
         dragStateRef.current = null;
         setDraggingNodeIds([]);
         setDropTargetNodeId(null);
+        return;
+      case 'exit-focus-mode':
+        if (editingNodeId) finishEditing(true);
+        setIsFocusMode(false);
+        showMessage('已退出专注模式');
         return;
       case 'close-workspace-panel':
         handleCloseWorkspacePanel();
@@ -3527,7 +3601,7 @@ export function App() {
   };
 
   const handleAddSibling = (
-    nodeTypeId = childNodeTypeId,
+    nodeTypeId = siblingNodeTypeId,
     options: { startEditing?: boolean } = {},
   ) => {
     if (selectedNodeIds.length === 0) {
@@ -3648,6 +3722,30 @@ export function App() {
     showMessage(
       deletableIds.length > 1 ? `已删除 ${deletableIds.length} 个节点` : '已删除节点',
     );
+  };
+
+  const handleMoveSelectedNode = (direction: 'up' | 'down') => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+    const state = getSiblingMoveState(mindmap, selectedNodeId);
+    if (!state) {
+      showMessage('中心主题不能调整顺序');
+      return;
+    }
+    const atBoundary = direction === 'up'
+      ? state.index === 0
+      : state.index === state.parent.children.length - 1;
+    if (atBoundary) {
+      showMessage(direction === 'up' ? '当前节点已在最前' : '当前节点已在最后');
+      return;
+    }
+    const nextMindmap = moveNodeWithinSiblings(mindmap, selectedNodeId, direction);
+    if (!nextMindmap) return;
+    recordHistory();
+    setMindmap(nextMindmap);
+    showMessage(direction === 'up' ? '节点已上移' : '节点已下移');
   };
 
   const getPastedRootPosition = ({
@@ -3822,19 +3920,29 @@ export function App() {
     );
   };
 
-  const handleOpenRemarkEditor = () => {
-    if (!selectedNodeId) {
+  const openNodeRemark = (nodeId: string) => {
+    if (!mindmapIndex.nodeById.has(nodeId)) {
       showMessage('请先选择节点');
       return;
     }
 
     setIsFocusMode(false);
+    setSelectedNodeId(nodeId);
+    setSelectedNodeIds([nodeId]);
     setIsRemarkPanelCollapsed(false);
     setRemarkMode('edit');
     setRemarkFocusRequest((current) => ({
       id: (current?.id ?? 0) + 1,
-      nodeId: selectedNodeId,
+      nodeId,
     }));
+  };
+
+  const handleOpenRemarkEditor = () => {
+    if (!selectedNodeId) {
+      showMessage('请先选择节点');
+      return;
+    }
+    openNodeRemark(selectedNodeId);
   };
 
   const handleAddTag = (value: string) => {
@@ -4233,7 +4341,39 @@ export function App() {
     showMessage(`已生成 ${result.nodeCount} 节点性能测试导图`);
   };
 
-  const handleCreateNodeType = async () => {
+  const toNodeTypeDraft = (nodeType: MindmapNodeType): NodeTypeDraft => ({
+    name: nodeType.name,
+    icon: nodeType.icon,
+    shape: nodeType.shape,
+    backgroundColor: nodeType.backgroundColor,
+    borderColor: nodeType.borderColor,
+    textColor: nodeType.textColor,
+    fontSize: nodeType.fontSize,
+    bold: nodeType.bold,
+    defaultText: nodeType.defaultText,
+    defaultRemark: nodeType.defaultRemark,
+  });
+
+  const openNodeManager = (draft?: NodeTypeDraft) => {
+    setEditingNodeTypeId(null);
+    setNodeTypeDraft(draft ?? createEmptyNodeTypeDraft());
+    setIsNodeManagerVisible(true);
+  };
+
+  const handleCloseNodeManager = () => {
+    const hasDraft = Boolean(nodeTypeDraft.name.trim() || nodeTypeDraft.defaultRemark.trim() || editingNodeTypeId);
+    if (hasDraft && !window.confirm('节点类型草稿尚未保存，是否放弃修改？')) return;
+    setIsNodeManagerVisible(false);
+    setEditingNodeTypeId(null);
+    setNodeTypeDraft(createEmptyNodeTypeDraft());
+  };
+
+  const handleEditNodeType = (nodeType: MindmapNodeType) => {
+    setEditingNodeTypeId(nodeType.id);
+    setNodeTypeDraft(toNodeTypeDraft(nodeType));
+  };
+
+  const handleSaveNodeType = async () => {
     const nodeType = createMindmapNodeType(nodeTypeDraft);
 
     if (!nodeType) {
@@ -4242,15 +4382,37 @@ export function App() {
     }
 
     recordHistory();
-    const nextNodeTypes = [...nodeTypes, nodeType];
+    const nextNodeType = editingNodeTypeId ? { ...nodeType, id: editingNodeTypeId } : nodeType;
+    const nextNodeTypes = editingNodeTypeId
+      ? nodeTypes.map((current) => current.id === editingNodeTypeId ? nextNodeType : current)
+      : [...nodeTypes, nextNodeType];
     try {
       await saveLocalNodeTypes(nextNodeTypes);
       setNodeTypes(nextNodeTypes);
       setUserNodeTypes(nextNodeTypes);
       setNodeTypeDraft(createEmptyNodeTypeDraft());
-      showMessage('已创建节点类型');
+      setEditingNodeTypeId(null);
+      showMessage(editingNodeTypeId ? '已保存节点类型' : '已创建节点类型');
     } catch (error) {
       showMessage(getErrorMessage(error, '节点类型保存失败'));
+    }
+  };
+
+  const handleDeleteNodeType = async (nodeType: MindmapNodeType) => {
+    if (!window.confirm(`删除节点类型“${nodeType.name}”？已有节点将保留其 nodeTypeId 以保证文件兼容。`)) return;
+    const nextNodeTypes = nodeTypes.filter((current) => current.id !== nodeType.id);
+    recordHistory();
+    try {
+      await saveLocalNodeTypes(nextNodeTypes);
+      setNodeTypes(nextNodeTypes);
+      setUserNodeTypes(nextNodeTypes);
+      if (editingNodeTypeId === nodeType.id) {
+        setEditingNodeTypeId(null);
+        setNodeTypeDraft(createEmptyNodeTypeDraft());
+      }
+      showMessage('已删除节点类型');
+    } catch (error) {
+      showMessage(getErrorMessage(error, '节点类型删除失败'));
     }
   };
 
@@ -4301,7 +4463,7 @@ export function App() {
     showMessage('已修改节点图标');
   };
 
-  const handleSaveSelectedStyleAsNodeType = async (name: string) => {
+  const handleSaveSelectedStyleAsNodeType = () => {
     if (!selectedNodeId) {
       showMessage('请先选择节点');
       return;
@@ -4312,7 +4474,7 @@ export function App() {
       selectedNode.nodeTypeId,
     );
     const nextNodeType = createNodeTypeFromStyle(
-      name,
+      selectedNode.text.trim() ? `${selectedNode.text.trim()}样式` : '节点样式',
       getEffectiveNodeStyle(
         selectedNode,
         selectedNodeType,
@@ -4322,21 +4484,8 @@ export function App() {
       getEffectiveNodeIcon(selectedNode, selectedNodeType),
     );
 
-    if (!nextNodeType) {
-      showMessage('请先填写节点类型名称');
-      return;
-    }
-
-    recordHistory();
-    const nextNodeTypes = [...nodeTypes, nextNodeType];
-    try {
-      await saveLocalNodeTypes(nextNodeTypes);
-      setNodeTypes(nextNodeTypes);
-      setUserNodeTypes(nextNodeTypes);
-      showMessage('已保存为节点类型');
-    } catch (error) {
-      showMessage(getErrorMessage(error, '节点类型保存失败'));
-    }
+    if (!nextNodeType) return;
+    openNodeManager(toNodeTypeDraft(nextNodeType));
   };
 
   const handleResetSelectedNodeStyle = () => {
@@ -4353,25 +4502,6 @@ export function App() {
       })),
     );
     showMessage('已重置节点样式');
-  };
-
-  const handleSelectedNodeTypeChange = (nodeTypeId: string) => {
-    if (selectedNodeIds.length === 0) {
-      showMessage('请先选择节点');
-      return;
-    }
-
-    recordHistory();
-    const targetNodeIds = selectedNodeIdSet;
-
-    setMindmap((currentMindmap) =>
-      applyNodeTypeToNodes(currentMindmap, targetNodeIds, nodeTypeId),
-    );
-    showMessage(
-      targetNodeIds.size > 1
-        ? `已为 ${targetNodeIds.size} 个节点切换类型`
-        : '已切换当前节点类型',
-    );
   };
 
   const handleThemeChange = (nextThemeId: string) => {
@@ -4442,6 +4572,17 @@ export function App() {
   const handleExitBranchFocus = () => {
     setFocusedRootId(null);
     showMessage('已退出分支聚焦');
+  };
+
+  const handleEnterFocusMode = () => {
+    closeTransientUi();
+    setIsFocusMode(true);
+    showMessage('已进入专注模式，按 Esc 退出');
+  };
+
+  const handleExitFocusMode = () => {
+    setIsFocusMode(false);
+    showMessage('已退出专注模式');
   };
 
   const handleResetAutoLayout = () => {
@@ -4633,6 +4774,9 @@ export function App() {
     // leaving the node in an editing state when a textarea blur is delayed.
     if (startedOnBlank && editingNodeId) {
       finishEditing(true);
+    }
+    if (startedOnBlank) {
+      closeTransientUi();
     }
 
     const canvasElement = event.currentTarget;
@@ -4902,18 +5046,51 @@ export function App() {
           suppressNextNodeClickRef.current = false;
         }, 0);
       }
-      const finalDropTargetNodeId =
+      const dropPoint = getCanvasPointFromMouseEvent(event);
+      const siblingMoveState =
         dragState.nodeIds.length === 1
+          ? getSiblingMoveState(mindmap, dragState.nodeId)
+          : null;
+      const siblingLayoutNodes = siblingMoveState
+        ? siblingMoveState.parent.children
+          .filter((child) => child.id !== dragState.nodeId)
+          .map((child) => layoutNodeById.get(child.id))
+          .filter((node): node is MindmapLayoutNode => Boolean(node))
+          .sort((left, right) => left.y - right.y)
+        : [];
+      const isInSiblingLane = siblingLayoutNodes.length > 0 &&
+        dropPoint.x >= Math.min(...siblingLayoutNodes.map((node) => node.x)) - 64 &&
+        dropPoint.x <= Math.max(...siblingLayoutNodes.map((node) => node.x + node.width)) + 64 &&
+        dropPoint.y >= Math.min(...siblingLayoutNodes.map((node) => node.y)) - 32 &&
+        dropPoint.y <= Math.max(...siblingLayoutNodes.map((node) => node.y + node.height)) + 32;
+      const siblingTargetIndex = siblingMoveState && isInSiblingLane
+        ? siblingLayoutNodes.filter((node) => dropPoint.y > node.y + node.height / 2).length
+        : null;
+      const reorderedMindmap = siblingTargetIndex !== null && dragState.hasRecordedHistory
+        ? moveNodeToSiblingIndex(mindmap, dragState.nodeId, siblingTargetIndex)
+        : null;
+      const finalDropTargetNodeId =
+        !reorderedMindmap && dragState.nodeIds.length === 1
           ? findDropTargetNodeId(
-              dragState.nodeId,
-              getCanvasPointFromMouseEvent(event),
-            ) ?? dropTargetNodeId
+            dragState.nodeId,
+            dropPoint,
+          ) ?? dropTargetNodeId
           : null;
       const canMoveNode =
         finalDropTargetNodeId !== null &&
         moveNodeAsChild(mindmap, dragState.nodeId, finalDropTargetNodeId) !== null;
 
-      if (finalDropTargetNodeId && canMoveNode) {
+      if (reorderedMindmap) {
+        setMindmap(
+          updateNodeById(reorderedMindmap, dragState.nodeId, (node) => {
+            const { position: _position, ...nodeWithoutPosition } = node;
+            return nodeWithoutPosition;
+          }),
+        );
+        setSelectedNodeId(dragState.nodeId);
+        setSelectedNodeIds([dragState.nodeId]);
+        showMessage('已调整同级节点顺序');
+      } else if (finalDropTargetNodeId && canMoveNode) {
         if (!dragState.hasRecordedHistory) {
           recordHistory();
         }
@@ -6063,12 +6240,8 @@ export function App() {
       if (selectedNodeId) handleFocusBranch(selectedNodeId);
     },
     'node.exitFocus': handleExitBranchFocus,
-    'node.saveStyleAsType': () => {
-      const name = window.prompt('节点类型名称', `${selectedNode.text}样式`)?.trim();
-      if (name) return handleSaveSelectedStyleAsNodeType(name);
-    },
     'node.resetStyle': handleResetSelectedNodeStyle,
-    'node.manageTypes': () => setActiveWorkspacePanel('node-types'),
+    'node.manageTypes': () => openNodeManager(),
     'node.locate': () => {
       if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true });
     },
@@ -6152,7 +6325,6 @@ export function App() {
       disabledReason: command.disabledReason?.(commandContext),
       execute: () => command.execute(commandContext),
     }));
-  const pluginNodeTypeIds = new Set(pluginNodeTypes.map((nodeType) => nodeType.id));
   const dynamicCommandResults: PaletteResult[] = [
     ...(commandPaletteSettings.showNodeResults
       ? commandNodeSearchIndex.map((entry) => ({
@@ -6217,38 +6389,6 @@ export function App() {
       searchText: `${template.name} ${template.category} ${template.description}`.toLocaleLowerCase(),
       execute: () => handleCreateFromTemplate(template),
     })),
-    ...[
-      {
-        id: 'node-type.default',
-        type: 'node-type' as const,
-        title: '普通节点',
-        description: '清除当前节点类型，使用普通节点样式',
-        category: 'node-type' as const,
-        keywords: ['默认', '普通', '节点类型'],
-        searchText: '普通 默认 节点类型',
-        execute: () => {
-          if (selectedNodeIds.length > 0) handleSelectedNodeTypeChange('');
-          else setActiveWorkspacePanel('node-types');
-        },
-      },
-      ...availableNodeTypes.map((nodeType) => ({
-      id: `node-type.${nodeType.id}`,
-      type: 'node-type' as const,
-      title: nodeType.name,
-      description: pluginNodeTypeIds.has(nodeType.id)
-        ? '插件节点类型'
-        : nodeTypes.some((item) => item.id === nodeType.id)
-          ? '用户自定义节点类型'
-          : '内置节点类型',
-      category: 'node-type' as const,
-      keywords: [nodeType.name, nodeType.defaultText, nodeType.icon],
-      searchText: `${nodeType.name} ${nodeType.defaultText}`.toLocaleLowerCase(),
-      execute: () => {
-        if (selectedNodeIds.length > 0) handleSelectedNodeTypeChange(nodeType.id);
-        else setActiveWorkspacePanel('node-types');
-      },
-      })),
-    ],
   ];
   const commandPaletteResults = [...fixedCommandResults, ...dynamicCommandResults];
   const commandPaletteContextCategories: CommandCategory[] = Array.from(
@@ -6337,16 +6477,17 @@ export function App() {
           ...availableNodeTypes.map((nodeType) => ({ id: `type-${nodeType.id}`, label: nodeType.name, execute: () => handleAddSibling(nodeType.id) })),
         ] },
       ] },
-      { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: handleOpenRemarkEditor }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId, execute: handleDeleteNode }] },
+      { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: handleOpenRemarkEditor }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId || selectedNodeId === mindmap.id, execute: handleDeleteNode }] },
       { id: 'structure', label: '结构', children: [{ id: 'collapse', label: '折叠当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'expand', label: '展开当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'focus', label: '聚焦当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleFocusBranch(selectedNodeId); } }, { id: 'exit-focus', label: '退出分支聚焦', disabled: !focusedRootId, execute: handleExitBranchFocus }] },
+      { id: 'order', label: '排序', children: [{ id: 'up', label: '上移当前节点', disabled: !selectedNodeId || getSiblingMoveState(mindmap, selectedNodeId)?.index === 0 || !getSiblingMoveState(mindmap, selectedNodeId), execute: () => handleMoveSelectedNode('up') }, { id: 'down', label: '下移当前节点', disabled: !selectedNodeId || !getSiblingMoveState(mindmap, selectedNodeId) || getSiblingMoveState(mindmap, selectedNodeId)!.index === getSiblingMoveState(mindmap, selectedNodeId)!.parent.children.length - 1, execute: () => handleMoveSelectedNode('down') }] },
       { id: 'locate', label: '定位', children: [{ id: 'current', label: '定位当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true }); } }, { id: 'parent', label: '选择父节点', disabled: !selectedNodeId || !mindmapIndex.parentById.get(selectedNodeId), execute: () => { const id = selectedNodeId && mindmapIndex.parentById.get(selectedNodeId); if (id) locateNode(id, { exitFocusIfNeeded: true }); } }, { id: 'first-child', label: '选择第一个子节点', disabled: !selectedNodeId || !mindmapIndex.childrenById.get(selectedNodeId)?.length, execute: () => { const id = selectedNodeId && mindmapIndex.childrenById.get(selectedNodeId)?.[0]; if (id) locateNode(id, { exitFocusIfNeeded: true }); } }] },
-      { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: activeWorkspacePanel === 'node-types', execute: () => setActiveWorkspacePanel('node-types') }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }, { id: 'save-style', label: '保存当前样式为节点类型', disabled: !selectedNodeId, execute: () => handleSaveSelectedStyleAsNodeType(selectedNode.text.trim() ? `${selectedNode.text.trim()}样式` : '节点样式') }] },
+      { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: isNodeManagerVisible, execute: () => openNodeManager() }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }] },
     ] },
     { id: 'view', label: '视图', items: [
       { id: 'panels', label: '面板', children: [{ id: 'outline', label: '大纲导航', checked: activeWorkspacePanel === 'outline', execute: () => setActiveWorkspacePanel((current) => current === 'outline' ? null : 'outline') }, { id: 'inspector', label: '右侧属性面板', checked: !isRemarkPanelCollapsed, execute: () => setIsRemarkPanelCollapsed((collapsed) => !collapsed) }, { id: 'minimap', label: '小地图', checked: showMiniMap, execute: () => setShowMiniMap((visible) => !visible) }, { id: 'performance', label: '性能信息', checked: activeWorkspacePanel === 'performance', execute: () => setActiveWorkspacePanel('performance') }] },
       { id: 'zoom', label: '缩放与定位', children: [{ id: 'in', label: '放大', execute: () => setCanvasView((view) => zoomCanvasView(view, 'in')) }, { id: 'out', label: '缩小', execute: () => setCanvasView((view) => zoomCanvasView(view, 'out')) }, { id: 'reset', label: '重置缩放', execute: () => setCanvasView((view) => ({ ...view, scale: 1 })) }, { id: 'center', label: '居中画布', execute: () => setCanvasView(centerCanvasView()) }] },
       { id: 'expand', label: '展开与折叠', children: [{ id: 'all', label: '全部展开', execute: handleExpandAll }, { id: 'none', label: '全部折叠', execute: handleCollapseAll }, { id: 'one', label: '展开到第 1 层', execute: () => handleExpandToDepth(1) }, { id: 'two', label: '展开到第 2 层', execute: () => handleExpandToDepth(2) }, { id: 'three', label: '展开到第 3 层', execute: () => handleExpandToDepth(3) }] },
-      { id: 'layout', label: '布局结构', children: [{ id: 'auto', label: '重新自动布局', execute: handleResetAutoLayout }, { id: 'focus', label: '专注模式', execute: () => setIsFocusMode(true) }] },
+      { id: 'layout', label: '布局结构', children: [{ id: 'auto', label: '重新自动布局', execute: handleResetAutoLayout }, { id: 'focus', label: isFocusMode ? '退出专注模式' : '进入专注模式', execute: isFocusMode ? handleExitFocusMode : handleEnterFocusMode }] },
       { id: 'performance-mode', label: '性能模式', children: [{ id: 'auto', label: '自动性能模式', checked: autoPerformanceMode, execute: () => setAutoPerformanceMode((enabled) => !enabled) }] },
     ] },
     { id: 'plugins', label: '插件', items: [
@@ -6368,8 +6509,7 @@ export function App() {
       style={themeStyle}
       onMouseDown={() => setContextMenu(null)}
     >
-      {!isFocusMode ? (
-        <TopMenuBar
+      <TopMenuBar
           currentTitle={`${currentFileName ?? mindmap.text ?? '未命名导图'} · ${
             currentFileName
               ? isDocumentDirty
@@ -6385,21 +6525,29 @@ export function App() {
           saveStatus={effectiveFileSaveStatus}
           saveStatusLabel={fileStatusLabel[effectiveFileSaveStatus]}
           onOpenFileStatus={() => setIsFileStatusVisible(true)}
+          isQuickToolbarExpanded={isNodeQuickToolbarExpanded}
+          onToggleQuickToolbar={() =>
+            setIsNodeQuickToolbarExpanded((expanded) => !expanded)
+          }
+        />
+
+      {isNodeQuickToolbarExpanded ? (
+        <NodeQuickToolbar
+          selectedNode={selectedNodeId ? selectedNode : null}
+          hasSelection={selectedNodeIds.length > 0}
+          priorityValue={selectedPriorityValue}
+          progressValue={selectedProgressValue}
+          availableTags={availableTags}
+          onAddChild={() => handleAddChild(childNodeTypeId, { startEditing: true })}
+          onAddSibling={() => handleAddSibling(siblingNodeTypeId, { startEditing: true })}
+          onAddParent={() => handleAddParent(childNodeTypeId, { startEditing: true })}
+          onOpenRemark={handleOpenRemarkEditor}
+          onSetPriority={handlePriorityChange}
+          onSetProgress={handleProgressChange}
+          onAddTag={handleAddTag}
+          onRemoveTag={handleRemoveTag}
         />
       ) : null}
-
-      <NodeQuickToolbar
-        selectedNode={selectedNodeId ? selectedNode : null}
-        hasSelection={selectedNodeIds.length > 0}
-        onAddChild={() => handleAddChild(childNodeTypeId, { startEditing: true })}
-        onAddSibling={() => handleAddSibling(siblingNodeTypeId, { startEditing: true })}
-        onAddParent={() => handleAddParent(childNodeTypeId, { startEditing: true })}
-        onOpenRemark={handleOpenRemarkEditor}
-        onSetPriority={handlePriorityChange}
-        onSetProgress={handleProgressChange}
-        onAddTag={handleAddTag}
-        onRemoveTag={handleRemoveTag}
-      />
 
       {isCommandPaletteOpen ? (
         <CommandPalette
@@ -6634,204 +6782,6 @@ export function App() {
               </section>
             ) : null}
 
-            {activeWorkspacePanel === 'node-types' ? (
-              <section className="feature-panel node-type-panel" aria-label="节点类型">
-                <div className="aligned-form node-type-form">
-              <label>
-                <span>类型名称</span>
-                <input
-                  type="text"
-                  value={nodeTypeDraft.name}
-                  placeholder="例如：任务节点"
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      name: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>图标</span>
-                <select
-                  value={nodeTypeDraft.icon}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      icon: event.target.value,
-                    }))
-                  }
-                >
-                  {availableNodeTypeIcons.map((icon) => (
-                    <option key={icon.value} value={icon.value}>
-                      {icon.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>形状</span>
-                <select
-                  value={nodeTypeDraft.shape}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      shape: event.target.value as NodeTypeDraft['shape'],
-                    }))
-                  }
-                >
-                  {NODE_TYPE_SHAPES.map((shape) => (
-                    <option key={shape.value} value={shape.value}>
-                      {shape.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>背景色</span>
-                <input
-                  type="color"
-                  value={nodeTypeDraft.backgroundColor}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      backgroundColor: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>边框色</span>
-                <input
-                  type="color"
-                  value={nodeTypeDraft.borderColor}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      borderColor: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>文本色</span>
-                <input
-                  type="color"
-                  value={nodeTypeDraft.textColor}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      textColor: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>字号</span>
-                <input
-                  type="number"
-                  min={12}
-                  max={28}
-                  value={nodeTypeDraft.fontSize}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      fontSize: Number(event.target.value),
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>加粗</span>
-                <input
-                  type="checkbox"
-                  checked={nodeTypeDraft.bold}
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      bold: event.target.checked,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>默认文本</span>
-                <input
-                  type="text"
-                  value={nodeTypeDraft.defaultText}
-                  placeholder="新节点"
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      defaultText: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <span>默认备注</span>
-                <textarea
-                  value={nodeTypeDraft.defaultRemark}
-                  placeholder="默认备注"
-                  onChange={(event) =>
-                    setNodeTypeDraft((draft) => ({
-                      ...draft,
-                      defaultRemark: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <div className="panel-action-row">
-              <button
-                type="button"
-                className="primary-action"
-                onClick={handleCreateNodeType}
-              >
-                创建节点类型
-              </button>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={handleExportNodeTypePack}
-              >
-                导出节点类型包
-              </button>
-              <button
-                type="button"
-                className="secondary-action"
-                onClick={() => void handleImportNodeTypePack()}
-              >
-                导入节点类型包
-              </button>
-              </div>
-                </div>
-                <div className="node-type-list">
-              {nodeTypes.length === 0 ? (
-                <p className="empty-note">暂无自定义节点类型，可创建一个常用样式。</p>
-              ) : (
-                nodeTypes.map((nodeType) => (
-                  <div className="node-type-item" key={nodeType.id}>
-                    <span
-                      className="node-type-swatch"
-                      style={{
-                        background: nodeType.backgroundColor,
-                        borderColor: nodeType.borderColor,
-                        color: nodeType.textColor,
-                      }}
-                    >
-                      {nodeType.icon}
-                    </span>
-                    <strong>{nodeType.name}</strong>
-                    <span>
-                      {nodeType.shape} · {nodeType.fontSize}px ·{' '}
-                      {nodeType.bold ? '加粗' : '常规'} · {nodeType.defaultText}
-                    </span>
-                  </div>
-                ))
-              )}
-                </div>
-              </section>
-            ) : null}
 
             {activeWorkspacePanel === 'search' ? (
               <section className="feature-panel" aria-label="查找替换">
@@ -7109,18 +7059,27 @@ export function App() {
               <span>拖拽节点调整结构</span>
               <span>Ctrl+F 查找节点</span>
               <span>Ctrl+K 打开命令面板</span>
-              <button
-                type="button"
-                className="ghost-action"
-                onClick={dismissCanvasGuide}
-              >
-                不再提示
-              </button>
+              <div className="canvas-guide-actions">
+                <button
+                  type="button"
+                  className="ghost-action"
+                  onClick={closeCanvasGuide}
+                >
+                  关闭
+                </button>
+                <button
+                  type="button"
+                  className="ghost-action"
+                  onClick={dismissCanvasGuide}
+                >
+                  不再提示
+                </button>
+              </div>
             </aside>
           ) : null}
           <CanvasControls
             scale={canvasView.scale}
-            isFocusMode={Boolean(focusedRootId)}
+            isFocusMode={isFocusMode || Boolean(focusedRootId)}
             onZoomIn={() =>
               setCanvasView((view) => zoomCanvasView(view, 'in'))
             }
@@ -7129,16 +7088,22 @@ export function App() {
             }
             onCenter={() => setCanvasView(centerCanvasView())}
             onAutoLayout={handleResetAutoLayout}
-            onExitFocusMode={handleExitBranchFocus}
+            onExitFocusMode={isFocusMode ? handleExitFocusMode : handleExitBranchFocus}
           />
-          {focusedRootId ? (
+          {isFocusMode ? (
+            <div className="focus-mode-banner" role="status">
+              正在专注模式
+              <span>按 Esc、使用右下角按钮或“视图 → 布局结构”退出。</span>
+              <button type="button" onClick={handleExitFocusMode}>退出专注模式</button>
+            </div>
+          ) : focusedRootId ? (
             <div className="focus-mode-banner" role="status">
               正在聚焦：{mindmapIndex.nodeById.get(focusedRootId)?.text}
               <span>{getFocusBreadcrumb(mindmapIndex, focusedRootId).map((node) => node.text).join(' / ')}</span>
               <button type="button" onClick={handleExitBranchFocus}>退出聚焦</button>
             </div>
           ) : null}
-          {showMiniMap && mindmapIndex.flattenedNodeIds.length >= 100 ? (
+          {showMiniMap ? (
             <MiniMap layout={mindmapLayout} viewport={worldViewport} onNavigate={(worldX, worldY) => setCanvasView((view) => ({ ...view, offsetX: canvasViewport.width / 2 - worldX * view.scale, offsetY: canvasViewport.height / 2 - worldY * view.scale }))} />
           ) : null}
           <div
@@ -7198,6 +7163,7 @@ export function App() {
                   }}
                   onCommitEdit={handleCommitEdit}
                   onStartDrag={handleStartNodeDrag}
+                  onOpenRemark={openNodeRemark}
                   onOpenContextMenu={handleNodeContextMenu}
                 />
               ))}
@@ -7243,7 +7209,6 @@ export function App() {
               remarkFocusRequest={remarkFocusRequest}
               onNodeStyleChange={handleSelectedNodeStyleChange}
               onNodeIconChange={handleSelectedNodeIconChange}
-              onSaveStyleAsNodeType={handleSaveSelectedStyleAsNodeType}
               onResetNodeStyle={handleResetSelectedNodeStyle}
               onRemarkModeChange={setRemarkMode}
               onRemarkChange={handleRemarkChange}
@@ -7253,6 +7218,21 @@ export function App() {
         ) : null}
       </div>
       </div>
+
+      {isNodeManagerVisible ? (
+        <NodeManagerDrawer
+          nodeTypes={nodeTypes}
+          draft={nodeTypeDraft}
+          editingNodeTypeId={editingNodeTypeId}
+          onDraftChange={setNodeTypeDraft}
+          onSave={() => void handleSaveNodeType()}
+          onEdit={handleEditNodeType}
+          onDelete={(nodeType) => void handleDeleteNodeType(nodeType)}
+          onImport={() => void handleImportNodeTypePack()}
+          onExport={handleExportNodeTypePack}
+          onRequestClose={handleCloseNodeManager}
+        />
+      ) : null}
 
       {isFileStatusVisible ? (
         <div className="file-reliability-backdrop" role="presentation">
@@ -7565,7 +7545,7 @@ export function App() {
           {contextMenu.type === 'node' ? (
             <>
               <div className="context-menu-type-action">
-                <span title="使用快捷键或按钮新建子节点时，默认应用的节点类型。">
+                <span title="使用此按钮新建子节点时，默认应用的节点类型；快捷键始终新建普通节点。">
                   新建子节点默认类型
                 </span>
                 <div>
@@ -7637,6 +7617,7 @@ export function App() {
                 type="button"
                 role="menuitem"
                 className="danger-menu-item"
+                disabled={selectedNode.id === mindmap.id}
                 onClick={() => runContextMenuAction(handleDeleteNode)}
               >
                 删除节点
@@ -7681,27 +7662,33 @@ export function App() {
               <button
                 type="button"
                 role="menuitem"
+                disabled={getSiblingMoveState(mindmap, selectedNode.id)?.index === 0 || !getSiblingMoveState(mindmap, selectedNode.id)}
+                onClick={() => runContextMenuAction(() => handleMoveSelectedNode('up'))}
+              >
+                上移节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!getSiblingMoveState(mindmap, selectedNode.id) || getSiblingMoveState(mindmap, selectedNode.id)!.index === getSiblingMoveState(mindmap, selectedNode.id)!.parent.children.length - 1}
+                onClick={() => runContextMenuAction(() => handleMoveSelectedNode('down'))}
+              >
+                下移节点
+              </button>
+              <button
+                type="button"
+                role="menuitem"
                 onClick={() => runContextMenuAction(() => handleToggleCollapse(selectedNode.id))}
               >
                 {selectedNode.collapsed ? '展开' : '折叠'}
               </button>
-              <label className="context-menu-select">
-                切换节点类型
-                <select
-                  value={selectedNode.nodeTypeId ?? ''}
-                  onChange={(event) =>
-                    runContextMenuAction(() =>
-                      handleSelectedNodeTypeChange(event.target.value),
-                    )
-                  }
-                >
-                  {nodeTypeCreationOptions.map((option) => (
-                    <option key={option.value || 'default'} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextMenuAction(handleSaveSelectedStyleAsNodeType)}
+              >
+                另存为节点类型
+              </button>
               <button
                 type="button"
                 role="menuitem"

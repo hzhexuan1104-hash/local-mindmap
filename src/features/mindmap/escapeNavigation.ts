@@ -11,6 +11,7 @@ export type EscapeNavigationState = {
   isBoxSelecting: boolean;
   isDragging: boolean;
   hasWorkspacePanel: boolean;
+  isFocusMode: boolean;
   hasSelection: boolean;
 };
 
@@ -26,6 +27,7 @@ export type EscapeNavigationAction =
   | 'close-context-menu'
   | 'cancel-box-selection'
   | 'cancel-drag'
+  | 'exit-focus-mode'
   | 'close-workspace-panel'
   | 'clear-selection';
 
@@ -44,6 +46,7 @@ export function getEscapeNavigationAction(
   if (state.hasContextMenu) return 'close-context-menu';
   if (state.isBoxSelecting) return 'cancel-box-selection';
   if (state.isDragging) return 'cancel-drag';
+  if (state.isFocusMode) return 'exit-focus-mode';
   if (state.hasWorkspacePanel) return 'close-workspace-panel';
   return state.hasSelection ? 'clear-selection' : null;
 }

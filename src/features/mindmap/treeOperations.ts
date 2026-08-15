@@ -221,3 +221,61 @@ export function moveNodeAsChild(
     movedNode: removedResult.removedNode,
   };
 }
+
+export function getSiblingMoveState(rootNode: MindmapNode, nodeId: string) {
+  if (rootNode.id === nodeId) return null;
+  const parent = findParentNode(rootNode, nodeId);
+  if (!parent) return null;
+  const index = parent.children.findIndex((child) => child.id === nodeId);
+  return index < 0 ? null : { parent, index };
+}
+
+/** Reorders one child inside its current parent without changing any hierarchy. */
+export function moveNodeWithinSiblings(
+  rootNode: MindmapNode,
+  nodeId: string,
+  direction: 'up' | 'down',
+): MindmapNode | null {
+  const state = getSiblingMoveState(rootNode, nodeId);
+  if (!state) return null;
+  const targetIndex = state.index + (direction === 'up' ? -1 : 1);
+  if (targetIndex < 0 || targetIndex >= state.parent.children.length) return null;
+
+  const rewrite = (node: MindmapNode): MindmapNode => {
+    if (node.id === state.parent.id) {
+      const children = [...node.children];
+      [children[state.index], children[targetIndex]] = [
+        children[targetIndex]!,
+        children[state.index]!,
+      ];
+      return { ...node, children };
+    }
+    return { ...node, children: node.children.map(rewrite) };
+  };
+
+  return rewrite(rootNode);
+}
+
+/** Places a child at a specific sibling index. Used after a drag stays in one parent. */
+export function moveNodeToSiblingIndex(
+  rootNode: MindmapNode,
+  nodeId: string,
+  targetIndex: number,
+): MindmapNode | null {
+  const state = getSiblingMoveState(rootNode, nodeId);
+  if (!state || targetIndex < 0 || targetIndex >= state.parent.children.length || targetIndex === state.index) {
+    return null;
+  }
+
+  const rewrite = (node: MindmapNode): MindmapNode => {
+    if (node.id === state.parent.id) {
+      const children = [...node.children];
+      const [moved] = children.splice(state.index, 1);
+      children.splice(targetIndex, 0, moved!);
+      return { ...node, children };
+    }
+    return { ...node, children: node.children.map(rewrite) };
+  };
+
+  return rewrite(rootNode);
+}

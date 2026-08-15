@@ -17,6 +17,35 @@ type RemarkPanelProps = {
   focusRequestId?: number;
 };
 
+type RemarkActionIconName = 'edit' | 'preview' | 'expand';
+
+function RemarkActionIcon({ name }: { name: RemarkActionIconName }) {
+  if (name === 'edit') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m4 16.5-.8 4.3 4.3-.8L18.4 9.1 14.9 5.6 4 16.5Z" />
+        <path d="m13.8 6.7 3.5 3.5" />
+      </svg>
+    );
+  }
+
+  if (name === 'preview') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z" />
+        <circle cx="12" cy="12" r="2.5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="5.5" />
+      <path d="m15 15 5 5" />
+    </svg>
+  );
+}
+
 export function RemarkPanel({
   selectedNode,
   mode,
@@ -82,10 +111,10 @@ export function RemarkPanel({
     <>
       <section
         className={embedded ? 'remark-panel is-embedded' : 'remark-panel'}
-        aria-labelledby="remark-panel-title"
+        aria-label="备注"
       >
-        <div className="remark-panel-header">
-          {!embedded ? (
+        {!embedded ? (
+          <div className="remark-panel-header">
             <div className="remark-header-top">
               <p className="eyebrow">Remark</p>
               <button
@@ -98,61 +127,73 @@ export function RemarkPanel({
                 &rsaquo;
               </button>
             </div>
-          ) : null}
+          </div>
+        ) : null}
 
-          <div className="remark-panel-actions">
+        <div className="remark-inline-action-band">
+          <div className="remark-inline-actions" role="toolbar" aria-label="备注工具">
             <button
               type="button"
-              className="secondary-action"
-              onClick={() => setIsPreviewOpen(true)}
+              className={`remark-inline-action${mode === 'edit' ? ' is-active' : ''}`}
+              onClick={() => onModeChange('edit')}
+              aria-label="编辑备注"
+              aria-pressed={mode === 'edit'}
+              title="编辑备注"
             >
-              放大预览
+              <RemarkActionIcon name="edit" />
+              <span className="sr-only">编辑备注</span>
             </button>
-            <div className="remark-mode-switch" aria-label="备注显示模式">
-              <button
-                type="button"
-                className={`mode-button${mode === 'edit' ? ' is-active' : ''}`}
-                onClick={() => onModeChange('edit')}
-              >
-                编辑模式
-              </button>
-              <button
-                type="button"
-                className={`mode-button${mode === 'preview' ? ' is-active' : ''}`}
-                onClick={() => onModeChange('preview')}
-              >
-                预览模式
-              </button>
-            </div>
+            <button
+              type="button"
+              className={`remark-inline-action${mode === 'preview' ? ' is-active' : ''}`}
+              onClick={() => onModeChange('preview')}
+              aria-label="预览备注"
+              aria-pressed={mode === 'preview'}
+              title="预览备注"
+            >
+              <RemarkActionIcon name="preview" />
+              <span className="sr-only">预览备注</span>
+            </button>
+            <span className="remark-inline-action-divider" aria-hidden="true" />
+            <button
+              type="button"
+              className="remark-inline-action"
+              onClick={() => setIsPreviewOpen(true)}
+              aria-label="放大备注"
+              title="放大备注"
+            >
+              <RemarkActionIcon name="expand" />
+              <span className="sr-only">放大备注</span>
+            </button>
           </div>
-
-          <h2 id="remark-panel-title">{selectedNode.text}</h2>
         </div>
 
-        {mode === 'edit' ? (
-          <div className="remark-edit-layout">
-            {remarkMatch ? (
-              <div className="remark-search-context" role="status">
-                <span>{contextStart > 0 ? '…' : ''}</span>
-                {selectedNode.remark.slice(contextStart, remarkMatch.start)}
-                <mark>
-                  {selectedNode.remark.slice(remarkMatch.start, remarkMatch.end)}
-                </mark>
-                {selectedNode.remark.slice(remarkMatch.end, contextEnd)}
-                <span>{contextEnd < selectedNode.remark.length ? '…' : ''}</span>
-              </div>
-            ) : null}
-            <textarea
-              ref={editorRef}
-              className="remark-editor"
-              value={selectedNode.remark}
-              onChange={(event) => onRemarkChange(event.target.value)}
-              aria-label={`${selectedNode.text} 的 Markdown 备注`}
-            />
-          </div>
-        ) : (
-          <MarkdownPreview content={selectedNode.remark} />
-        )}
+        <div className={`remark-content-frame is-${mode}`}>
+          {mode === 'edit' ? (
+            <div className="remark-edit-layout">
+              {remarkMatch ? (
+                <div className="remark-search-context" role="status">
+                  <span>{contextStart > 0 ? '…' : ''}</span>
+                  {selectedNode.remark.slice(contextStart, remarkMatch.start)}
+                  <mark>
+                    {selectedNode.remark.slice(remarkMatch.start, remarkMatch.end)}
+                  </mark>
+                  {selectedNode.remark.slice(remarkMatch.end, contextEnd)}
+                  <span>{contextEnd < selectedNode.remark.length ? '…' : ''}</span>
+                </div>
+              ) : null}
+              <textarea
+                ref={editorRef}
+                className="remark-editor"
+                value={selectedNode.remark}
+                onChange={(event) => onRemarkChange(event.target.value)}
+                aria-label={`${selectedNode.text} 的 Markdown 备注`}
+              />
+            </div>
+          ) : (
+            <MarkdownPreview content={selectedNode.remark} />
+          )}
+        </div>
       </section>
 
       {isPreviewOpen ? (

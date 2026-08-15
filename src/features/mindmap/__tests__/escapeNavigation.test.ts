@@ -17,6 +17,7 @@ const defaultState: EscapeNavigationState = {
   isBoxSelecting: false,
   isDragging: false,
   hasWorkspacePanel: false,
+  isFocusMode: false,
   hasSelection: false,
 };
 
@@ -69,5 +70,11 @@ describe('escape navigation', () => {
       getEscapeNavigationAction({ ...defaultState, hasSelection: true }),
     ).toBe('clear-selection');
     expect(getEscapeNavigationAction(defaultState)).toBeNull();
+  });
+
+  it('exits full focus mode before closing a workspace panel', () => {
+    expect(
+      getEscapeNavigationAction({ ...defaultState, isFocusMode: true, hasWorkspacePanel: true }),
+    ).toBe('exit-focus-mode');
   });
 });

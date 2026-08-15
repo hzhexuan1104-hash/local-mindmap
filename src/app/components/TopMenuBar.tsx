@@ -14,6 +14,8 @@ type TopMenuBarProps = {
   saveStatus?: string;
   saveStatusLabel?: string;
   onOpenFileStatus?: () => void;
+  isQuickToolbarExpanded?: boolean;
+  onToggleQuickToolbar?: () => void;
 };
 
 const itemKey = (path: string[]) => path.join('/');
@@ -25,6 +27,8 @@ export function TopMenuBar({
   currentTitle, currentPath, menus, message, messageKind = 'info', isDirty,
   saveStatus = isDirty ? 'dirty' : 'saved', saveStatusLabel = isDirty ? '未保存' : '已保存',
   onOpenFileStatus,
+  isQuickToolbarExpanded = true,
+  onToggleQuickToolbar,
 }: TopMenuBarProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [openPath, setOpenPath] = useState<string[]>([]);
@@ -46,8 +50,14 @@ export function TopMenuBar({
     const handlePointerDown = (event: globalThis.MouseEvent) => {
       if (activeMenuId && menuBarRef.current && !menuBarRef.current.contains(event.target as Node)) closeAll();
     };
+    const handleCloseTransientUi = () => closeAll();
     document.addEventListener('mousedown', handlePointerDown, true);
-    return () => { document.removeEventListener('mousedown', handlePointerDown, true); clearCloseTimer(); };
+    window.addEventListener('mindmap:close-transient-ui', handleCloseTransientUi);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown, true);
+      window.removeEventListener('mindmap:close-transient-ui', handleCloseTransientUi);
+      clearCloseTimer();
+    };
   });
 
   useLayoutEffect(() => {
@@ -123,6 +133,19 @@ export function TopMenuBar({
         </div>;
       })}
     </nav>
+    {onToggleQuickToolbar ? (
+      <button
+        type="button"
+        className="topbar-quick-toolbar-toggle"
+        data-testid="topbar-quick-toolbar-toggle"
+        aria-expanded={isQuickToolbarExpanded}
+        onClick={onToggleQuickToolbar}
+        title={isQuickToolbarExpanded ? '收起快捷操作' : '展开快捷操作'}
+      >
+        <span aria-hidden="true">{isQuickToolbarExpanded ? '⌃' : '⌄'}</span>
+        {isQuickToolbarExpanded ? '收起快捷操作' : '展开快捷操作'}
+      </button>
+    ) : null}
     <div className="topbar-document-status topbar-true-center" data-testid="topbar-document-status"><button type="button" className="top-document-title topbar-title-ellipsis" title={currentPath ?? currentTitle} onClick={onOpenFileStatus}><span className={['document-status-dot', isDirty ? 'is-dirty' : '', `is-${saveStatus}`].filter(Boolean).join(' ')} aria-hidden="true" /><strong>{currentTitle}</strong><span className="document-status-label">{saveStatusLabel}</span></button>{message ? <span className={`top-status-message is-${messageKind}`} role="status" title={message}>{message}</span> : null}</div>
   </header>;
 }

@@ -83,17 +83,18 @@ describe('typed node creation', () => {
     expect(result?.createdNode.id).not.toBe('topic-a');
   });
 
-  it('creates a child at the end of root children for the Tab shortcut path', () => {
+  it('creates a default child at the end of root children for the Tab shortcut path', () => {
     const mindmap = createMindmap();
-    const result = addTypedChildNode(mindmap, 'root', [test1], test1.id);
+    const result = addTypedChildNode(mindmap, 'root', [test1], '');
 
     expect(result?.rootNode.children).toHaveLength(2);
     expect(result?.rootNode.children[1]).toBe(result?.createdNode);
+    expect(result?.createdNode.nodeTypeId).toBeUndefined();
     expect(result?.selectedNodeId).toBe(result?.createdNode.id);
     expect(result?.selectedNodeIds).toEqual([result?.createdNode.id]);
   });
 
-  it('creates a child at the end of a selected non-root node for the Tab shortcut path', () => {
+  it('creates a default child at the end of a selected non-root node for the Tab shortcut path', () => {
     const mindmap = {
       ...createMindmap(),
       children: [
@@ -110,10 +111,11 @@ describe('typed node creation', () => {
         },
       ],
     };
-    const result = addTypedChildNode(mindmap, 'topic-a', [test1], test1.id);
+    const result = addTypedChildNode(mindmap, 'topic-a', [test1], '');
 
     expect(result?.rootNode.children[0].children).toHaveLength(2);
     expect(result?.rootNode.children[0].children[1]).toBe(result?.createdNode);
+    expect(result?.createdNode.nodeTypeId).toBeUndefined();
     expect(result?.selectedNodeId).toBe(result?.createdNode.id);
   });
 
@@ -144,13 +146,14 @@ describe('typed node creation', () => {
         },
       ],
     };
-    const result = addTypedSiblingNode(mindmap, 'topic-a', [test1], test1.id);
+    const result = addTypedSiblingNode(mindmap, 'topic-a', [test1], '');
 
     expect(result?.rootNode.children.map((child) => child.id)).toEqual([
       'topic-a',
       result?.createdNode.id,
       'topic-b',
     ]);
+    expect(result?.createdNode.nodeTypeId).toBeUndefined();
     expect(result?.selectedNodeId).toBe(result?.createdNode.id);
   });
 

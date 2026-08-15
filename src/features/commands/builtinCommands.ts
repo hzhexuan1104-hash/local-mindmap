@@ -81,7 +81,6 @@ export function createBuiltinCommands(): CommandDefinition[] {
     builtin('node.expand', '展开当前分支', 'node', 'node.expand', { keywords: ['展开'], disabledReason: hasPrimarySelection }),
     builtin('node.focus', '聚焦当前分支', 'navigation', 'node.focus', { keywords: ['聚焦', 'focus'], disabledReason: hasPrimarySelection }),
     builtin('node.exitFocus', '退出分支聚焦', 'navigation', 'node.exitFocus', { keywords: ['退出', '聚焦', 'focus'], disabledReason: hasFocusRoot }),
-    builtin('node.saveStyleAsType', '保存当前样式为节点类型', 'node-type', 'node.saveStyleAsType', { disabledReason: hasPrimarySelection }),
     builtin('node.resetStyle', '重置为节点类型默认样式', 'node-type', 'node.resetStyle', { disabledReason: hasPrimarySelection }),
     builtin('node.manageTypes', '管理全局节点类型', 'node-type', 'node.manageTypes', { keywords: ['节点类型', '类型', '管理'] }),
     builtin('node.locate', '定位当前节点', 'navigation', 'node.locate', { keywords: ['定位', 'locate'], disabledReason: hasPrimarySelection }),
