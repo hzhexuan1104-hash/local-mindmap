@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkspacePanelHost } from '../WorkspacePanelHost';
-import { RightInspectorPanel, normalizeHexColorInput } from '../RightInspectorPanel';
+import { RightInspectorPanel } from '../RightInspectorPanel';
 import { NodeManagerDrawer } from '../NodeManagerDrawer';
+import { NodeStyleToolbar } from '../NodeStyleToolbar';
 import { createEmptyNodeTypeDraft } from '../../../features/mindmap/nodeTypes';
 import { getMenuHoverPath, TopMenuBar, type TopMenuGroup } from '../TopMenuBar';
 import type { MindmapNode, MindmapNodeType } from '../../../features/mindmap/types';
@@ -38,6 +39,8 @@ describe('v1.18 information architecture components', () => {
     );
     expect(html).toContain('data-workspace-panel="templates"');
     expect(html).toContain('workspace-panel');
+    expect(html).toContain('workspace-overlay-backdrop');
+    expect(html).toContain('aria-modal="true"');
     expect(html).not.toContain('resource-rail');
   });
 
@@ -89,33 +92,48 @@ describe('v1.18 information architecture components', () => {
     expect(getMenuHoverPath(['file', 'settings'], false)).toEqual(['file']);
   });
 
-  it('limits the inspector to visual style and remark tabs', () => {
-    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} nodeIcons={[{ value: '✅', label: '✅ Task' }, { value: '💡', label: '💡 Idea' }]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
-    expect(html).toContain('样式');
+  it('limits the inspector to the selected node and its remark', () => {
+    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} remarkMode="edit" activeRemarkMatch={null} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
+
+    expect(html).toContain('Current node');
+    expect(html).toContain('Task');
     expect(html).toContain('备注');
-    expect(html).not.toContain('信息');
-    expect(html).not.toContain('当前节点类型');
-    expect(html).not.toContain('应用到当前节点类型');
-    expect(html).not.toContain('管理全局节点类型');
-    expect(html).not.toContain('另存为节点类型');
-    expect(html).toContain('__inherit-node-type-icon__');
-    expect(html).toContain('value="💡"');
+    expect(html).toContain('inspector-remark-context-details');
+    expect(html).not.toContain('当前节点');
+    expect(html).not.toContain('节点样式');
+    expect(html).toContain('备注');
+    expect(html).not.toContain('节点形状');
+    expect(html).not.toContain('背景色');
+    expect(html).not.toContain('重置为类型默认样式');
   });
 
-  it('groups node style controls into fields and appearance actions', () => {
-    const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} remarkMode="edit" activeRemarkMatch={null} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
+  it('shows the complete node-type name in the compact remark context', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
 
-    expect(html).toContain('inspector-style-form');
-    expect(html).toContain('inspector-style-field-grid');
-    expect(html).toContain('inspector-style-color-swatches');
-    expect(html).toContain('inspector-style-reset');
-    expect(html).not.toContain('inspector-icon-toolbar');
+    expect(css).toMatch(
+      /\.inspector-panel-remark \.inspector-node-type\s*\{[^}]*max-width:\s*none;[^}]*overflow:\s*visible;[^}]*text-overflow:\s*clip;[^}]*white-space:\s*normal;/,
+    );
   });
 
-  it('normalizes editable hex values and rejects invalid colors', () => {
-    expect(normalizeHexColorInput('#ffffff')).toBe('#FFFFFF');
-    expect(normalizeHexColorInput('14315f')).toBe('#14315F');
-    expect(normalizeHexColorInput('#bad')).toBeNull();
+  it('moves compact batch-capable style controls to the canvas toolbar', () => {
+    const html = renderToStaticMarkup(<NodeStyleToolbar selectedNode={selectedNode} selectedNodeCount={2} isRoot={false} nodeTypes={[nodeType]} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} />);
+
+    expect(html).toContain('node-style-toolbar');
+    expect(html).toContain('aria-label="节点图标"');
+    expect(html).toContain('aria-label="节点形状"');
+    expect(html).toContain('aria-label="背景色"');
+    expect(html).toContain('aria-label="边框色"');
+    expect(html).toContain('aria-label="文字色"');
+    expect(html).toContain('aria-label="字号"');
+    expect(html).toContain('aria-label="加粗"');
+    expect(html).toContain('将应用到 2 个节点');
+  });
+
+  it('disables the canvas style toolbar when no node is selected', () => {
+    const html = renderToStaticMarkup(<NodeStyleToolbar selectedNode={null} selectedNodeCount={0} isRoot={false} nodeTypes={[nodeType]} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} />);
+
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('未选中节点，样式工具不可用');
   });
 
   it('keeps node-type management in a modal without a current-node switcher', () => {
@@ -130,7 +148,6 @@ describe('v1.18 information architecture components', () => {
         onDelete={noop}
         onImport={noop}
         onExport={noop}
-        onRequestClose={noop}
       />,
     );
 
@@ -138,5 +155,23 @@ describe('v1.18 information architecture components', () => {
     expect(html).toContain('节点类型列表');
     expect(html).toContain('导入类型包');
     expect(html).not.toContain('切换节点类型');
+  });
+
+  it('marks the generated-ID node-type name input as a field-level validation target', () => {
+    const html = renderToStaticMarkup(
+      <NodeManagerDrawer
+        nodeTypes={[]}
+        draft={{ ...createEmptyNodeTypeDraft(), name: '' }}
+        editingNodeTypeId={null}
+        onDraftChange={noop}
+        onSave={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onImport={noop}
+        onExport={noop}
+      />,
+    );
+
+    expect(html).toContain('aria-invalid="false"');
   });
 });

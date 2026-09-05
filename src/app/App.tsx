@@ -22,6 +22,7 @@ import {
   type RemarkFocusRequest,
 } from './components/RightInspectorPanel';
 import { NodeQuickToolbar } from './components/NodeQuickToolbar';
+import { NodeStyleToolbar } from './components/NodeStyleToolbar';
 import { NodeManagerDrawer } from './components/NodeManagerDrawer';
 import {
   TopMenuBar,
@@ -109,6 +110,13 @@ import {
   POSITIONED_LAYOUT,
   type MindmapLayoutNode,
 } from '../features/mindmap/layout';
+import {
+  clampInspectorWidth,
+  DEFAULT_INSPECTOR_WIDTH,
+  loadUiLayoutSettings,
+  saveUiLayoutSettings,
+  type UiLayoutSettings,
+} from '../features/mindmap/uiLayoutSettings';
 import { getKeyboardShortcutAction } from '../features/mindmap/keyboardShortcuts';
 import { getEscapeNavigationAction } from '../features/mindmap/escapeNavigation';
 import {
@@ -263,12 +271,14 @@ import {
 import {
   findNextMatchIndex,
   findMindmapMatches,
+  DEFAULT_SEARCH_OPTIONS,
   getSearchPanelStatusText,
   replaceAllInMindmap,
   replaceMatchInMindmap,
   SEARCH_SCOPE_LABELS,
   shouldResetSearchOnPanelClose,
   type SearchMatch,
+  type SearchOptions,
   type SearchScope,
 } from '../features/mindmap/searchReplace';
 import {
@@ -841,6 +851,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [replacementText, setReplacementText] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('all');
+  const [searchOptions, setSearchOptions] = useState<SearchOptions>(DEFAULT_SEARCH_OPTIONS);
   const [searchHasRun, setSearchHasRun] = useState(false);
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [templates, setTemplates] = useState<MindmapTemplate[]>([]);
@@ -858,7 +869,6 @@ export function App() {
   const [nodeTypeDraft, setNodeTypeDraft] = useState<NodeTypeDraft>(
     createEmptyNodeTypeDraft,
   );
-  const [isNodeManagerVisible, setIsNodeManagerVisible] = useState(false);
   const [editingNodeTypeId, setEditingNodeTypeId] = useState<string | null>(null);
   const [plugins, setPlugins] = useState<PluginManifest[]>([]);
   const [lastPluginInstallError, setLastPluginInstallError] = useState('');
@@ -893,6 +903,9 @@ export function App() {
     useState<PerformanceBenchmarkResult | null>(null);
   const [activeWorkspacePanel, setActiveWorkspacePanel] =
     useState<ToolDrawer | null>(null);
+  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+  const [layoutDensity, setLayoutDensity] = useState<UiLayoutSettings['layoutDensity']>('compact');
+  const [inspectorWidth, setInspectorWidth] = useState(DEFAULT_INSPECTOR_WIDTH);
   const [isRemarkPanelCollapsed, setIsRemarkPanelCollapsed] = useState(true);
   const [remarkFocusRequest, setRemarkFocusRequest] =
     useState<RemarkFocusRequest | null>(null);
@@ -948,6 +961,10 @@ export function App() {
   const commandPaletteSuspendsEditingRef = useRef(false);
   const editingTextRef = useRef('');
   const nodeEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const workspaceLayoutRef = useRef<HTMLDivElement | null>(null);
+  const inspectorResizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+  const inspectorWidthRef = useRef(DEFAULT_INSPECTOR_WIDTH);
   const [draggingNodeIds, setDraggingNodeIds] = useState<string[]>([]);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -1058,9 +1075,9 @@ export function App() {
   );
   const measuredLayout = useMemo(() => {
     const startedAt = typeof performance === 'undefined' ? Date.now() : performance.now();
-    const result = createMindmapLayout(layoutRoot, availableNodeTypes);
+    const result = createMindmapLayout(layoutRoot, availableNodeTypes, layoutDensity);
     return { result, durationMs: (typeof performance === 'undefined' ? Date.now() : performance.now()) - startedAt };
-  }, [layoutRoot, availableNodeTypes]);
+  }, [layoutDensity, layoutRoot, availableNodeTypes]);
   const mindmapLayout = measuredLayout.result;
   const layoutDurationMs = measuredLayout.durationMs;
   const isViewportCullingEnabled = autoPerformanceMode && mindmapIndex.flattenedNodeIds.length > viewportCullingThreshold;
@@ -1183,8 +1200,8 @@ export function App() {
     [focusedMindmap, focusedRootId, mindmap, searchScope, selectedNodeId],
   );
   const rawSearchMatches = useMemo(
-    () => findMindmapMatches(searchRoot, searchQuery, searchScope),
-    [searchRoot, searchQuery, searchScope],
+    () => findMindmapMatches(searchRoot, searchQuery, searchScope, searchOptions),
+    [searchOptions, searchRoot, searchQuery, searchScope],
   );
   const searchMatches = searchHasRun ? rawSearchMatches : [];
   const searchMatchNodeIds = useMemo(
@@ -1222,11 +1239,9 @@ export function App() {
   const totalTemplateCount = availableOfficialTemplates.length + templates.length;
   const drawerTitle = {
     templates: '模板库',
-    'node-types': '节点类型',
-    search: '查找替换',
+    'node-manager': '节点类型管理',
     outline: '大纲导航',
     performance: '性能测试',
-    plugins: '插件管理',
     settings: '设置',
   } as const;
 
@@ -1239,6 +1254,70 @@ export function App() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void loadUiLayoutSettings(window.innerWidth)
+      .then((settings) => {
+        if (!active) return;
+        inspectorWidthRef.current = settings.inspectorWidth;
+        setInspectorWidth(settings.inspectorWidth);
+        setLayoutDensity(settings.layoutDensity);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSearchPanelOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isSearchPanelOpen]);
+
+  useEffect(() => {
+    if (activeWorkspacePanel) {
+      setIsPluginManagerVisible(false);
+    }
+  }, [activeWorkspacePanel]);
+
+  useEffect(() => {
+    const clampToWorkspace = (width: number) =>
+      clampInspectorWidth(width, workspaceLayoutRef.current?.clientWidth || window.innerWidth);
+    const handlePointerMove = (event: PointerEvent) => {
+      const resizeState = inspectorResizeStateRef.current;
+      if (!resizeState || event.pointerId !== resizeState.pointerId) return;
+      const nextWidth = clampToWorkspace(resizeState.startWidth + resizeState.startX - event.clientX);
+      inspectorWidthRef.current = nextWidth;
+      setInspectorWidth(nextWidth);
+    };
+    const stopResize = (event: PointerEvent) => {
+      const resizeState = inspectorResizeStateRef.current;
+      if (!resizeState || event.pointerId !== resizeState.pointerId) return;
+      inspectorResizeStateRef.current = null;
+      document.body.classList.remove('is-resizing-inspector');
+      void saveUiLayoutSettings({ layoutDensity, inspectorWidth: inspectorWidthRef.current });
+    };
+    const clampAfterViewportResize = () => {
+      const nextWidth = clampToWorkspace(inspectorWidthRef.current);
+      inspectorWidthRef.current = nextWidth;
+      setInspectorWidth(nextWidth);
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResize);
+    window.addEventListener('pointercancel', stopResize);
+    window.addEventListener('resize', clampAfterViewportResize);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopResize);
+      window.removeEventListener('pointercancel', stopResize);
+      window.removeEventListener('resize', clampAfterViewportResize);
+      document.body.classList.remove('is-resizing-inspector');
+    };
+  }, [layoutDensity]);
 
   useEffect(() => {
     setPerformanceMetrics((current) => ({
@@ -1502,7 +1581,7 @@ export function App() {
   useEffect(() => {
     setActiveMatchIndex(0);
     setSearchHasRun(false);
-  }, [searchQuery, searchScope]);
+  }, [searchOptions, searchQuery, searchScope]);
 
   useEffect(() => {
     if (searchMatches.length > 0 && activeMatchIndex >= searchMatches.length) {
@@ -1560,7 +1639,8 @@ export function App() {
             isRecoveryCenterVisible ||
             isVersionHistoryVisible ||
             isFileStatusVisible ||
-            isNodeManagerVisible ||
+            activeWorkspacePanel === 'node-manager' ||
+            isSearchPanelOpen ||
             activeWorkspacePanel,
         ),
         hasContextMenuOpen: Boolean(contextMenu),
@@ -1605,11 +1685,11 @@ export function App() {
           handleSelectAllNodes();
           return;
         case 'find':
-          setActiveWorkspacePanel('search');
+          openSearchPanel();
           showMessage('已打开查找');
           return;
         case 'replace':
-          setActiveWorkspacePanel('search');
+          openSearchPanel();
           showMessage('已打开替换');
           return;
         case 'add-child':
@@ -1827,8 +1907,13 @@ export function App() {
   };
 
   const handleEscapeShortcut = () => {
-    if (isNodeManagerVisible) {
+    if (activeWorkspacePanel === 'node-manager') {
       handleCloseNodeManager();
+      return;
+    }
+
+    if (isSearchPanelOpen) {
+      handleCloseSearchPanel();
       return;
     }
 
@@ -4133,6 +4218,49 @@ export function App() {
     clearSelection();
   };
 
+  const openSearchPanel = () => {
+    setActiveWorkspacePanel(null);
+    setIsSearchPanelOpen(true);
+  };
+
+  const handleCloseSearchPanel = () => {
+    if (shouldResetSearchOnPanelClose('search')) {
+      setSearchQuery('');
+      setReplacementText('');
+      setSearchHasRun(false);
+      setActiveMatchIndex(0);
+      clearSelection();
+    }
+    setIsSearchPanelOpen(false);
+  };
+
+  const handleLayoutDensityChange = (nextDensity: UiLayoutSettings['layoutDensity']) => {
+    setLayoutDensity(nextDensity);
+    void saveUiLayoutSettings({
+      layoutDensity: nextDensity,
+      inspectorWidth: inspectorWidthRef.current,
+    });
+  };
+
+  const openPluginManager = () => {
+    setActiveWorkspacePanel(null);
+    setIsSearchPanelOpen(false);
+    setIsPluginManagerVisible(true);
+  };
+
+  const handleInspectorResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    inspectorResizeStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: inspectorWidthRef.current,
+    };
+    document.body.classList.add('is-resizing-inspector');
+    safelyCapturePointer(event.currentTarget, event.pointerId);
+  };
+
   const handleRunSearch = () => {
     setSearchHasRun(true);
     setActiveMatchIndex(0);
@@ -4183,7 +4311,7 @@ export function App() {
       query,
       replacementText,
     );
-    const nextMatches = findMindmapMatches(nextMindmap, query, searchScope);
+    const nextMatches = findMindmapMatches(nextMindmap, query, searchScope, searchOptions);
     const nextMatchIndex = findNextMatchIndex(nextMindmap, nextMatches, {
       nodeId: activeMatch.nodeId,
       field: activeMatch.field,
@@ -4223,9 +4351,9 @@ export function App() {
     setMindmap((currentMindmap) =>
       searchScope === 'branch' && selectedNodeId
         ? updateNodeById(currentMindmap, selectedNodeId, (node) =>
-            replaceAllInMindmap(node, query, replacementText, 'all'),
+            replaceAllInMindmap(node, query, replacementText, 'all', searchOptions),
           )
-        : replaceAllInMindmap(currentMindmap, query, replacementText, searchScope),
+        : replaceAllInMindmap(currentMindmap, query, replacementText, searchScope, searchOptions),
     );
     setSearchHasRun(true);
     showMessage(`全部替换完成：${currentMatches.length} 处`);
@@ -4345,6 +4473,7 @@ export function App() {
     name: nodeType.name,
     icon: nodeType.icon,
     shape: nodeType.shape,
+    textAlign: nodeType.textAlign,
     backgroundColor: nodeType.backgroundColor,
     borderColor: nodeType.borderColor,
     textColor: nodeType.textColor,
@@ -4357,13 +4486,15 @@ export function App() {
   const openNodeManager = (draft?: NodeTypeDraft) => {
     setEditingNodeTypeId(null);
     setNodeTypeDraft(draft ?? createEmptyNodeTypeDraft());
-    setIsNodeManagerVisible(true);
+    setIsSearchPanelOpen(false);
+    setIsPluginManagerVisible(false);
+    setActiveWorkspacePanel('node-manager');
   };
 
   const handleCloseNodeManager = () => {
     const hasDraft = Boolean(nodeTypeDraft.name.trim() || nodeTypeDraft.defaultRemark.trim() || editingNodeTypeId);
     if (hasDraft && !window.confirm('节点类型草稿尚未保存，是否放弃修改？')) return;
-    setIsNodeManagerVisible(false);
+    setActiveWorkspacePanel(null);
     setEditingNodeTypeId(null);
     setNodeTypeDraft(createEmptyNodeTypeDraft());
   };
@@ -4373,12 +4504,12 @@ export function App() {
     setNodeTypeDraft(toNodeTypeDraft(nodeType));
   };
 
-  const handleSaveNodeType = async () => {
+  const handleSaveNodeType = async (): Promise<boolean> => {
     const nodeType = createMindmapNodeType(nodeTypeDraft);
 
     if (!nodeType) {
       showMessage('请先填写节点类型名称');
-      return;
+      return false;
     }
 
     recordHistory();
@@ -4393,8 +4524,10 @@ export function App() {
       setNodeTypeDraft(createEmptyNodeTypeDraft());
       setEditingNodeTypeId(null);
       showMessage(editingNodeTypeId ? '已保存节点类型' : '已创建节点类型');
+      return true;
     } catch (error) {
       showMessage(getErrorMessage(error, '节点类型保存失败'));
+      return false;
     }
   };
 
@@ -6119,7 +6252,7 @@ export function App() {
   };
 
   const pluginCommandHandlers: PluginCommandHandlers = {
-    'builtin.openPluginManager': () => setIsPluginManagerVisible(true),
+    'builtin.openPluginManager': openPluginManager,
     'builtin.reloadPlugins': handleReloadPlugins,
     'builtin.openPluginDirectory': handleOpenPluginDir,
     'builtin.exportText': handleExportTxt,
@@ -6214,8 +6347,8 @@ export function App() {
     'file.recent': () => setIsFileStatusVisible(true),
     'edit.undo': handleUndo,
     'edit.redo': handleRedo,
-    'edit.find': () => setActiveWorkspacePanel('search'),
-    'edit.replace': () => setActiveWorkspacePanel('search'),
+    'edit.find': openSearchPanel,
+    'edit.replace': openSearchPanel,
     'edit.copy': handleCopyNodes,
     'edit.cut': handleCutNodes,
     'edit.paste': handlePasteNodes,
@@ -6269,11 +6402,11 @@ export function App() {
     'view.autoPerformance': () => setAutoPerformanceMode((enabled) => !enabled),
     'view.layout': handleResetAutoLayout,
     'template.library': () => setActiveWorkspacePanel('templates'),
-    'plugin.manager': () => setIsPluginManagerVisible(true),
-    'plugin.gallery': () => setIsPluginManagerVisible(true),
-    'plugin.workbench': () => setIsPluginManagerVisible(true),
-    'plugin.diagnostics': () => setIsPluginManagerVisible(true),
-    'plugin.logs': () => setIsPluginManagerVisible(true),
+    'plugin.manager': openPluginManager,
+    'plugin.gallery': openPluginManager,
+    'plugin.workbench': openPluginManager,
+    'plugin.diagnostics': openPluginManager,
+    'plugin.logs': openPluginManager,
     'help.guide': () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
     'help.shortcuts': () => setIsShortcutHelpVisible(true),
     'help.about': () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
@@ -6461,7 +6594,7 @@ export function App() {
     { id: 'edit', label: '编辑', items: [
       { id: 'undo', label: '撤销', shortcut: 'Ctrl+Z', execute: handleUndo }, { id: 'redo', label: '重做', shortcut: 'Ctrl+Y', execute: handleRedo },
       { id: 'find', label: '查找与替换', separatorBefore: true, children: [
-        { id: 'find', label: '查找', shortcut: 'Ctrl+F', checked: activeWorkspacePanel === 'search', execute: () => setActiveWorkspacePanel('search') }, { id: 'replace', label: '替换', shortcut: 'Ctrl+H', checked: activeWorkspacePanel === 'search', execute: () => setActiveWorkspacePanel('search') }, { id: 'next', label: '查找下一个', execute: () => jumpToMatch(activeMatchIndex + 1) }, { id: 'previous', label: '查找上一个', execute: () => jumpToMatch(activeMatchIndex - 1) },
+        { id: 'find', label: '查找', shortcut: 'Ctrl+F', checked: isSearchPanelOpen, execute: openSearchPanel }, { id: 'replace', label: '替换', shortcut: 'Ctrl+H', checked: isSearchPanelOpen, execute: openSearchPanel }, { id: 'next', label: '查找下一个', execute: () => jumpToMatch(activeMatchIndex + 1) }, { id: 'previous', label: '查找上一个', execute: () => jumpToMatch(activeMatchIndex - 1) },
       ] },
       { id: 'clipboard', label: '剪贴板', children: [{ id: 'cut', label: '剪切', shortcut: 'Ctrl+X', execute: handleCutNodes }, { id: 'copy', label: '复制', shortcut: 'Ctrl+C', execute: handleCopyNodes }, { id: 'paste', label: '粘贴', shortcut: 'Ctrl+V', execute: () => handlePasteNodes() }, { id: 'duplicate', label: '复制为同级节点', execute: handleDuplicateNodeAsSibling }] },
       { id: 'selection', label: '选择', children: [{ id: 'all', label: '全选', shortcut: 'Ctrl+A', execute: handleSelectAllNodes }, { id: 'clear', label: '取消选择', execute: clearSelection }] },
@@ -6481,20 +6614,20 @@ export function App() {
       { id: 'structure', label: '结构', children: [{ id: 'collapse', label: '折叠当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'expand', label: '展开当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'focus', label: '聚焦当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleFocusBranch(selectedNodeId); } }, { id: 'exit-focus', label: '退出分支聚焦', disabled: !focusedRootId, execute: handleExitBranchFocus }] },
       { id: 'order', label: '排序', children: [{ id: 'up', label: '上移当前节点', disabled: !selectedNodeId || getSiblingMoveState(mindmap, selectedNodeId)?.index === 0 || !getSiblingMoveState(mindmap, selectedNodeId), execute: () => handleMoveSelectedNode('up') }, { id: 'down', label: '下移当前节点', disabled: !selectedNodeId || !getSiblingMoveState(mindmap, selectedNodeId) || getSiblingMoveState(mindmap, selectedNodeId)!.index === getSiblingMoveState(mindmap, selectedNodeId)!.parent.children.length - 1, execute: () => handleMoveSelectedNode('down') }] },
       { id: 'locate', label: '定位', children: [{ id: 'current', label: '定位当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) locateNode(selectedNodeId, { exitFocusIfNeeded: true }); } }, { id: 'parent', label: '选择父节点', disabled: !selectedNodeId || !mindmapIndex.parentById.get(selectedNodeId), execute: () => { const id = selectedNodeId && mindmapIndex.parentById.get(selectedNodeId); if (id) locateNode(id, { exitFocusIfNeeded: true }); } }, { id: 'first-child', label: '选择第一个子节点', disabled: !selectedNodeId || !mindmapIndex.childrenById.get(selectedNodeId)?.length, execute: () => { const id = selectedNodeId && mindmapIndex.childrenById.get(selectedNodeId)?.[0]; if (id) locateNode(id, { exitFocusIfNeeded: true }); } }] },
-      { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: isNodeManagerVisible, execute: () => openNodeManager() }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }] },
+      { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: activeWorkspacePanel === 'node-manager', execute: () => openNodeManager() }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }] },
     ] },
     { id: 'view', label: '视图', items: [
       { id: 'panels', label: '面板', children: [{ id: 'outline', label: '大纲导航', checked: activeWorkspacePanel === 'outline', execute: () => setActiveWorkspacePanel((current) => current === 'outline' ? null : 'outline') }, { id: 'inspector', label: '右侧属性面板', checked: !isRemarkPanelCollapsed, execute: () => setIsRemarkPanelCollapsed((collapsed) => !collapsed) }, { id: 'minimap', label: '小地图', checked: showMiniMap, execute: () => setShowMiniMap((visible) => !visible) }, { id: 'performance', label: '性能信息', checked: activeWorkspacePanel === 'performance', execute: () => setActiveWorkspacePanel('performance') }] },
       { id: 'zoom', label: '缩放与定位', children: [{ id: 'in', label: '放大', execute: () => setCanvasView((view) => zoomCanvasView(view, 'in')) }, { id: 'out', label: '缩小', execute: () => setCanvasView((view) => zoomCanvasView(view, 'out')) }, { id: 'reset', label: '重置缩放', execute: () => setCanvasView((view) => ({ ...view, scale: 1 })) }, { id: 'center', label: '居中画布', execute: () => setCanvasView(centerCanvasView()) }] },
       { id: 'expand', label: '展开与折叠', children: [{ id: 'all', label: '全部展开', execute: handleExpandAll }, { id: 'none', label: '全部折叠', execute: handleCollapseAll }, { id: 'one', label: '展开到第 1 层', execute: () => handleExpandToDepth(1) }, { id: 'two', label: '展开到第 2 层', execute: () => handleExpandToDepth(2) }, { id: 'three', label: '展开到第 3 层', execute: () => handleExpandToDepth(3) }] },
-      { id: 'layout', label: '布局结构', children: [{ id: 'auto', label: '重新自动布局', execute: handleResetAutoLayout }, { id: 'focus', label: isFocusMode ? '退出专注模式' : '进入专注模式', execute: isFocusMode ? handleExitFocusMode : handleEnterFocusMode }] },
+      { id: 'layout', label: '布局结构', children: [{ id: 'density', label: '布局密度', children: [{ id: 'compact', label: '紧凑', checked: layoutDensity === 'compact', execute: () => handleLayoutDensityChange('compact') }, { id: 'comfortable', label: '标准', checked: layoutDensity === 'comfortable', execute: () => handleLayoutDensityChange('comfortable') }] }, { id: 'auto', label: '重新自动布局', execute: handleResetAutoLayout }, { id: 'focus', label: isFocusMode ? '退出专注模式' : '进入专注模式', execute: isFocusMode ? handleExitFocusMode : handleEnterFocusMode }] },
       { id: 'performance-mode', label: '性能模式', children: [{ id: 'auto', label: '自动性能模式', checked: autoPerformanceMode, execute: () => setAutoPerformanceMode((enabled) => !enabled) }] },
     ] },
     { id: 'plugins', label: '插件', items: [
-      { id: 'center', label: '插件中心', children: [{ id: 'manage', label: '插件管理', execute: () => setIsPluginManagerVisible(true) }, { id: 'gallery', label: '本地插件中心', execute: () => setIsPluginManagerVisible(true) }, { id: 'import', label: '导入插件', execute: () => void handleInstallPlugin() }, { id: 'reload', label: '重新加载插件', execute: () => void runPluginCommand('builtin.reloadPlugins') }, ...(isDesktopApp ? [{ id: 'directory', label: '打开插件目录', execute: () => void runPluginCommand('builtin.openPluginDirectory') }] : [])] },
+      { id: 'center', label: '插件中心', children: [{ id: 'manage', label: '插件管理', execute: openPluginManager }, { id: 'gallery', label: '本地插件中心', execute: openPluginManager }, { id: 'import', label: '导入插件', execute: () => void handleInstallPlugin() }, { id: 'reload', label: '重新加载插件', execute: () => void runPluginCommand('builtin.reloadPlugins') }, ...(isDesktopApp ? [{ id: 'directory', label: '打开插件目录', execute: () => void runPluginCommand('builtin.openPluginDirectory') }] : [])] },
       { id: 'commands', label: '插件命令', children: pluginCommandMenu.length ? pluginCommandMenu : [{ id: 'empty', label: '暂无已启用插件命令', disabled: true }] },
-      { id: 'developer', label: '开发者工具', children: [{ id: 'workbench', label: '插件开发者工作台', execute: () => setIsPluginManagerVisible(true) }, { id: 'docs', label: '打开插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
-      { id: 'diagnostics', label: '诊断与日志', children: [{ id: 'diagnostics', label: '插件诊断中心', execute: () => setIsPluginManagerVisible(true) }, { id: 'logs', label: '插件日志', execute: () => setIsPluginManagerVisible(true) }] },
+      { id: 'developer', label: '开发者工具', children: [{ id: 'workbench', label: '插件开发者工作台', execute: openPluginManager }, { id: 'docs', label: '打开插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
+      { id: 'diagnostics', label: '诊断与日志', children: [{ id: 'diagnostics', label: '插件诊断中心', execute: openPluginManager }, { id: 'logs', label: '插件日志', execute: openPluginManager }] },
     ] },
     { id: 'help', label: '帮助', items: [
       { id: 'usage', label: '使用帮助', children: [{ id: 'guide', label: '使用指南', execute: () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。') }, { id: 'shortcuts', label: '快捷键', execute: () => setIsShortcutHelpVisible(true) }, { id: 'palette', label: '命令面板（Ctrl+K）', execute: openCommandPalette }] },
@@ -6546,6 +6679,19 @@ export function App() {
           onSetProgress={handleProgressChange}
           onAddTag={handleAddTag}
           onRemoveTag={handleRemoveTag}
+          styleToolbar={
+            <NodeStyleToolbar
+              selectedNode={selectedNodeId ? selectedNode : null}
+              selectedNodeCount={selectedNodeIds.length}
+              isRoot={selectedNodeId === mindmap.id}
+              nodeTypes={availableNodeTypes}
+              nodeIcons={availableNodeTypeIcons}
+              onNodeStyleChange={handleSelectedNodeStyleChange}
+              onNodeIconChange={handleSelectedNodeIconChange}
+              onResetNodeStyle={handleResetSelectedNodeStyle}
+              embedded
+            />
+          }
         />
       ) : null}
 
@@ -6571,24 +6717,16 @@ export function App() {
       <div
         className={[
           'app-body',
-          activeWorkspacePanel && !isFocusMode ? 'has-drawer' : '',
           isFocusMode ? 'is-focus-mode' : '',
         ]
           .filter(Boolean)
           .join(' ')}
       >
         {!isFocusMode && activeWorkspacePanel ? (
-          <>
-            <button
-              type="button"
-              className="workspace-panel-backdrop"
-              aria-label="关闭工作面板"
-              onClick={handleCloseWorkspacePanel}
-            />
             <WorkspacePanelHost
               id={activeWorkspacePanel}
               title={drawerTitle[activeWorkspacePanel]}
-              onClose={handleCloseWorkspacePanel}
+              onClose={activeWorkspacePanel === 'node-manager' ? handleCloseNodeManager : handleCloseWorkspacePanel}
             >
 
             {activeWorkspacePanel === 'templates' ? (
@@ -6783,84 +6921,18 @@ export function App() {
             ) : null}
 
 
-            {activeWorkspacePanel === 'search' ? (
-              <section className="feature-panel" aria-label="查找替换">
-                <div className="panel-heading">
-                  <h2>查找替换</h2>
-                  <span className="panel-note">
-                    {getSearchPanelStatusText({
-                      query: searchQuery,
-                      hasRun: searchHasRun,
-                      matchCount: searchMatches.length,
-                      activeIndex: activeMatchIndex,
-                    })}
-                  </span>
-                </div>
-                {activeMatch?.field === 'remark' ? (
-                  <p className="search-match-location">当前匹配位于备注</p>
-                ) : null}
-                <div className="compact-form drawer-form">
-                  <input
-                    type="search"
-                    value={searchQuery}
-                    placeholder="查找内容"
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                  />
-                  <input
-                    type="text"
-                    value={replacementText}
-                    placeholder="替换为"
-                    onChange={(event) => setReplacementText(event.target.value)}
-                  />
-                  <select
-                    value={searchScope}
-                    onChange={(event) =>
-                      setSearchScope(event.target.value as SearchScope)
-                    }
-                  >
-                    {Object.entries(SEARCH_SCOPE_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="primary-action"
-                    onClick={handleRunSearch}
-                  >
-                    查找
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => jumpToMatch(activeMatchIndex - 1)}
-                  >
-                    上一个
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={() => jumpToMatch(activeMatchIndex + 1)}
-                  >
-                    下一个
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={handleReplaceCurrent}
-                  >
-                    替换
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={handleReplaceAll}
-                  >
-                    全部替换
-                  </button>
-                </div>
-              </section>
+            {activeWorkspacePanel === 'node-manager' ? (
+              <NodeManagerDrawer
+                nodeTypes={nodeTypes}
+                draft={nodeTypeDraft}
+                editingNodeTypeId={editingNodeTypeId}
+                onDraftChange={setNodeTypeDraft}
+                onSave={handleSaveNodeType}
+                onEdit={handleEditNodeType}
+                onDelete={(nodeType) => void handleDeleteNodeType(nodeType)}
+                onImport={() => void handleImportNodeTypePack()}
+                onExport={handleExportNodeTypePack}
+              />
             ) : null}
 
             {activeWorkspacePanel === 'performance' ? (
@@ -7013,7 +7085,7 @@ export function App() {
                   <button
                     type="button"
                     className="secondary-action"
-                    onClick={() => setIsPluginManagerVisible(true)}
+                    onClick={openPluginManager}
                   >
                     插件运行器状态
                   </button>
@@ -7021,16 +7093,17 @@ export function App() {
               </section>
             ) : null}
             </WorkspacePanelHost>
-          </>
         ) : null}
 
         <div
+        ref={workspaceLayoutRef}
         className={[
           'workspace-layout',
           isRemarkPanelCollapsed || isFocusMode ? 'is-remark-collapsed' : '',
         ]
           .filter(Boolean)
           .join(' ')}
+        style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
       >
         <section
           className={[
@@ -7090,6 +7163,85 @@ export function App() {
             onAutoLayout={handleResetAutoLayout}
             onExitFocusMode={isFocusMode ? handleExitFocusMode : handleExitBranchFocus}
           />
+          {isSearchPanelOpen ? (
+            <section
+              className="search-float-panel"
+              role="dialog"
+              aria-modal="false"
+              aria-label="查找与替换"
+              onPointerDown={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.stopPropagation()}
+            >
+              <div className="search-float-row">
+                <label>
+                  <span>查找</span>
+                  <input
+                    ref={searchInputRef}
+                    type="search"
+                    value={searchQuery}
+                    placeholder="查找内容"
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        jumpToMatch(activeMatchIndex + (event.shiftKey ? -1 : 1));
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        handleCloseSearchPanel();
+                      }
+                    }}
+                  />
+                </label>
+                <button type="button" className="search-float-icon" title="上一个（Shift+Enter）" aria-label="上一个匹配" onClick={() => jumpToMatch(activeMatchIndex - 1)}>↑</button>
+                <button type="button" className="search-float-icon" title="下一个（Enter）" aria-label="下一个匹配" onClick={() => jumpToMatch(activeMatchIndex + 1)}>↓</button>
+                <button type="button" className="search-float-icon" title="关闭（Esc）" aria-label="关闭查找" onClick={handleCloseSearchPanel}>×</button>
+              </div>
+              <div className="search-float-row">
+                <label>
+                  <span>替换</span>
+                  <input
+                    type="text"
+                    value={replacementText}
+                    placeholder="替换为"
+                    onChange={(event) => setReplacementText(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        handleReplaceCurrent();
+                      }
+                    }}
+                  />
+                </label>
+                <button type="button" className="search-float-action" onClick={handleReplaceCurrent}>替换</button>
+                <button type="button" className="search-float-action" onClick={handleReplaceAll}>全部</button>
+              </div>
+              <div className="search-float-footer">
+                <span>{getSearchPanelStatusText({ query: searchQuery, hasRun: searchHasRun, matchCount: searchMatches.length, activeIndex: activeMatchIndex })}</span>
+                <details>
+                  <summary>选项</summary>
+                  <select value={searchScope} aria-label="查找范围" onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
+                    {Object.entries(SEARCH_SCOPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={searchOptions.caseSensitive}
+                      onChange={(event) => setSearchOptions((current) => ({ ...current, caseSensitive: event.target.checked }))}
+                    />
+                    区分大小写
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={searchOptions.wholeWord}
+                      onChange={(event) => setSearchOptions((current) => ({ ...current, wholeWord: event.target.checked }))}
+                    />
+                    全字匹配
+                  </label>
+                </details>
+              </div>
+            </section>
+          ) : null}
           {isFocusMode ? (
             <div className="focus-mode-banner" role="status">
               正在专注模式
@@ -7196,43 +7348,31 @@ export function App() {
               </button>
             </aside>
           ) : (
-            <RightInspectorPanel
-              selectedNode={selectedNode}
-              selectedNodeCount={selectedNodeIds.length}
-              isRoot={selectedNode.id === mindmap.id}
-              nodeTypes={availableNodeTypes}
-              nodeIcons={availableNodeTypeIcons}
-              remarkMode={remarkMode}
-              activeRemarkMatch={
-                activeMatch?.field === 'remark' ? activeMatch : null
-              }
-              remarkFocusRequest={remarkFocusRequest}
-              onNodeStyleChange={handleSelectedNodeStyleChange}
-              onNodeIconChange={handleSelectedNodeIconChange}
-              onResetNodeStyle={handleResetSelectedNodeStyle}
-              onRemarkModeChange={setRemarkMode}
-              onRemarkChange={handleRemarkChange}
-              onCollapse={() => setIsRemarkPanelCollapsed(true)}
-            />
+            <>
+              <div
+                className="inspector-resize-handle"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整备注面板宽度"
+                onPointerDown={handleInspectorResizePointerDown}
+              />
+              <RightInspectorPanel
+                selectedNode={selectedNode}
+                nodeTypes={availableNodeTypes}
+                remarkMode={remarkMode}
+                activeRemarkMatch={
+                  activeMatch?.field === 'remark' ? activeMatch : null
+                }
+                remarkFocusRequest={remarkFocusRequest}
+                onRemarkModeChange={setRemarkMode}
+                onRemarkChange={handleRemarkChange}
+                onCollapse={() => setIsRemarkPanelCollapsed(true)}
+              />
+            </>
           )
         ) : null}
       </div>
       </div>
-
-      {isNodeManagerVisible ? (
-        <NodeManagerDrawer
-          nodeTypes={nodeTypes}
-          draft={nodeTypeDraft}
-          editingNodeTypeId={editingNodeTypeId}
-          onDraftChange={setNodeTypeDraft}
-          onSave={() => void handleSaveNodeType()}
-          onEdit={handleEditNodeType}
-          onDelete={(nodeType) => void handleDeleteNodeType(nodeType)}
-          onImport={() => void handleImportNodeTypePack()}
-          onExport={handleExportNodeTypePack}
-          onRequestClose={handleCloseNodeManager}
-        />
-      ) : null}
 
       {isFileStatusVisible ? (
         <div className="file-reliability-backdrop" role="presentation">

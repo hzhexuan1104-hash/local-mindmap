@@ -62,12 +62,6 @@ export function RemarkPanel({
     activeMatch?.field === 'remark' && activeMatch.nodeId === selectedNode.id
       ? activeMatch
       : null;
-  const contextStart = remarkMatch
-    ? Math.max(0, remarkMatch.start - 24)
-    : 0;
-  const contextEnd = remarkMatch
-    ? Math.min(selectedNode.remark.length, remarkMatch.end + 24)
-    : 0;
 
   useEffect(() => {
     if (!remarkMatch || mode !== 'edit') {
@@ -130,7 +124,8 @@ export function RemarkPanel({
           </div>
         ) : null}
 
-        <div className="remark-inline-action-band">
+        <header className="remark-section-header">
+          <span>备注</span>
           <div className="remark-inline-actions" role="toolbar" aria-label="备注工具">
             <button
               type="button"
@@ -166,26 +161,16 @@ export function RemarkPanel({
               <span className="sr-only">放大备注</span>
             </button>
           </div>
-        </div>
+        </header>
 
         <div className={`remark-content-frame is-${mode}`}>
           {mode === 'edit' ? (
             <div className="remark-edit-layout">
-              {remarkMatch ? (
-                <div className="remark-search-context" role="status">
-                  <span>{contextStart > 0 ? '…' : ''}</span>
-                  {selectedNode.remark.slice(contextStart, remarkMatch.start)}
-                  <mark>
-                    {selectedNode.remark.slice(remarkMatch.start, remarkMatch.end)}
-                  </mark>
-                  {selectedNode.remark.slice(remarkMatch.end, contextEnd)}
-                  <span>{contextEnd < selectedNode.remark.length ? '…' : ''}</span>
-                </div>
-              ) : null}
               <textarea
                 ref={editorRef}
                 className="remark-editor"
                 value={selectedNode.remark}
+                data-search-match-active={remarkMatch ? 'true' : undefined}
                 onChange={(event) => onRemarkChange(event.target.value)}
                 aria-label={`${selectedNode.text} 的 Markdown 备注`}
               />

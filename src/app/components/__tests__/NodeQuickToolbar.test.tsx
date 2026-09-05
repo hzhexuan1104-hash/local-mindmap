@@ -67,4 +67,29 @@ describe('NodeQuickToolbar', () => {
     expect(html).toContain('value="mixed"');
   });
 
+  it('hosts node styling at the far end of the quick-action row', () => {
+    const html = renderToStaticMarkup(
+      <NodeQuickToolbar
+        selectedNode={null}
+        hasSelection={false}
+        priorityValue="none"
+        progressValue="none"
+        availableTags={[]}
+        onAddChild={() => undefined}
+        onAddSibling={() => undefined}
+        onAddParent={() => undefined}
+        onOpenRemark={() => undefined}
+        onSetPriority={() => undefined}
+        onSetProgress={() => undefined}
+        onAddTag={() => false}
+        onRemoveTag={() => undefined}
+        styleToolbar={<section className="node-style-toolbar is-embedded">样式</section>}
+      />,
+    );
+
+    expect(html).toContain('node-quick-toolbar-scroll has-node-style-toolbar');
+    expect(html).toContain('node-quick-toolbar-style-slot');
+    expect(html.indexOf('node-quick-toolbar-style-slot')).toBeGreaterThan(html.indexOf('node-tag-group'));
+  });
+
 });

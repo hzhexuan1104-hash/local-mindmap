@@ -1,6 +1,8 @@
 export type MindmapNodeStyle = {
   icon?: string;
   shape?: MindmapNodeType['shape'];
+  /** Optional override. Normal nodes are left aligned; the root remains centered. */
+  textAlign?: 'left' | 'center' | 'right';
   backgroundColor?: string;
   borderColor?: string;
   textColor?: string;
@@ -34,6 +36,8 @@ export type MindmapNodeType = {
   name: string;
   icon: string;
   shape: 'rounded' | 'rectangle' | 'pill' | 'diamond';
+  /** Kept optional so existing .lmind files remain unchanged and compatible. */
+  textAlign?: 'left' | 'center' | 'right';
   backgroundColor: string;
   borderColor: string;
   textColor: string;

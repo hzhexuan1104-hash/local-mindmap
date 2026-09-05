@@ -1,8 +1,10 @@
-import { useEffect } from 'react';
+import { useRef, useState } from 'react';
 import {
   NODE_TYPE_ICONS,
   NODE_TYPE_SHAPES,
   type NodeTypeDraft,
+  type NodeTypeDraftErrors,
+  validateNodeTypeDraft,
 } from '../../features/mindmap/nodeTypes';
 import type { MindmapNodeType } from '../../features/mindmap/types';
 
@@ -11,15 +13,14 @@ type NodeManagerDrawerProps = {
   draft: NodeTypeDraft;
   editingNodeTypeId: string | null;
   onDraftChange: (updater: (draft: NodeTypeDraft) => NodeTypeDraft) => void;
-  onSave: () => void;
+  onSave: () => void | boolean | Promise<void | boolean>;
   onEdit: (nodeType: MindmapNodeType) => void;
   onDelete: (nodeType: MindmapNodeType) => void;
   onImport: () => void;
   onExport: () => void;
-  onRequestClose: () => void;
 };
 
-/** Modal management surface for node-type definitions; it never changes a selected node's type. */
+/** Content for the shared workspace overlay that manages node-type definitions. */
 export function NodeManagerDrawer({
   nodeTypes,
   draft,
@@ -30,77 +31,65 @@ export function NodeManagerDrawer({
   onDelete,
   onImport,
   onExport,
-  onRequestClose,
 }: NodeManagerDrawerProps) {
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      onRequestClose();
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [onRequestClose]);
+  const [errors, setErrors] = useState<NodeTypeDraftErrors>({});
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const hasErrors = Object.keys(errors).length > 0;
+  const updateDraft = (updater: (current: NodeTypeDraft) => NodeTypeDraft, field?: keyof NodeTypeDraftErrors) => {
+    onDraftChange(updater);
+    if (field && errors[field]) {
+      setErrors((current) => {
+        const { [field]: _removed, ...remaining } = current;
+        return remaining;
+      });
+    }
+  };
 
-  const title = editingNodeTypeId ? '编辑节点类型' : '节点管理';
+  const submit = async () => {
+    const nextErrors = validateNodeTypeDraft(draft);
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
+      window.requestAnimationFrame(() => nameInputRef.current?.focus());
+      return;
+    }
+    setErrors({});
+    await onSave();
+  };
 
   return (
-    <div
-      className="node-manager-backdrop"
-      role="presentation"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onRequestClose();
-      }}
-    >
-      <section
-        className="node-manager-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="node-manager-title"
-      >
-        <header className="node-manager-header">
-          <div>
-            <p className="eyebrow">Node types</p>
-            <h2 id="node-manager-title">{title}</h2>
-          </div>
-          <button
-            type="button"
-            className="secondary-action"
-            onClick={onRequestClose}
-            aria-label="关闭节点管理"
-            title="关闭节点管理"
-          >
-            ×
-          </button>
-        </header>
-
+      <section className="node-manager-drawer" aria-label="节点类型管理">
         <div className="node-manager-body">
           <form
             className="node-manager-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              onSave();
+              onSubmit={(event) => {
+                event.preventDefault();
+              void submit();
             }}
           >
+            {hasErrors ? <p className="node-manager-error-summary" role="alert">请先修正以下必填或格式错误字段。</p> : null}
             <label>
               <span>类型名称</span>
               <input
+                ref={nameInputRef}
                 autoFocus
                 value={draft.name}
                 placeholder="例如：任务节点"
+                aria-invalid={Boolean(errors.name)}
+                aria-describedby={errors.name ? 'node-type-name-error' : undefined}
+                className={errors.name ? 'has-field-error' : undefined}
                 onChange={(event) =>
-                  onDraftChange((current) => ({ ...current, name: event.target.value }))
+                  updateDraft((current) => ({ ...current, name: event.target.value }), 'name')
                 }
               />
+              {errors.name ? <small id="node-type-name-error" className="field-error-text">{errors.name}</small> : null}
             </label>
             <label>
               <span>图标</span>
               <select
                 value={draft.icon}
+                aria-invalid={Boolean(errors.icon)}
                 onChange={(event) =>
-                  onDraftChange((current) => ({ ...current, icon: event.target.value }))
+                  updateDraft((current) => ({ ...current, icon: event.target.value }), 'icon')
                 }
               >
                 {NODE_TYPE_ICONS.map((icon) => (
@@ -112,11 +101,12 @@ export function NodeManagerDrawer({
               <span>形状</span>
               <select
                 value={draft.shape}
+                aria-invalid={Boolean(errors.shape)}
                 onChange={(event) =>
-                  onDraftChange((current) => ({
+                  updateDraft((current) => ({
                     ...current,
                     shape: event.target.value as NodeTypeDraft['shape'],
-                  }))
+                  }), 'shape')
                 }
               >
                 {NODE_TYPE_SHAPES.map((shape) => (
@@ -135,9 +125,11 @@ export function NodeManagerDrawer({
                   <input
                     type="color"
                     value={draft[key]}
+                    aria-invalid={Boolean(errors[key])}
+                    className={errors[key] ? 'has-field-error' : undefined}
                     aria-label={label}
                     onChange={(event) =>
-                      onDraftChange((current) => ({ ...current, [key]: event.target.value }))
+                      updateDraft((current) => ({ ...current, [key]: event.target.value }), key)
                     }
                   />
                 </label>
@@ -150,17 +142,20 @@ export function NodeManagerDrawer({
                 min={12}
                 max={28}
                 value={draft.fontSize}
+                aria-invalid={Boolean(errors.fontSize)}
+                className={errors.fontSize ? 'has-field-error' : undefined}
                 onChange={(event) =>
-                  onDraftChange((current) => ({ ...current, fontSize: Number(event.target.value) }))
+                  updateDraft((current) => ({ ...current, fontSize: Number(event.target.value) }), 'fontSize')
                 }
               />
+              {errors.fontSize ? <small className="field-error-text">{errors.fontSize}</small> : null}
             </label>
             <label className="node-manager-checkbox">
               <input
                 type="checkbox"
                 checked={draft.bold}
                 onChange={(event) =>
-                  onDraftChange((current) => ({ ...current, bold: event.target.checked }))
+                  updateDraft((current) => ({ ...current, bold: event.target.checked }))
                 }
               />
               <span>默认加粗</span>
@@ -170,7 +165,7 @@ export function NodeManagerDrawer({
               <input
                 value={draft.defaultText}
                 onChange={(event) =>
-                  onDraftChange((current) => ({ ...current, defaultText: event.target.value }))
+                  updateDraft((current) => ({ ...current, defaultText: event.target.value }))
                 }
               />
             </label>
@@ -179,7 +174,7 @@ export function NodeManagerDrawer({
               <textarea
                 value={draft.defaultRemark}
                 onChange={(event) =>
-                  onDraftChange((current) => ({ ...current, defaultRemark: event.target.value }))
+                  updateDraft((current) => ({ ...current, defaultRemark: event.target.value }))
                 }
               />
             </label>
@@ -217,6 +212,5 @@ export function NodeManagerDrawer({
           </section>
         </div>
       </section>
-    </div>
   );
 }

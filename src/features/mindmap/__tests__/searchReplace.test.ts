@@ -203,4 +203,17 @@ describe('search and replace', () => {
 
     expect(findMindmapMatches(node.children[0], '测试', 'branch')).toHaveLength(2);
   });
+
+  it('supports compact panel advanced case and whole-word options', () => {
+    const node = createNode('Task task tasklist');
+
+    expect(findMindmapMatches(node, 'task', 'text', {
+      caseSensitive: false,
+      wholeWord: true,
+    })).toHaveLength(2);
+    expect(replaceAllInMindmap(node, 'task', '事项', 'text', {
+      caseSensitive: false,
+      wholeWord: true,
+    }).text).toBe('事项 事项 tasklist');
+  });
 });

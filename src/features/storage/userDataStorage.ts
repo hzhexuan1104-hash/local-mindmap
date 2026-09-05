@@ -53,6 +53,7 @@ export const USER_DATA_PATHS = {
   commandPaletteSettings: 'config/command-palette-settings.json',
   recentFiles: 'config/recent-files.json',
   userPreferences: 'config/user-preferences.json',
+  uiLayoutSettings: 'config/ui-layout-settings.json',
   migrationFlag: 'config/migration-state.json',
   backups: 'backups',
   fileBackups: 'backups/files',

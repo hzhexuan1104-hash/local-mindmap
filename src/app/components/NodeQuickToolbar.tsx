@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   NODE_PRIORITY_VALUES,
   NODE_PROGRESS_VALUES,
@@ -25,6 +25,7 @@ type NodeQuickToolbarProps = {
   onSetProgress: (progress?: MindmapNodeProgress) => void;
   onAddTag: (tag: string) => boolean;
   onRemoveTag: (tag: string) => void;
+  styleToolbar?: ReactNode;
 };
 
 const priorityLabel = (value: MindmapNodePriority) =>
@@ -48,6 +49,7 @@ export function NodeQuickToolbar({
   onSetProgress,
   onAddTag,
   onRemoveTag,
+  styleToolbar,
 }: NodeQuickToolbarProps) {
   const [isTagMenuOpen, setIsTagMenuOpen] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
@@ -104,7 +106,7 @@ export function NodeQuickToolbar({
 
   return (
     <section className="node-quick-toolbar" aria-label="节点快捷工具栏">
-      <div className="node-quick-toolbar-scroll">
+      <div className={`node-quick-toolbar-scroll${styleToolbar ? ' has-node-style-toolbar' : ''}`}>
         <div className="node-quick-toolbar-group node-quick-toolbar-structure-actions" aria-label="主题结构">
           <button type="button" className="node-quick-toolbar-structure-action" disabled={!hasSelection} onClick={onAddChild} title="插入下级主题"><span className="node-quick-action-symbol" aria-hidden="true">↳</span><span>下级</span></button>
           <button type="button" className="node-quick-toolbar-structure-action" disabled={!hasSelection} onClick={onAddSibling} title="插入同级主题"><span className="node-quick-action-symbol" aria-hidden="true">↔</span><span>同级</span></button>
@@ -219,6 +221,7 @@ export function NodeQuickToolbar({
             </div>
           ) : null}
         </div>
+        {styleToolbar ? <div className="node-quick-toolbar-style-slot">{styleToolbar}</div> : null}
       </div>
     </section>
   );
