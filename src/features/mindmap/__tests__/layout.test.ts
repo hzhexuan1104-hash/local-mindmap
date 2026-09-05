@@ -4,6 +4,7 @@ import {
   createMindmapLayout,
   getNodeContentSize,
   getDiamondBoundaryAnchor,
+  LAYOUT_DENSITY_CONFIG,
   measureNodeText,
   POSITIONED_LAYOUT,
 } from '../layout';
@@ -276,7 +277,7 @@ describe('mindmap layout positions', () => {
     const diamond = getNodeContentSize({ id: 'diamond', text: '菱形节点', remark: '', style: { shape: 'diamond' }, children: [] });
     const regular = getNodeContentSize({ id: 'regular', text: '菱形节点', remark: '', children: [] });
 
-    expect(rounded.width).toBeLessThanOrEqual(340);
+    expect(rounded.width).toBeLessThanOrEqual(POSITIONED_LAYOUT.nodeWidth);
     expect(rounded.height).toBeGreaterThan(POSITIONED_LAYOUT.nodeHeight);
     expect(diamond.width).toBeGreaterThan(regular.width);
   });
@@ -298,7 +299,7 @@ describe('mindmap layout positions', () => {
     });
 
     expect(oversized).toEqual(capped);
-    expect(oversized.width).toBeLessThanOrEqual(340);
+    expect(oversized.width).toBeLessThanOrEqual(POSITIONED_LAYOUT.nodeWidth);
   });
 
   it('grows node bounds for markers and a wrapped tag row', () => {
@@ -322,5 +323,61 @@ describe('mindmap layout positions', () => {
     const second = measureNodeText('缓存测量', 16, true);
 
     expect(second).toBe(first);
+  });
+
+  it('uses smaller compact density gaps without overlapping automatic subtrees', () => {
+    const source: MindmapNode = {
+      id: 'root', text: '中心', remark: '', children: [
+        { id: 'a', text: '分支 A', remark: '', children: [{ id: 'a-1', text: 'A1', remark: '', children: [] }] },
+        { id: 'b', text: '分支 B', remark: '', children: [{ id: 'b-1', text: 'B1', remark: '', children: [] }] },
+      ],
+    };
+    const compact = createMindmapLayout(source, [], 'compact');
+    const comfortable = createMindmapLayout(source, [], 'comfortable');
+    const compactA = compact.nodes.find((node) => node.id === 'a')!;
+    const compactB = compact.nodes.find((node) => node.id === 'b')!;
+    const comfortableA = comfortable.nodes.find((node) => node.id === 'a')!;
+    const comfortableB = comfortable.nodes.find((node) => node.id === 'b')!;
+
+    expect(LAYOUT_DENSITY_CONFIG.compact.levelGap).toBeLessThan(LAYOUT_DENSITY_CONFIG.comfortable.levelGap);
+    expect(LAYOUT_DENSITY_CONFIG.compact.siblingGap).toBeLessThan(LAYOUT_DENSITY_CONFIG.comfortable.siblingGap);
+    expect(LAYOUT_DENSITY_CONFIG.compact.subtreeGap).toBeLessThan(LAYOUT_DENSITY_CONFIG.comfortable.subtreeGap);
+    expect(compactB.y).toBeGreaterThanOrEqual(compactA.y + compactA.height + LAYOUT_DENSITY_CONFIG.compact.siblingGap);
+    expect(comfortableB.y - comfortableA.y).toBeGreaterThan(compactB.y - compactA.y);
+  });
+
+  it('uses real long-text and marker bounds while keeping compact layout boxes separate', () => {
+    const source: MindmapNode = {
+      id: 'root', text: '中心主题', remark: '', children: [
+        { id: 'long', text: '这是一个带有较长文本的节点，用于验证紧凑布局不会压缩真实内容边界', remark: '', tags: ['产品设计', '待评审'], priority: 1, progress: 75, children: [] },
+        { id: 'marked', text: '带标签和状态的节点', remark: '备注', tags: ['第二个标签', '第三个标签'], priority: 3, progress: 50, children: [] },
+        { id: 'nested', text: '子树节点', remark: '', children: [{ id: 'nested-child', text: '嵌套长文本节点用于验证真实尺寸', remark: '', children: [] }] },
+      ],
+    };
+    const compact = createMindmapLayout(source, [], 'compact');
+
+    compact.nodes.forEach((node, index) => {
+      compact.nodes.slice(index + 1).forEach((other) => {
+        const overlaps =
+          node.x < other.x + other.width &&
+          node.x + node.width > other.x &&
+          node.y < other.y + other.height &&
+          node.y + node.height > other.y;
+        expect(overlaps).toBe(false);
+      });
+    });
+    expect(compact.lines).toHaveLength(4);
+  });
+
+  it('keeps roughly 25 default-size Chinese characters on a single normal-node line', () => {
+    const size = getNodeContentSize({
+      id: 'wide-cjk',
+      text: '一二三四五六七八九十一二三四五六七八九十一二三四五',
+      remark: '',
+      children: [],
+    });
+
+    expect(size.lineCount).toBe(1);
+    expect(size.width).toBeGreaterThanOrEqual(430);
   });
 });

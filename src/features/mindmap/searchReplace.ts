@@ -2,6 +2,17 @@ import type { MindmapNode } from './types';
 
 export type SearchScope = 'all' | 'branch' | 'text' | 'remark';
 
+export type SearchOptions = {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+};
+
+/** Preserve the previous exact-match behavior unless the user changes an option. */
+export const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
+  caseSensitive: true,
+  wholeWord: false,
+};
+
 export const SEARCH_SCOPE_LABELS: Record<SearchScope, string> = {
   all: '全部节点',
   branch: '当前分支',
@@ -46,11 +57,21 @@ export type SearchCursor = Pick<SearchMatch, 'nodeId' | 'field'> & {
 const shouldSearchField = (scope: SearchScope, field: SearchMatch['field']) =>
   scope === 'all' || scope === 'branch' || scope === field;
 
+const wordCharacterPattern = /[\p{L}\p{N}_]/u;
+
+function isWholeWordMatch(value: string, start: number, end: number) {
+  const before = start > 0 ? value[start - 1] : '';
+  const after = end < value.length ? value[end] : '';
+  return (!before || !wordCharacterPattern.test(before)) &&
+    (!after || !wordCharacterPattern.test(after));
+}
+
 function collectMatches(
   node: MindmapNode,
   query: string,
   scope: SearchScope,
   matches: SearchMatch[],
+  options: SearchOptions,
 ) {
   if (!query) {
     return;
@@ -61,36 +82,46 @@ function collectMatches(
       return;
     }
 
+    const searchValue = options.caseSensitive ? node[field] : node[field].toLocaleLowerCase();
+    const searchQuery = options.caseSensitive ? query : query.toLocaleLowerCase();
     let searchFrom = 0;
 
     while (searchFrom <= node[field].length) {
-      const index = node[field].indexOf(query, searchFrom);
+      const index = searchValue.indexOf(searchQuery, searchFrom);
 
       if (index === -1) {
         break;
+      }
+
+      const end = index + query.length;
+
+      if (options.wholeWord && !isWholeWordMatch(node[field], index, end)) {
+        searchFrom = index + query.length;
+        continue;
       }
 
       matches.push({
         nodeId: node.id,
         field,
         start: index,
-        end: index + query.length,
-        text: node[field].slice(index, index + query.length),
+        end,
+        text: node[field].slice(index, end),
       });
       searchFrom = index + query.length;
     }
   });
 
-  node.children.forEach((child) => collectMatches(child, query, scope, matches));
+  node.children.forEach((child) => collectMatches(child, query, scope, matches, options));
 }
 
 export function findMindmapMatches(
   rootNode: MindmapNode,
   query: string,
   scope: SearchScope,
+  options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
 ) {
   const matches: SearchMatch[] = [];
-  collectMatches(rootNode, query.trim(), scope, matches);
+  collectMatches(rootNode, query.trim(), scope, matches, options);
   return matches;
 }
 
@@ -102,10 +133,6 @@ export function replaceMatchInMindmap(
 ): MindmapNode {
   if (rootNode.id === match.nodeId) {
     const source = rootNode[match.field];
-
-    if (source.slice(match.start, match.end) !== query) {
-      return rootNode;
-    }
 
     return {
       ...rootNode,
@@ -170,8 +197,22 @@ export function replaceAllInMindmap(
   query: string,
   replacement: string,
   scope: SearchScope,
+  options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
 ): MindmapNode {
-  const replaceValue = (value: string) => value.split(query).join(replacement);
+  const replaceValue = (value: string) => {
+    const matches = findMindmapMatches(
+      { ...rootNode, text: value, remark: value, children: [] },
+      query,
+      'all',
+      options,
+    ).filter((match) => match.field === 'text');
+
+    return matches.reduceRight(
+      (nextValue, match) =>
+        nextValue.slice(0, match.start) + replacement + nextValue.slice(match.end),
+      value,
+    );
+  };
 
   return {
     ...rootNode,
@@ -180,7 +221,7 @@ export function replaceAllInMindmap(
       ? replaceValue(rootNode.remark)
       : rootNode.remark,
     children: rootNode.children.map((child) =>
-      replaceAllInMindmap(child, query, replacement, scope),
+      replaceAllInMindmap(child, query, replacement, scope, options),
     ),
   };
 }

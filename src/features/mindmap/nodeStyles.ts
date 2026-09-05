@@ -12,10 +12,13 @@ export type NodeStyleCssVariables = {
   '--node-text': string;
   '--node-font-size': string;
   '--node-font-weight': number;
+  '--node-text-align': 'left' | 'center' | 'right';
+  '--node-content-justify': 'flex-start' | 'center' | 'flex-end';
 };
 
 export const DEFAULT_NODE_STYLE: EffectiveNodeStyle = {
   shape: 'rounded',
+  textAlign: 'left',
   backgroundColor: '#edf4f7',
   borderColor: '#8ab3ca',
   textColor: '#23333f',
@@ -25,6 +28,7 @@ export const DEFAULT_NODE_STYLE: EffectiveNodeStyle = {
 
 export const DEFAULT_ROOT_NODE_STYLE: EffectiveNodeStyle = {
   shape: 'rounded',
+  textAlign: 'center',
   backgroundColor: '#70a4c3',
   borderColor: '#6297b7',
   textColor: '#ffffff',
@@ -57,6 +61,7 @@ export function getEffectiveNodeStyle(
 
   return {
     shape: node.style?.shape ?? nodeType?.shape ?? defaultStyle.shape,
+    textAlign: node.style?.textAlign ?? nodeType?.textAlign ?? defaultStyle.textAlign,
     backgroundColor:
       node.style?.backgroundColor ??
       nodeType?.backgroundColor ??
@@ -103,6 +108,12 @@ export function getNodeStyleCssVariables(
     '--node-text': style.textColor,
     '--node-font-size': `${style.fontSize}px`,
     '--node-font-weight': style.bold ? 700 : 500,
+    '--node-text-align': style.textAlign,
+    '--node-content-justify': style.textAlign === 'center'
+      ? 'center'
+      : style.textAlign === 'right'
+        ? 'flex-end'
+        : 'flex-start',
   };
 }
 
@@ -117,6 +128,7 @@ export function applyStyleToNodeType(
   return {
     ...nodeType,
     shape: style.shape,
+    textAlign: style.textAlign,
     backgroundColor: style.backgroundColor,
     borderColor: style.borderColor,
     textColor: style.textColor,
@@ -142,6 +154,7 @@ export function createNodeTypeFromStyle(
     name: trimmedName,
     icon,
     shape: style.shape,
+    textAlign: style.textAlign,
     backgroundColor: style.backgroundColor,
     borderColor: style.borderColor,
     textColor: style.textColor,

@@ -30,6 +30,7 @@ const NODE_TYPE_SHAPES: MindmapNodeType['shape'][] = [
   'pill',
   'diamond',
 ];
+const NODE_TEXT_ALIGNS = ['left', 'center', 'right'] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -47,6 +48,7 @@ export function normalizeImportedNodeType(
   const id = asString(value.id).trim();
   const name = asString(value.name).trim();
   const shapeValue = asString(value.shape, 'rounded') as MindmapNodeType['shape'];
+  const textAlign = asString(value.textAlign) as MindmapNodeType['textAlign'];
   const fontSize = Number(value.fontSize);
 
   if (!id || !name) {
@@ -58,6 +60,7 @@ export function normalizeImportedNodeType(
     name,
     icon: asString(value.icon),
     shape: NODE_TYPE_SHAPES.includes(shapeValue) ? shapeValue : 'rounded',
+    ...(textAlign && NODE_TEXT_ALIGNS.includes(textAlign) ? { textAlign } : {}),
     backgroundColor: asString(value.backgroundColor, '#eef5ff'),
     borderColor: asString(value.borderColor, '#1f6feb'),
     textColor: asString(value.textColor, '#14315f'),
@@ -77,6 +80,7 @@ export function isSameNodeType(
     firstNodeType.name === secondNodeType.name &&
     firstNodeType.icon === secondNodeType.icon &&
     firstNodeType.shape === secondNodeType.shape &&
+    firstNodeType.textAlign === secondNodeType.textAlign &&
     firstNodeType.backgroundColor === secondNodeType.backgroundColor &&
     firstNodeType.borderColor === secondNodeType.borderColor &&
     firstNodeType.textColor === secondNodeType.textColor &&

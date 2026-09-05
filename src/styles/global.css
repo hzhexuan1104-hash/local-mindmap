@@ -1390,7 +1390,7 @@ h3 {
   border-radius: 6px;
   color: #172033;
   background: transparent;
-  text-align: left;
+  text-align: var(--node-text-align, left);
   cursor: pointer;
 }
 
@@ -4171,7 +4171,8 @@ h3 {
 .node-content-primary {
   min-width: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: var(--node-content-justify, flex-start);
   gap: 4px;
 }
 
@@ -4205,7 +4206,8 @@ h3 {
 .node-progress-badge {
   color: #ffffff;
   background: conic-gradient(#4f9e70 var(--node-progress), #dce5ed 0);
-  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--node-bg, #ffffff) 84%, white);
+  /* A filled pie stays readable without the extra inset ring. */
+  box-shadow: none;
   font-size: 9px;
   font-weight: 800;
 }
@@ -5487,28 +5489,17 @@ textarea::placeholder {
     drop-shadow(0 8px 14px rgb(33 50 73 / 16%));
 }
 
-.node-search-highlight,
-.remark-search-context mark {
+.node-search-highlight {
   padding: 0 2px;
   border-radius: 3px;
   color: inherit;
   background: #fde68a;
 }
 
-.search-match-location,
-.remark-search-context {
+.search-match-location {
   margin: 0;
   color: #92400e;
   font-size: 12px;
-}
-
-.remark-search-context {
-  padding: 8px 10px;
-  border: 1px solid #fbbf24;
-  border-radius: 8px;
-  background: #fffbeb;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .mindmap-node.is-dragging {
@@ -5824,6 +5815,70 @@ textarea::placeholder {
   box-shadow: 0 0 0 3px rgb(55 124 246 / 8%);
 }
 
+.remark-editor::selection {
+  color: inherit;
+  background: #fde68a;
+}
+
+.inspector-node-type {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The remark inspector should reserve its height for the editor, not metadata. */
+.inspector-panel-remark .inspector-remark-context {
+  min-height: 38px;
+  padding: 6px 8px 6px 12px;
+}
+
+.inspector-panel-remark .inspector-remark-context-details {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspector-panel-remark .inspector-remark-context h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-panel-remark .inspector-node-type {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-subtle);
+  font-size: 10px;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.inspector-panel-remark .inspector-content {
+  padding: 8px 10px 10px;
+}
+
+.inspector-panel-remark .remark-panel.is-embedded {
+  gap: 8px;
+}
+
+.inspector-panel-remark .remark-section-header {
+  padding-bottom: 6px;
+}
+
 .remark-live-preview-title {
   color: var(--text-muted);
   font-size: 10px;
@@ -6110,15 +6165,6 @@ textarea::placeholder {
   }
 }
 
-/* Keep remark actions in a dedicated band between the panel header and editor. */
-.remark-inline-action-band {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
 .remark-content-frame {
   min-width: 0;
   min-height: 0;
@@ -6128,6 +6174,19 @@ textarea::placeholder {
 
 .remark-panel.is-embedded .remark-content-frame {
   height: 100%;
+}
+
+.remark-section-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .remark-inline-actions {
@@ -6185,6 +6244,12 @@ textarea::placeholder {
 .remark-panel.is-embedded .remark-content-frame > .remark-edit-layout {
   min-height: 0;
   height: 100%;
+}
+
+.remark-panel.is-embedded .remark-content-frame > .markdown-preview,
+.remark-preview-dialog-body .markdown-preview {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .remark-panel.is-embedded .remark-content-frame > .markdown-preview,
@@ -6345,6 +6410,359 @@ textarea::placeholder {
   background: var(--accent-soft);
 }
 
+/* v1.23 workspace overlays and adjustable inspector */
+.workspace-overlay-backdrop {
+  position: fixed;
+  z-index: 900;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(31 39 52 / 28%);
+  backdrop-filter: blur(2px);
+}
+
+.workspace-overlay-backdrop .workspace-panel {
+  width: min(920px, calc(100vw - 48px));
+  max-height: min(820px, calc(100vh - 48px));
+  min-height: min(480px, calc(100vh - 48px));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--surface-elevated);
+  box-shadow: 0 24px 80px rgb(20 28 40 / 18%);
+}
+
+.workspace-overlay-backdrop .workspace-panel:focus {
+  outline: 0;
+}
+
+.workspace-overlay-backdrop .workspace-panel-content {
+  padding: 16px;
+}
+
+.workspace-overlay-backdrop .workspace-panel-content .feature-panel {
+  max-width: none;
+}
+
+.node-manager-drawer {
+  min-height: 0;
+}
+
+.node-manager-error-summary,
+.field-error-text {
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.node-manager-error-summary {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #f3b4af;
+  border-radius: var(--radius-sm);
+  background: #fff3f2;
+}
+
+.field-error-text {
+  margin-top: -2px;
+}
+
+.node-manager-form input.has-field-error,
+.node-manager-form select[aria-invalid="true"],
+.node-manager-form input[aria-invalid="true"] {
+  border-color: #d92d20;
+  box-shadow: 0 0 0 3px rgb(217 45 32 / 10%);
+}
+
+.workspace-layout:not(.is-remark-collapsed) {
+  grid-template-columns: minmax(0, 1fr) 8px minmax(280px, var(--inspector-width, 320px));
+  gap: 0;
+}
+
+.inspector-resize-handle {
+  position: relative;
+  z-index: 4;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.inspector-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  content: '';
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.inspector-resize-handle:hover::after,
+body.is-resizing-inspector .inspector-resize-handle::after {
+  background: var(--accent);
+}
+
+body.is-resizing-inspector,
+body.is-resizing-inspector * {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+
+.search-float-panel {
+  position: absolute;
+  z-index: 35;
+  top: 16px;
+  right: 16px;
+  width: min(390px, calc(100% - 32px));
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  background: rgb(255 255 255 / 97%);
+  box-shadow: var(--shadow-panel);
+  user-select: text;
+}
+
+/* Node appearance controls share the top quick-action row. */
+.node-style-toolbar {
+  position: absolute;
+  z-index: 34;
+  top: 14px;
+  right: 14px;
+  max-width: calc(100% - 28px);
+  padding: 4px;
+  border: 1px solid rgb(148 163 184 / 24%);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 3px 10px rgb(20 28 40 / 8%);
+}
+
+.node-style-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.node-style-toolbar-controls::-webkit-scrollbar {
+  display: none;
+}
+
+.node-style-toolbar select,
+.node-style-toolbar-button,
+.node-style-toolbar-color {
+  box-sizing: border-box;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.node-style-toolbar select {
+  min-width: 62px;
+  max-width: 82px;
+  padding: 0 20px 0 7px;
+  cursor: pointer;
+}
+
+.node-style-toolbar .node-style-toolbar-icon-select {
+  min-width: 76px;
+  max-width: 96px;
+}
+
+.node-style-toolbar select:hover:not(:disabled),
+.node-style-toolbar select:focus-visible,
+.node-style-toolbar-button:hover:not(:disabled),
+.node-style-toolbar-button:focus-visible,
+.node-style-toolbar-color:focus-within {
+  border-color: rgb(55 124 246 / 24%);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  outline: 0;
+}
+
+.node-style-toolbar-colors {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline: 2px;
+  border-inline: 1px solid rgb(148 163 184 / 20%);
+}
+
+.node-style-toolbar-color {
+  position: relative;
+  width: 26px;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.node-style-toolbar-color::after {
+  position: absolute;
+  inset: 6px;
+  border: 1px solid color-mix(in srgb, var(--node-style-color) 74%, #334155);
+  border-radius: 3px;
+  content: '';
+  background: var(--node-style-color);
+  pointer-events: none;
+}
+
+.node-style-toolbar-color > span[aria-hidden='true'] {
+  position: relative;
+  z-index: 1;
+  color: color-mix(in srgb, var(--node-style-color) 20%, #172033);
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.node-style-toolbar-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.node-style-toolbar-button {
+  width: 28px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.node-style-toolbar-button.is-active {
+  border-color: rgb(55 124 246 / 22%);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.node-style-toolbar select:disabled,
+.node-style-toolbar-button:disabled,
+.node-style-toolbar-color.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.search-float-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.search-float-row label {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.search-float-row input,
+.search-float-footer select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: var(--surface);
+  font: inherit;
+}
+
+.search-float-row input:focus,
+.search-float-footer select:focus {
+  border-color: rgb(55 124 246 / 35%);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgb(55 124 246 / 10%);
+}
+
+.search-float-icon,
+.search-float-action {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.search-float-action {
+  min-width: 40px;
+}
+
+.search-float-icon:hover,
+.search-float-action:hover {
+  border-color: rgb(55 124 246 / 25%);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.search-float-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 36px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.search-float-footer details {
+  position: relative;
+}
+
+.search-float-footer summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.search-float-footer select {
+  width: 132px;
+  margin-top: 5px;
+}
+
+.search-float-footer details[open] {
+  display: grid;
+  gap: 5px;
+  justify-items: end;
+}
+
+.search-float-footer details label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.search-float-footer details input[type='checkbox'] {
+  margin: 0;
+}
+
+@media (max-width: 680px) {
+  .workspace-overlay-backdrop { padding: 12px; }
+  .workspace-overlay-backdrop .workspace-panel { width: calc(100vw - 24px); min-height: 0; max-height: calc(100vh - 24px); }
+  .workspace-layout:not(.is-remark-collapsed) { grid-template-columns: minmax(0, 1fr) 6px minmax(280px, 50%); }
+}
+
 /* A single compact rhythm for all quick node actions and selector controls. */
 .node-quick-toolbar {
   border-color: rgb(148 163 184 / 22%);
@@ -6458,4 +6876,32 @@ textarea::placeholder {
 .node-quick-toolbar .node-quick-toolbar-tag-trigger {
   min-height: 30px;
   padding-inline: 8px;
+}
+
+.node-quick-toolbar-scroll.has-node-style-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.node-quick-toolbar-style-slot {
+  min-width: max-content;
+  margin-left: auto;
+  padding-left: 10px;
+  border-left: 1px solid rgb(148 163 184 / 24%);
+}
+
+.node-style-toolbar.is-embedded {
+  position: static;
+  z-index: auto;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.node-style-toolbar.is-embedded .node-style-toolbar-controls {
+  overflow: visible;
 }

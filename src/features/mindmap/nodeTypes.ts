@@ -1,4 +1,5 @@
 import type { MindmapNode, MindmapNodeType } from './types';
+import { DEFAULT_NODE_STYLE, normalizeNodeFontSize } from './nodeStyles';
 import {
   createNodeTypePack,
   importNodeTypesFromPack,
@@ -37,6 +38,7 @@ export type NodeTypeDraft = {
   name: string;
   icon: string;
   shape: MindmapNodeType['shape'];
+  textAlign?: MindmapNodeType['textAlign'];
   backgroundColor: string;
   borderColor: string;
   textColor: string;
@@ -49,15 +51,33 @@ export type NodeTypeDraft = {
 export const createEmptyNodeTypeDraft = (): NodeTypeDraft => ({
   name: '',
   icon: '✅',
-  shape: 'rounded',
-  backgroundColor: '#fff7e8',
-  borderColor: '#f59f00',
-  textColor: '#14315f',
-  fontSize: 18,
-  bold: true,
+  shape: DEFAULT_NODE_STYLE.shape,
+  textAlign: DEFAULT_NODE_STYLE.textAlign,
+  backgroundColor: DEFAULT_NODE_STYLE.backgroundColor,
+  borderColor: DEFAULT_NODE_STYLE.borderColor,
+  textColor: DEFAULT_NODE_STYLE.textColor,
+  fontSize: DEFAULT_NODE_STYLE.fontSize,
+  bold: DEFAULT_NODE_STYLE.bold,
   defaultText: '新节点',
   defaultRemark: '',
 });
+
+export type NodeTypeDraftErrors = Partial<Record<'name' | 'icon' | 'shape' | 'backgroundColor' | 'borderColor' | 'textColor' | 'fontSize', string>>;
+
+/** The identifier is generated internally, so users only validate editable schema fields. */
+export function validateNodeTypeDraft(draft: NodeTypeDraft): NodeTypeDraftErrors {
+  const errors: NodeTypeDraftErrors = {};
+  if (!draft.name.trim()) errors.name = '请输入节点类型名称';
+  if (!draft.icon.trim()) errors.icon = '请选择节点类型图标';
+  if (!['rounded', 'rectangle', 'pill', 'diamond'].includes(draft.shape)) errors.shape = '请选择有效节点形状';
+  (['backgroundColor', 'borderColor', 'textColor'] as const).forEach((key) => {
+    if (!/^#[0-9a-f]{6}$/i.test(draft[key])) errors[key] = '请输入有效的 HEX 颜色';
+  });
+  if (!Number.isFinite(draft.fontSize) || draft.fontSize < 12 || draft.fontSize > 28) {
+    errors.fontSize = '字号需在 12 到 28 之间';
+  }
+  return errors;
+}
 
 export function createMindmapNodeType(
   draft: NodeTypeDraft,
@@ -72,14 +92,12 @@ export function createMindmapNodeType(
     id: crypto.randomUUID(),
     name,
     icon: draft.icon || '✅',
-    shape: draft.shape || 'rounded',
-    backgroundColor: draft.backgroundColor || '#eef5ff',
-    borderColor: draft.borderColor || '#1f6feb',
-    textColor: draft.textColor || '#14315f',
-    fontSize:
-      Number.isFinite(draft.fontSize) && draft.fontSize > 0
-        ? draft.fontSize
-        : 18,
+    shape: draft.shape || DEFAULT_NODE_STYLE.shape,
+    ...(draft.textAlign ? { textAlign: draft.textAlign } : {}),
+    backgroundColor: draft.backgroundColor || DEFAULT_NODE_STYLE.backgroundColor,
+    borderColor: draft.borderColor || DEFAULT_NODE_STYLE.borderColor,
+    textColor: draft.textColor || DEFAULT_NODE_STYLE.textColor,
+    fontSize: normalizeNodeFontSize(draft.fontSize, DEFAULT_NODE_STYLE.fontSize),
     bold: Boolean(draft.bold),
     defaultText: draft.defaultText.trim() || '新节点',
     defaultRemark: draft.defaultRemark,

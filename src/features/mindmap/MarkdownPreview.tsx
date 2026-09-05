@@ -12,7 +12,11 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
   }
 
   return (
-    <div className="markdown-preview">
+    <div
+      className="markdown-preview"
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.stopPropagation()}
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]}>
         {preserveStandaloneTripleAsterisks(content)}
       </ReactMarkdown>

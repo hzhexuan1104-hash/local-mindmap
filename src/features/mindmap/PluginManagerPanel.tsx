@@ -676,7 +676,13 @@ export function PluginManagerPanel({
   );
 
   return (
-    <div className="plugin-manager-backdrop" role="presentation">
+    <div
+      className="plugin-manager-backdrop"
+      role="presentation"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <section
         className="plugin-manager-dialog"
         role="dialog"

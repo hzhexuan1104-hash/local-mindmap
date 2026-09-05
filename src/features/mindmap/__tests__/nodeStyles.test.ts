@@ -20,6 +20,7 @@ import {
   getNodeStyleCssVariables,
   mergeNodeStyle,
 } from '../nodeStyles';
+import { createEmptyNodeTypeDraft, validateNodeTypeDraft } from '../nodeTypes';
 import { parseLmindProject } from '../openMindmap';
 import { serializeLmindDocument } from '../saveMindmap';
 import type { MindmapNode, MindmapNodeType, MindmapProject } from '../types';
@@ -188,7 +189,35 @@ describe('node style helpers', () => {
       '--node-text': '#0b7285',
       '--node-font-size': '22px',
       '--node-font-weight': 700,
+      '--node-text-align': 'left',
+      '--node-content-justify': 'flex-start',
     });
+  });
+
+  it('shares the ordinary node default style with newly-created node-type drafts', () => {
+    const draft = createEmptyNodeTypeDraft();
+
+    expect(draft).toMatchObject({
+      shape: DEFAULT_NODE_STYLE.shape,
+      textAlign: DEFAULT_NODE_STYLE.textAlign,
+      backgroundColor: DEFAULT_NODE_STYLE.backgroundColor,
+      borderColor: DEFAULT_NODE_STYLE.borderColor,
+      textColor: DEFAULT_NODE_STYLE.textColor,
+      fontSize: DEFAULT_NODE_STYLE.fontSize,
+      bold: DEFAULT_NODE_STYLE.bold,
+    });
+  });
+
+  it('uses normal left alignment, preserves a centered root, and honors a custom override', () => {
+    expect(getEffectiveNodeStyle({ ...node, nodeTypeId: undefined }, null).textAlign).toBe('left');
+    expect(getEffectiveNodeStyle({ ...node, nodeTypeId: undefined }, null, true).textAlign).toBe('center');
+    expect(getEffectiveNodeStyle({ ...node, style: { textAlign: 'right' } }, null).textAlign).toBe('right');
+  });
+
+  it('reports editable node-type validation errors with a field-level name message', () => {
+    const errors = validateNodeTypeDraft({ ...createEmptyNodeTypeDraft(), name: '' });
+
+    expect(errors.name).toBe('请输入节点类型名称');
   });
 
   it('keeps rounded, rectangle, and pill renderer shape class names stable', () => {

@@ -9,7 +9,9 @@ const MINDMAP_LAYOUT = {
   childHorizontalGap: 96,
   childVerticalGap: 80,
   nodeMinWidth: 88,
-  nodeMaxWidth: 340,
+  // The default 16px CJK font can keep roughly 25 Chinese characters on one
+  // line before wrapping, while still retaining a bounded map width.
+  nodeMaxWidth: 460,
   nodeMinHeight: 36,
   nodeHorizontalPadding: 16,
   nodeVerticalPadding: 6,
@@ -25,6 +27,25 @@ const MINDMAP_LAYOUT = {
   tagHeight: 20,
   tagGap: 4,
 } as const;
+
+export type LayoutDensity = 'compact' | 'comfortable';
+
+export const DEFAULT_LAYOUT_DENSITY: LayoutDensity = 'compact';
+
+export const LAYOUT_DENSITY_CONFIG: Record<LayoutDensity, {
+  levelGap: number;
+  siblingGap: number;
+  subtreeGap: number;
+}> = {
+  // Keep all real bounds intact; only the free space between layout boxes is reduced.
+  compact: { levelGap: 46, siblingGap: 18, subtreeGap: 18 },
+  // Preserve the pre-1.23 spacing as the opt-in standard/comfortable mode.
+  comfortable: { levelGap: 116, siblingGap: 52, subtreeGap: 52 },
+};
+
+export function normalizeLayoutDensity(value: unknown): LayoutDensity {
+  return value === 'comfortable' ? 'comfortable' : DEFAULT_LAYOUT_DENSITY;
+}
 
 export const POSITIONED_LAYOUT = {
   canvasPadding: 96,
@@ -248,12 +269,16 @@ function collectVisibleNodes(node: MindmapNode, nodes: MindmapNode[] = []) {
   return nodes;
 }
 
-function measureSubtreeHeight(node: MindmapNode, sizeById: Map<string, NodeContentSize>): number {
+function measureSubtreeHeight(
+  node: MindmapNode,
+  sizeById: Map<string, NodeContentSize>,
+  density: LayoutDensity,
+): number {
   const children = getVisibleChildren(node);
   const nodeHeight = sizeById.get(node.id)?.height ?? POSITIONED_LAYOUT.nodeHeight;
   if (children.length === 0) return nodeHeight;
-  const childrenHeight = children.reduce((sum, child) => sum + measureSubtreeHeight(child, sizeById), 0);
-  return Math.max(nodeHeight, childrenHeight + POSITIONED_LAYOUT.verticalGap * (children.length - 1));
+  const childrenHeight = children.reduce((sum, child) => sum + measureSubtreeHeight(child, sizeById, density), 0);
+  return Math.max(nodeHeight, childrenHeight + LAYOUT_DENSITY_CONFIG[density].subtreeGap * (children.length - 1));
 }
 
 function buildAutoLayout(
@@ -263,15 +288,16 @@ function buildAutoLayout(
   entries: AutoLayoutEntry[],
   sizeById: Map<string, NodeContentSize>,
   depthOffsets: number[],
+  density: LayoutDensity,
 ): number {
   const nodeHeight = sizeById.get(node.id)?.height ?? POSITIONED_LAYOUT.nodeHeight;
-  const subtreeHeight = measureSubtreeHeight(node, sizeById);
+  const subtreeHeight = measureSubtreeHeight(node, sizeById, density);
   entries.push({ id: node.id, x: depthOffsets[depth] ?? 0, y: top + subtreeHeight / 2 - nodeHeight / 2 });
   let nextTop = top;
   getVisibleChildren(node).forEach((child) => {
-    const childHeight = measureSubtreeHeight(child, sizeById);
-    buildAutoLayout(child, depth + 1, nextTop, entries, sizeById, depthOffsets);
-    nextTop += childHeight + POSITIONED_LAYOUT.verticalGap;
+    const childHeight = measureSubtreeHeight(child, sizeById, density);
+    buildAutoLayout(child, depth + 1, nextTop, entries, sizeById, depthOffsets, density);
+    nextTop += childHeight + LAYOUT_DENSITY_CONFIG[density].siblingGap;
   });
   return subtreeHeight;
 }
@@ -296,7 +322,11 @@ export function getNodeBoundaryAnchor(rect: AnchorRect, target: AnchorPoint, sha
   return { x: target.x >= center.x ? rect.x + rect.width : rect.x, y: center.y };
 }
 
-export function createMindmapLayout(rootNode: MindmapNode, nodeTypes: MindmapNodeType[] = []): MindmapLayoutResult {
+export function createMindmapLayout(
+  rootNode: MindmapNode,
+  nodeTypes: MindmapNodeType[] = [],
+  density: LayoutDensity = DEFAULT_LAYOUT_DENSITY,
+): MindmapLayoutResult {
   const visibleNodes = collectVisibleNodes(rootNode);
   const sizeById = new Map(visibleNodes.map((node) => [node.id, getNodeContentSize(node, nodeTypes, node.id === rootNode.id)]));
   const maxWidthByDepth: number[] = [];
@@ -306,11 +336,11 @@ export function createMindmapLayout(rootNode: MindmapNode, nodeTypes: MindmapNod
   };
   collectDepthWidths(rootNode);
   const depthOffsets = maxWidthByDepth.reduce<number[]>((offsets, width, depth) => {
-    offsets[depth] = depth === 0 ? 0 : offsets[depth - 1] + maxWidthByDepth[depth - 1] + POSITIONED_LAYOUT.horizontalGap;
+    offsets[depth] = depth === 0 ? 0 : offsets[depth - 1] + maxWidthByDepth[depth - 1] + LAYOUT_DENSITY_CONFIG[density].levelGap;
     return offsets;
   }, []);
   const entries: AutoLayoutEntry[] = [];
-  buildAutoLayout(rootNode, 0, 0, entries, sizeById, depthOffsets);
+  buildAutoLayout(rootNode, 0, 0, entries, sizeById, depthOffsets, density);
   const autoPositionById = new Map(entries.map((entry) => [entry.id, { x: entry.x, y: entry.y }]));
   const nodes = visibleNodes.map((node) => {
     const size = sizeById.get(node.id)!;
