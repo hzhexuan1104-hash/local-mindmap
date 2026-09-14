@@ -92,13 +92,13 @@ describe('v1.18 information architecture components', () => {
     expect(getMenuHoverPath(['file', 'settings'], false)).toEqual(['file']);
   });
 
-  it('limits the inspector to the selected node and its remark', () => {
+  it('keeps the inspector remark-only without repeating node text or type', () => {
     const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} remarkMode="edit" activeRemarkMatch={null} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
 
-    expect(html).toContain('Current node');
-    expect(html).toContain('Task');
     expect(html).toContain('备注');
-    expect(html).toContain('inspector-remark-context-details');
+    expect(html).not.toContain('Current node');
+    expect(html).not.toContain('Task');
+    expect(html).not.toContain('inspector-remark-context-details');
     expect(html).not.toContain('当前节点');
     expect(html).not.toContain('节点样式');
     expect(html).toContain('备注');
@@ -107,12 +107,26 @@ describe('v1.18 information architecture components', () => {
     expect(html).not.toContain('重置为类型默认样式');
   });
 
-  it('shows the complete node-type name in the compact remark context', () => {
+  it('separates inspector collapse from remark actions in distinct header rows', () => {
     const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
-
-    expect(css).toMatch(
-      /\.inspector-panel-remark \.inspector-node-type\s*\{[^}]*max-width:\s*none;[^}]*overflow:\s*visible;[^}]*text-overflow:\s*clip;[^}]*white-space:\s*normal;/,
+    const html = renderToStaticMarkup(
+      <RightInspectorPanel
+        selectedNode={selectedNode}
+        remarkMode="preview"
+        activeRemarkMatch={null}
+        onRemarkModeChange={noop}
+        onRemarkChange={noop}
+        onCollapse={noop}
+      />,
     );
+
+    expect(html).toContain('inspector-header inspector-remark-header');
+    expect(html).toContain('inspector-remark-collapse');
+    expect(html).toContain('remark-section-header');
+    expect(html.indexOf('inspector-remark-header')).toBeLessThan(html.indexOf('remark-section-header'));
+    expect(html.indexOf('inspector-remark-collapse')).toBeLessThan(html.indexOf('remark-inline-actions'));
+    expect(css).toContain('.inspector-panel-remark .inspector-remark-header');
+    expect(css).not.toMatch(/\.inspector-panel-remark \.inspector-remark-collapse\s*\{[\s\S]*?position:\s*absolute/);
   });
 
   it('moves compact batch-capable style controls to the canvas toolbar', () => {
@@ -120,6 +134,9 @@ describe('v1.18 information architecture components', () => {
 
     expect(html).toContain('node-style-toolbar');
     expect(html).toContain('aria-label="节点图标"');
+    expect(html).toContain('无图标');
+    expect(html).not.toContain('沿用类型');
+    expect(html).not.toContain('__inherit-node-type-icon__');
     expect(html).toContain('aria-label="节点形状"');
     expect(html).toContain('aria-label="背景色"');
     expect(html).toContain('aria-label="边框色"');
@@ -154,6 +171,8 @@ describe('v1.18 information architecture components', () => {
     expect(html).toContain('node-manager-drawer');
     expect(html).toContain('节点类型列表');
     expect(html).toContain('导入类型包');
+    expect(html).toContain('<option value=""');
+    expect(html).toContain('>无图标</option>');
     expect(html).not.toContain('切换节点类型');
   });
 
@@ -173,5 +192,24 @@ describe('v1.18 information architecture components', () => {
     );
 
     expect(html).toContain('aria-invalid="false"');
+  });
+
+  it('does not render an empty icon swatch for a no-icon node type', () => {
+    const html = renderToStaticMarkup(
+      <NodeManagerDrawer
+        nodeTypes={[{ ...nodeType, icon: null, name: 'Plain' }]}
+        draft={createEmptyNodeTypeDraft()}
+        editingNodeTypeId={null}
+        onDraftChange={noop}
+        onSave={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onImport={noop}
+        onExport={noop}
+      />,
+    );
+
+    expect(html).toContain('Plain');
+    expect(html).not.toContain('node-type-swatch');
   });
 });

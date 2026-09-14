@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LOCAL_FILE_COMMANDS,
+  LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+  LOCAL_MINDMAP_FILE_EXTENSIONS,
   openFileLocation,
   openLocalTextFile,
   saveLocalFile,
@@ -31,8 +33,8 @@ describe('desktop local file operations', () => {
         content: '{}',
         defaultFileName: '竞赛方案.lmind',
         mimeType: 'application/json',
-        filterName: 'Local Mindmap',
-        extensions: ['lmind'],
+        filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+        extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
       }),
     ).resolves.toEqual({
       kind: 'desktop',
@@ -41,8 +43,19 @@ describe('desktop local file operations', () => {
     });
     expect(invoke).toHaveBeenCalledWith(
       LOCAL_FILE_COMMANDS.saveWithDialog,
-      expect.objectContaining({ defaultFileName: '竞赛方案.lmind' }),
+      expect.objectContaining({
+        defaultFileName: '竞赛方案.lmind',
+        filterName: 'Local Mindmap 文件',
+        extensions: ['lmind'],
+      }),
     );
+  });
+
+  it('uses a UTF-8 Chinese native dialog label without changing the extension', () => {
+    const bytes = new TextEncoder().encode(LOCAL_MINDMAP_FILE_DIALOG_FILTER);
+
+    expect(new TextDecoder().decode(bytes)).toBe('Local Mindmap 文件');
+    expect(LOCAL_MINDMAP_FILE_EXTENSIONS).toEqual(['lmind']);
   });
 
   it('overwrites currentFilePath without reopening the dialog', async () => {

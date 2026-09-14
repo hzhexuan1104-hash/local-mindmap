@@ -86,7 +86,10 @@ export function getEffectiveNodeIcon(
   node: MindmapNode,
   nodeType?: MindmapNodeType | null,
 ): string {
-  return node.style?.icon ?? nodeType?.icon ?? '';
+  if (node.style && Object.prototype.hasOwnProperty.call(node.style, 'icon')) {
+    return node.style.icon ?? '';
+  }
+  return nodeType?.icon ?? '';
 }
 
 export function mergeNodeStyle(
@@ -141,7 +144,7 @@ export function createNodeTypeFromStyle(
   name: string,
   style: EffectiveNodeStyle,
   node: MindmapNode,
-  icon = '✅',
+  icon: string | null = null,
 ): MindmapNodeType | null {
   const trimmedName = name.trim();
 
@@ -152,7 +155,7 @@ export function createNodeTypeFromStyle(
   return {
     id: crypto.randomUUID(),
     name: trimmedName,
-    icon,
+    icon: icon?.trim() || null,
     shape: style.shape,
     textAlign: style.textAlign,
     backgroundColor: style.backgroundColor,

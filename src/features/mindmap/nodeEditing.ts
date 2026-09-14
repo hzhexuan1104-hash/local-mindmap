@@ -13,3 +13,13 @@ export function resolveEditingNodeId(
 ) {
   return sessionNodeId ?? editingNodeId;
 }
+
+type TextEditor = Pick<HTMLTextAreaElement, 'focus' | 'setSelectionRange' | 'value'>;
+
+/** DOM selection offsets are UTF-16 code units, matching textarea.value.length. */
+export function focusEditorAtEnd(editor: TextEditor | null | undefined) {
+  if (!editor) return;
+  editor.focus();
+  const end = editor.value.length;
+  editor.setSelectionRange(end, end);
+}

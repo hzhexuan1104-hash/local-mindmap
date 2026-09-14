@@ -176,6 +176,17 @@ describe('node type packs', () => {
     expect(result.nodeTypes[0]).toEqual(importedNodeType);
   });
 
+  it('round-trips a no-icon type as null and migrates legacy empty icons', () => {
+    const noIcon = createNodeType({ id: 'plain', icon: null });
+    const imported = importNodeTypesFromPack([], createNodeTypePack([noIcon]));
+    const legacy = importNodeTypesFromPack([], createNodeTypePack([
+      createNodeType({ id: 'legacy', icon: '' as never }),
+    ]));
+
+    expect(imported.nodeTypes[0].icon).toBeNull();
+    expect(legacy.nodeTypes[0].icon).toBeNull();
+  });
+
   it('allows same-name node types with different ids and reports the conflict', () => {
     const result = importNodeTypesFromPack(
       [createNodeType({ id: 'task', name: 'Task' })],

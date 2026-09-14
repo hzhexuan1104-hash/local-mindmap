@@ -6,7 +6,8 @@ export type RemarkFocusRequest = { id: number; nodeId: string };
 
 type RightInspectorPanelProps = {
   selectedNode: MindmapNode;
-  nodeTypes: MindmapNodeType[];
+  /** Kept in the panel contract so existing callers remain compatible. */
+  nodeTypes?: MindmapNodeType[];
   remarkMode: 'edit' | 'preview';
   activeRemarkMatch: SearchMatch | null;
   remarkFocusRequest?: RemarkFocusRequest | null;
@@ -18,7 +19,7 @@ type RightInspectorPanelProps = {
 /** The inspector is deliberately remark-only; node style controls live on the canvas. */
 export function RightInspectorPanel({
   selectedNode,
-  nodeTypes,
+  nodeTypes: _nodeTypes,
   remarkMode,
   activeRemarkMatch,
   remarkFocusRequest = null,
@@ -26,16 +27,22 @@ export function RightInspectorPanel({
   onRemarkChange,
   onCollapse,
 }: RightInspectorPanelProps) {
-  const selectedNodeType = nodeTypes.find((nodeType) => nodeType.id === selectedNode.nodeTypeId) ?? null;
-
   return (
     <aside className="inspector-panel inspector-panel-remark" aria-label="节点备注">
-      <header className="inspector-header inspector-remark-context">
-        <div className="inspector-remark-context-details">
-          <h2 title={selectedNode.text}>{selectedNode.text}</h2>
-          <span className="inspector-node-type">{selectedNodeType?.name ?? '普通节点'}</span>
+      <header className="inspector-header inspector-remark-header">
+        <div>
+          <span>节点</span>
+          <h2>备注面板</h2>
         </div>
-        <button type="button" className="panel-collapse-action" onClick={onCollapse} aria-label="收起右侧备注面板" title="收起右侧备注面板">‹</button>
+        <button
+          type="button"
+          className="panel-collapse-action inspector-remark-collapse"
+          onClick={onCollapse}
+          aria-label="收起右侧备注面板"
+          title="收起右侧备注面板"
+        >
+          ‹
+        </button>
       </header>
 
       <div className="inspector-content">

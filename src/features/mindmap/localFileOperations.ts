@@ -10,6 +10,10 @@ export const LOCAL_FILE_COMMANDS = {
   checkHealth: 'check_local_file_health',
 } as const;
 
+/** Kept as plain UTF-8 source text for the native Windows file-type label. */
+export const LOCAL_MINDMAP_FILE_DIALOG_FILTER = 'Local Mindmap 文件';
+export const LOCAL_MINDMAP_FILE_EXTENSIONS = ['lmind'] as const;
+
 export type LocalFileResult =
   | { kind: 'desktop'; path: string; fileName: string }
   | { kind: 'web'; fileName: string };
@@ -87,7 +91,7 @@ export async function saveLocalFile(options: {
   defaultFileName: string;
   mimeType: string;
   filterName: string;
-  extensions: string[];
+  extensions: readonly string[];
   currentPath?: string | null;
   forceDialog?: boolean;
   backupOptions?: SaveBackupOptions;
@@ -129,7 +133,7 @@ export async function saveLocalFile(options: {
 export async function openLocalTextFile(options: {
   accept: string;
   filterName: string;
-  extensions: string[];
+  extensions: readonly string[];
 }): Promise<OpenedLocalTextFile | null> {
   if (isDesktopRuntime()) {
     const opened = await invokeLocalFile<{

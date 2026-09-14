@@ -4,6 +4,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -48,6 +49,7 @@ import type {
 } from '../features/commands/commandTypes';
 import {
   centerCanvasView,
+  centerNodeInCanvasView,
   DEFAULT_CANVAS_VIEW,
   panCanvasView,
   zoomCanvasView,
@@ -142,6 +144,7 @@ import { updateNodePositionsById } from '../features/mindmap/nodePositions';
 import {
   resolveCommittedNodeText,
   resolveEditingNodeId,
+  focusEditorAtEnd,
 } from '../features/mindmap/nodeEditing';
 import {
   createNodeTypePack,
@@ -230,6 +233,8 @@ import {
 import { serializeLmindDocument } from '../features/mindmap/saveMindmap';
 import {
   checkLocalFileHealth,
+  LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+  LOCAL_MINDMAP_FILE_EXTENSIONS,
   openFileLocation,
   openLocalTextFile,
   readLocalTextFile,
@@ -319,7 +324,12 @@ import {
   getNodeTypeCreationOptions,
   type TypedNodeBatchCreationResult,
 } from '../features/mindmap/typedNodeCreation';
-import { normalizeNodeTag } from '../features/mindmap/nodeMarkers';
+import {
+  deriveAvailableNodeTags,
+  getNodeTagApplicationState,
+  mutateNodeTags,
+  normalizeNodeTag,
+} from '../features/mindmap/nodeMarkers';
 import {
   createSamplePlugin,
   createSampleBatchScriptPlugin,
@@ -602,6 +612,49 @@ type MindmapTreeProps = {
   onOpenContextMenu: (node: MindmapNode, event: MouseEvent<HTMLElement>) => void;
 };
 
+function NodeTextEditor({
+  value,
+  onChange,
+  onEditorRef,
+  onCommit,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+  onEditorRef: (element: HTMLTextAreaElement | null) => void;
+  onCommit: () => void;
+}) {
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const focusFrame = window.requestAnimationFrame(() => {
+      focusEditorAtEnd(editorRef.current);
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, []);
+
+  return (
+    <textarea
+      className="node-editor"
+      ref={(element) => {
+        editorRef.current = element;
+        onEditorRef(element);
+      }}
+      value={value}
+      rows={1}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onChange={(event) => onChange(event.target.value)}
+      onBlur={onCommit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          onCommit();
+        }
+      }}
+    />
+  );
+}
+
 function MindmapTree({
   layoutNode,
   isRoot,
@@ -709,22 +762,11 @@ function MindmapTree({
         >
           <span className="mindmap-node-shape" aria-hidden="true" />
           {isEditing ? (
-            <textarea
-              className="node-editor"
-              ref={onEditorRef}
+            <NodeTextEditor
               value={editingText}
-              rows={1}
-              autoFocus
-              onClick={(event) => event.stopPropagation()}
-              onDoubleClick={(event) => event.stopPropagation()}
-              onChange={(event) => onEditingTextChange(event.target.value)}
-              onBlur={onCommitEdit}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  onCommitEdit();
-                }
-              }}
+              onChange={onEditingTextChange}
+              onEditorRef={onEditorRef}
+              onCommit={onCommitEdit}
             />
           ) : (
             <span className="mindmap-node-content">
@@ -916,6 +958,7 @@ export function App() {
   const [showMiniMap, setShowMiniMap] = useState(true);
   const [isExportingLargeMap, setIsExportingLargeMap] = useState(false);
   const [canvasViewport, setCanvasViewport] = useState({ width: 0, height: 0 });
+  const [initialCenterRequest, setInitialCenterRequest] = useState(1);
   const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics>(EMPTY_PERFORMANCE_METRICS);
   const [showCanvasGrid, setShowCanvasGrid] = useState(true);
   const [openCentered, setOpenCentered] = useState(true);
@@ -965,6 +1008,7 @@ export function App() {
   const workspaceLayoutRef = useRef<HTMLDivElement | null>(null);
   const inspectorResizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const inspectorWidthRef = useRef(DEFAULT_INSPECTOR_WIDTH);
+  const appliedInitialCenterRequestRef = useRef(0);
   const [draggingNodeIds, setDraggingNodeIds] = useState<string[]>([]);
   const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -1034,11 +1078,7 @@ export function App() {
   );
   const mindmapIndex = useMemo(() => createMindmapIndex(mindmap), [mindmap]);
   const availableTags = useMemo(
-    () => Array.from(
-      new Set(
-        Array.from(mindmapIndex.nodeById.values()).flatMap((node) => node.tags ?? []),
-      ),
-    ).sort((left, right) => left.localeCompare(right, 'zh-CN')),
+    () => deriveAvailableNodeTags(mindmapIndex.nodeById.values()),
     [mindmapIndex],
   );
   const selectedMetadataNodes = useMemo(
@@ -1254,6 +1294,29 @@ export function App() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  // A blank map is centered only after the layout and the real working viewport
+  // exist. This lets the toolbar and inspector contribute their actual size.
+  useEffect(() => {
+    if (
+      appliedInitialCenterRequestRef.current === initialCenterRequest ||
+      canvasViewport.width <= 0 ||
+      canvasViewport.height <= 0
+    ) {
+      return;
+    }
+
+    const rootLayoutNode = mindmapLayout.nodes.find((node) => node.id === mindmap.id);
+    if (!rootLayoutNode) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      setCanvasView((view) =>
+        centerNodeInCanvasView(view, rootLayoutNode, canvasViewport),
+      );
+      appliedInitialCenterRequestRef.current = initialCenterRequest;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [canvasViewport, initialCenterRequest, mindmap.id, mindmapLayout.nodes]);
 
   useEffect(() => {
     let active = true;
@@ -2069,6 +2132,7 @@ export function App() {
     setLastSavedAt(null);
     setLastAutoSavedAt(null);
     setDraftId(createDraftId());
+    setInitialCenterRequest((request) => request + 1);
     lastAutoSaveSignatureRef.current = '';
     showMessage('已新建空白思维导图');
   };
@@ -2102,8 +2166,8 @@ export function App() {
         content: serializeLmindDocument(mindmap, nodeTypes, themeId),
         defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
         mimeType: 'application/json;charset=utf-8',
-        filterName: 'Local Mindmap 工程文件',
-        extensions: ['lmind'],
+        filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+        extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
         currentPath: currentFilePath,
         forceDialog: saveAs,
       });
@@ -2154,8 +2218,8 @@ export function App() {
         content: documentText,
         defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
         mimeType: 'application/json;charset=utf-8',
-        filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
-        extensions: ['lmind'],
+        filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+        extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
         currentPath: currentFilePath,
         forceDialog: saveAs,
         backupOptions: {
@@ -2212,8 +2276,8 @@ export function App() {
           content: documentText,
           defaultFileName: `${sanitizeFileName(mindmap.text)}.lmind`,
           mimeType: 'application/json;charset=utf-8',
-          filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
-          extensions: ['lmind'],
+          filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+          extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
           currentPath: currentFilePath,
           backupOptions: {
             enabled: fileReliabilitySettings.backupBeforeSaveEnabled,
@@ -2294,8 +2358,8 @@ export function App() {
     try {
       const opened = await openLocalTextFile({
         accept: '.lmind,application/json',
-        filterName: 'Local Mindmap 工程文件',
-        extensions: ['lmind'],
+        filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+        extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
       });
 
       if (!opened) {
@@ -2375,8 +2439,8 @@ export function App() {
     try {
       const opened = await openLocalTextFile({
         accept: '.lmind,application/json',
-        filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
-        extensions: ['lmind'],
+        filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+        extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
       });
       if (!opened?.path) {
         return;
@@ -2499,8 +2563,8 @@ export function App() {
         content,
         defaultFileName: `${sanitizeFileName(entry.rootText || entry.title)}.lmind`,
         mimeType: 'application/json;charset=utf-8',
-        filterName: 'Local Mindmap 宸ョ▼鏂囦欢',
-        extensions: ['lmind'],
+        filterName: LOCAL_MINDMAP_FILE_DIALOG_FILTER,
+        extensions: LOCAL_MINDMAP_FILE_EXTENSIONS,
         forceDialog: true,
       });
       if (result) {
@@ -4061,9 +4125,7 @@ export function App() {
     recordHistory();
     setMindmap((currentMindmap) =>
       updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) =>
-        (node.tags ?? []).includes(tag)
-          ? node
-          : { ...node, tags: [...(node.tags ?? []), tag] },
+        mutateNodeTags(node, tag, 'add'),
       ),
     );
     showMessage(`已添加标签「${tag}」`);
@@ -4136,11 +4198,14 @@ export function App() {
     showMessage(progress === undefined ? '已清除完成度' : `已设置完成度 ${progress}%`);
   };
 
-  const handleRemoveTag = (tag: string) => {
+  const handleRemoveTag = (value: string) => {
     if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
     }
+
+    const tag = normalizeNodeTag(value);
+    if (!tag) return;
 
     if (
       !selectedNodeIds.some((nodeId) =>
@@ -4152,16 +4217,23 @@ export function App() {
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) =>
-        (node.tags ?? []).includes(tag)
-          ? {
-              ...node,
-              tags: (node.tags ?? []).filter((currentTag) => currentTag !== tag),
-            }
-          : node,
-      ),
+      updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => {
+        return mutateNodeTags(node, tag, 'remove');
+      }),
     );
     showMessage(`已删除标签「${tag}」`);
+  };
+
+  const handleToggleTag = (value: string) => {
+    const tag = normalizeNodeTag(value);
+    if (!tag) return;
+
+    if (getNodeTagApplicationState(selectedMetadataNodes, tag) === 'all') {
+      handleRemoveTag(tag);
+      return;
+    }
+
+    handleAddTag(tag);
   };
 
   const handleStartEdit = (node: MindmapNode) => {
@@ -4565,7 +4637,7 @@ export function App() {
     showMessage('已修改节点样式');
   };
 
-  const handleSelectedNodeIconChange = (icon: string | undefined) => {
+  const handleSelectedNodeIconChange = (icon: string | null) => {
     if (selectedNodeIds.length === 0) {
       showMessage('请先选择节点');
       return;
@@ -4576,11 +4648,7 @@ export function App() {
       updateSelectedNodes(currentMindmap, selectedNodeIdSet, (node) => {
         const nextStyle = { ...(node.style ?? {}) };
 
-        if (icon === undefined) {
-          delete nextStyle.icon;
-        } else {
-          nextStyle.icon = icon;
-        }
+        nextStyle.icon = icon;
 
         if (Object.keys(nextStyle).length === 0) {
           const { style: _style, ...nodeWithoutStyle } = node;
@@ -6667,6 +6735,7 @@ export function App() {
       {isNodeQuickToolbarExpanded ? (
         <NodeQuickToolbar
           selectedNode={selectedNodeId ? selectedNode : null}
+          selectedNodes={selectedMetadataNodes}
           hasSelection={selectedNodeIds.length > 0}
           priorityValue={selectedPriorityValue}
           progressValue={selectedProgressValue}
@@ -6674,11 +6743,11 @@ export function App() {
           onAddChild={() => handleAddChild(childNodeTypeId, { startEditing: true })}
           onAddSibling={() => handleAddSibling(siblingNodeTypeId, { startEditing: true })}
           onAddParent={() => handleAddParent(childNodeTypeId, { startEditing: true })}
-          onOpenRemark={handleOpenRemarkEditor}
           onSetPriority={handlePriorityChange}
           onSetProgress={handleProgressChange}
           onAddTag={handleAddTag}
           onRemoveTag={handleRemoveTag}
+          onToggleTag={handleToggleTag}
           styleToolbar={
             <NodeStyleToolbar
               selectedNode={selectedNodeId ? selectedNode : null}
@@ -7358,7 +7427,6 @@ export function App() {
               />
               <RightInspectorPanel
                 selectedNode={selectedNode}
-                nodeTypes={availableNodeTypes}
                 remarkMode={remarkMode}
                 activeRemarkMatch={
                   activeMatch?.field === 'remark' ? activeMatch : null

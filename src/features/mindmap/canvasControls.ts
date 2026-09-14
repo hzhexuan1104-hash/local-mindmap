@@ -45,3 +45,15 @@ export function panCanvasView(
 export function centerCanvasView(): CanvasViewState {
   return DEFAULT_CANVAS_VIEW;
 }
+
+export function centerNodeInCanvasView(
+  view: CanvasViewState,
+  nodeBounds: { x: number; y: number; width: number; height: number },
+  viewport: { width: number; height: number },
+): CanvasViewState {
+  return {
+    ...view,
+    offsetX: viewport.width / 2 - (nodeBounds.x + nodeBounds.width / 2) * view.scale,
+    offsetY: viewport.height / 2 - (nodeBounds.y + nodeBounds.height / 2) * view.scale,
+  };
+}

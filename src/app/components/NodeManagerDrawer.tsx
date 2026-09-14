@@ -85,13 +85,16 @@ export function NodeManagerDrawer({
             </label>
             <label>
               <span>图标</span>
-              <select
-                value={draft.icon}
-                aria-invalid={Boolean(errors.icon)}
+                <select
+                value={draft.icon ?? ''}
                 onChange={(event) =>
-                  updateDraft((current) => ({ ...current, icon: event.target.value }), 'icon')
+                  updateDraft((current) => ({
+                    ...current,
+                    icon: event.target.value || null,
+                  }))
                 }
               >
+                <option value="">无图标</option>
                 {NODE_TYPE_ICONS.map((icon) => (
                   <option key={icon.value} value={icon.value}>{icon.label}</option>
                 ))}
@@ -191,14 +194,16 @@ export function NodeManagerDrawer({
             <h3>已定义类型</h3>
             {nodeTypes.length === 0 ? <p>暂无自定义节点类型。</p> : nodeTypes.map((nodeType) => (
               <article key={nodeType.id} className="node-manager-list-item">
-                <span
-                  className="node-type-swatch"
-                  style={{
-                    background: nodeType.backgroundColor,
-                    borderColor: nodeType.borderColor,
-                    color: nodeType.textColor,
-                  }}
-                >{nodeType.icon}</span>
+                {nodeType.icon ? (
+                  <span
+                    className="node-type-swatch"
+                    style={{
+                      background: nodeType.backgroundColor,
+                      borderColor: nodeType.borderColor,
+                      color: nodeType.textColor,
+                    }}
+                  >{nodeType.icon}</span>
+                ) : null}
                 <div>
                   <strong>{nodeType.name}</strong>
                   <span>{nodeType.shape} · {nodeType.fontSize}px · {nodeType.defaultText}</span>

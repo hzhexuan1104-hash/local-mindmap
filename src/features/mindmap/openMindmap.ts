@@ -41,7 +41,9 @@ function normalizeNodeStyle(value: unknown): MindmapNodeStyle | undefined {
       ? value.shape
       : undefined;
   const style: MindmapNodeStyle = {
-    ...(typeof value.icon === 'string' ? { icon: value.icon } : {}),
+    ...(typeof value.icon === 'string' && value.icon.trim()
+      ? { icon: value.icon }
+      : value.icon === null || value.icon === '' ? { icon: null } : {}),
     ...(shape ? { shape } : {}),
     ...(typeof value.backgroundColor === 'string'
       ? { backgroundColor: value.backgroundColor }
@@ -161,11 +163,18 @@ function normalizeNodeTypes(value: unknown): MindmapNodeType[] {
           ? item.shape
           : 'rounded';
 
+      const textAlign =
+        item.textAlign === 'left' || item.textAlign === 'center' || item.textAlign === 'right'
+          ? item.textAlign as MindmapNodeType['textAlign']
+          : undefined;
+
       return {
       id: typeof item.id === 'string' ? item.id : '',
       name: typeof item.name === 'string' ? item.name : '',
-      icon: typeof item.icon === 'string' ? item.icon : '✅',
+      // Both missing and legacy empty icon values become the single `null` form.
+      icon: typeof item.icon === 'string' && item.icon.trim() ? item.icon.trim() : null,
       shape,
+      ...(textAlign ? { textAlign } : {}),
       backgroundColor:
         typeof item.backgroundColor === 'string'
           ? item.backgroundColor
