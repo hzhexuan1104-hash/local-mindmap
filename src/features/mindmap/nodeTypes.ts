@@ -36,7 +36,7 @@ export const NODE_TYPE_SHAPES = [
 
 export type NodeTypeDraft = {
   name: string;
-  icon: string;
+  icon: string | null;
   shape: MindmapNodeType['shape'];
   textAlign?: MindmapNodeType['textAlign'];
   backgroundColor: string;
@@ -50,7 +50,7 @@ export type NodeTypeDraft = {
 
 export const createEmptyNodeTypeDraft = (): NodeTypeDraft => ({
   name: '',
-  icon: '✅',
+  icon: null,
   shape: DEFAULT_NODE_STYLE.shape,
   textAlign: DEFAULT_NODE_STYLE.textAlign,
   backgroundColor: DEFAULT_NODE_STYLE.backgroundColor,
@@ -62,13 +62,12 @@ export const createEmptyNodeTypeDraft = (): NodeTypeDraft => ({
   defaultRemark: '',
 });
 
-export type NodeTypeDraftErrors = Partial<Record<'name' | 'icon' | 'shape' | 'backgroundColor' | 'borderColor' | 'textColor' | 'fontSize', string>>;
+export type NodeTypeDraftErrors = Partial<Record<'name' | 'shape' | 'backgroundColor' | 'borderColor' | 'textColor' | 'fontSize', string>>;
 
 /** The identifier is generated internally, so users only validate editable schema fields. */
 export function validateNodeTypeDraft(draft: NodeTypeDraft): NodeTypeDraftErrors {
   const errors: NodeTypeDraftErrors = {};
   if (!draft.name.trim()) errors.name = '请输入节点类型名称';
-  if (!draft.icon.trim()) errors.icon = '请选择节点类型图标';
   if (!['rounded', 'rectangle', 'pill', 'diamond'].includes(draft.shape)) errors.shape = '请选择有效节点形状';
   (['backgroundColor', 'borderColor', 'textColor'] as const).forEach((key) => {
     if (!/^#[0-9a-f]{6}$/i.test(draft[key])) errors[key] = '请输入有效的 HEX 颜色';
@@ -91,7 +90,7 @@ export function createMindmapNodeType(
   return {
     id: crypto.randomUUID(),
     name,
-    icon: draft.icon || '✅',
+    icon: draft.icon?.trim() || null,
     shape: draft.shape || DEFAULT_NODE_STYLE.shape,
     ...(draft.textAlign ? { textAlign: draft.textAlign } : {}),
     backgroundColor: draft.backgroundColor || DEFAULT_NODE_STYLE.backgroundColor,

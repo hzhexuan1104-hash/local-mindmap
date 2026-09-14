@@ -1,9 +1,12 @@
 import type { CSSProperties } from 'react';
-import { DEFAULT_NODE_STYLE, getEffectiveNodeStyle } from '../../features/mindmap/nodeStyles';
+import {
+  DEFAULT_NODE_STYLE,
+  getEffectiveNodeIcon,
+  getEffectiveNodeStyle,
+} from '../../features/mindmap/nodeStyles';
 import { NODE_TYPE_ICONS, NODE_TYPE_SHAPES } from '../../features/mindmap/nodeTypes';
 import type { MindmapNode, MindmapNodeStyle, MindmapNodeType } from '../../features/mindmap/types';
 
-const INHERIT_NODE_TYPE_ICON = '__inherit-node-type-icon__';
 const CLEAR_NODE_ICON = '__clear-node-icon__';
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28] as const;
 
@@ -16,7 +19,7 @@ type NodeStyleToolbarProps = {
   nodeTypes: MindmapNodeType[];
   nodeIcons?: ReadonlyArray<NodeIconOption>;
   onNodeStyleChange: (style: MindmapNodeStyle) => void;
-  onNodeIconChange: (icon: string | undefined) => void;
+  onNodeIconChange: (icon: string | null) => void;
   onResetNodeStyle: () => void;
   embedded?: boolean;
 };
@@ -71,12 +74,12 @@ export function NodeStyleToolbar({
   const effectiveStyle = selectedNode
     ? getEffectiveNodeStyle(selectedNode, selectedNodeType, isRoot)
     : DEFAULT_NODE_STYLE;
-  const selectedIcon = selectedNode?.style?.icon;
-  const selectedIconValue = selectedIcon === undefined
-    ? INHERIT_NODE_TYPE_ICON
-    : selectedIcon === '' ? CLEAR_NODE_ICON : selectedIcon;
-  const iconOptions = selectedIcon && !nodeIcons.some((icon) => icon.value === selectedIcon)
-    ? [{ value: selectedIcon, label: `${selectedIcon} 当前图标` }, ...nodeIcons]
+  const effectiveIcon = selectedNode
+    ? getEffectiveNodeIcon(selectedNode, selectedNodeType)
+    : '';
+  const selectedIconValue = effectiveIcon || CLEAR_NODE_ICON;
+  const iconOptions = effectiveIcon && !nodeIcons.some((icon) => icon.value === effectiveIcon)
+    ? [{ value: effectiveIcon, label: `${effectiveIcon} 当前图标` }, ...nodeIcons]
     : nodeIcons;
   const fontSizeOptions = FONT_SIZES.includes(effectiveStyle.fontSize as (typeof FONT_SIZES)[number])
     ? FONT_SIZES
@@ -99,10 +102,9 @@ export function NodeStyleToolbar({
           value={selectedIconValue}
           onChange={(event) => {
             const value = event.target.value;
-            onNodeIconChange(value === INHERIT_NODE_TYPE_ICON ? undefined : value === CLEAR_NODE_ICON ? '' : value);
+            onNodeIconChange(value === CLEAR_NODE_ICON ? null : value);
           }}
         >
-          <option value={INHERIT_NODE_TYPE_ICON}>{selectedNodeType?.icon ? `类型 ${selectedNodeType.icon}` : '沿用类型'}</option>
           <option value={CLEAR_NODE_ICON}>无图标</option>
           {iconOptions.map((icon) => <option key={icon.value} value={icon.value}>{icon.label}</option>)}
         </select>

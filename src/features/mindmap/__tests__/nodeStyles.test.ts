@@ -138,7 +138,7 @@ describe('node style helpers', () => {
     ).toBe('💡');
     expect(
       getEffectiveNodeIcon(
-        { ...node, style: { icon: '' } },
+        { ...node, style: { icon: null } },
         nodeType,
       ),
     ).toBe('');
@@ -198,6 +198,7 @@ describe('node style helpers', () => {
     const draft = createEmptyNodeTypeDraft();
 
     expect(draft).toMatchObject({
+      icon: null,
       shape: DEFAULT_NODE_STYLE.shape,
       textAlign: DEFAULT_NODE_STYLE.textAlign,
       backgroundColor: DEFAULT_NODE_STYLE.backgroundColor,
@@ -463,5 +464,18 @@ describe('node style helpers', () => {
     expect(getEffectiveNodeIcon(reopened.rootNode, reopened.nodeTypes[0])).toBe(
       '💡',
     );
+  });
+
+  it('serializes one explicit no-icon representation for types and node overrides', () => {
+    const serialized = serializeLmindDocument(
+      { ...node, style: { icon: null } },
+      [{ ...nodeType, icon: null }],
+      'default-blue',
+    );
+    const reopened = parseLmindProject(serialized);
+
+    expect(reopened.nodeTypes[0].icon).toBeNull();
+    expect(reopened.rootNode.style?.icon).toBeNull();
+    expect(getEffectiveNodeIcon(reopened.rootNode, reopened.nodeTypes[0])).toBe('');
   });
 });

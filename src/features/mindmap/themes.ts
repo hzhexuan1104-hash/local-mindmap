@@ -78,6 +78,7 @@ export function createThemeStyle(
   themes: MindmapTheme[] = MINDMAP_THEMES,
 ): CSSProperties {
   const theme = getMindmapTheme(themeId, themes);
+  const isDarkTheme = theme.id === 'dark-black';
 
   return {
     '--canvas-bg': theme.canvasBackground,
@@ -86,5 +87,8 @@ export function createThemeStyle(
     '--node-border': theme.nodeBorder,
     '--node-text': theme.nodeText,
     '--line-color': theme.lineColor,
+    '--node-tag-amber-text': isDarkTheme ? '#fcd34d' : '#a16207',
+    '--node-tag-amber-bg': isDarkTheme ? '#5b4514' : '#fff7d6',
+    '--node-tag-amber-border': isDarkTheme ? '#8a6720' : '#f1d28a',
   } as CSSProperties;
 }

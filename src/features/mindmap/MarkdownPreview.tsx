@@ -17,7 +17,16 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.stopPropagation()}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // Preserve author-entered soft breaks inside ordinary paragraphs without
+          // changing Markdown block semantics for lists, tables, or code fences.
+          p: ({ children }) => (
+            <p className="markdown-paragraph-with-soft-breaks">{children}</p>
+          ),
+        }}
+      >
         {preserveStandaloneTripleAsterisks(content)}
       </ReactMarkdown>
     </div>

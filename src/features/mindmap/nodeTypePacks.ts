@@ -38,6 +38,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown, fallback = '') =>
   typeof value === 'string' ? value : fallback;
 
+function normalizeNodeTypeIcon(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 export function normalizeImportedNodeType(
   value: unknown,
 ): MindmapNodeType | null {
@@ -58,7 +62,8 @@ export function normalizeImportedNodeType(
   return {
     id,
     name,
-    icon: asString(value.icon),
+    // Legacy empty strings are migrated to the only persisted no-icon value.
+    icon: normalizeNodeTypeIcon(value.icon),
     shape: NODE_TYPE_SHAPES.includes(shapeValue) ? shapeValue : 'rounded',
     ...(textAlign && NODE_TEXT_ALIGNS.includes(textAlign) ? { textAlign } : {}),
     backgroundColor: asString(value.backgroundColor, '#eef5ff'),

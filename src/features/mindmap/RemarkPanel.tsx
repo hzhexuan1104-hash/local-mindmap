@@ -172,7 +172,7 @@ export function RemarkPanel({
                 value={selectedNode.remark}
                 data-search-match-active={remarkMatch ? 'true' : undefined}
                 onChange={(event) => onRemarkChange(event.target.value)}
-                aria-label={`${selectedNode.text} 的 Markdown 备注`}
+                aria-label="Markdown 备注"
               />
             </div>
           ) : (

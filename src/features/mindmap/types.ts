@@ -1,5 +1,6 @@
 export type MindmapNodeStyle = {
-  icon?: string;
+  /** `null` explicitly suppresses a node-type icon; omitted keeps type fallback. */
+  icon?: string | null;
   shape?: MindmapNodeType['shape'];
   /** Optional override. Normal nodes are left aligned; the root remains centered. */
   textAlign?: 'left' | 'center' | 'right';
@@ -34,7 +35,8 @@ export type MindmapNode = {
 export type MindmapNodeType = {
   id: string;
   name: string;
-  icon: string;
+  /** `null` is the single serialized representation for a type without an icon. */
+  icon: string | null;
   shape: 'rounded' | 'rectangle' | 'pill' | 'diamond';
   /** Kept optional so existing .lmind files remain unchanged and compatible. */
   textAlign?: 'left' | 'center' | 'right';
