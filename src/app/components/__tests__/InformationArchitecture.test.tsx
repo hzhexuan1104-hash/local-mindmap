@@ -137,7 +137,7 @@ describe('v1.18 information architecture components', () => {
     expect(html).toContain('无图标');
     expect(html).not.toContain('沿用类型');
     expect(html).not.toContain('__inherit-node-type-icon__');
-    expect(html).toContain('aria-label="节点形状"');
+    expect(html).not.toContain('aria-label="节点形状"');
     expect(html).toContain('aria-label="背景色"');
     expect(html).toContain('aria-label="边框色"');
     expect(html).toContain('aria-label="文字色"');

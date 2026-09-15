@@ -4,7 +4,7 @@ import {
   getEffectiveNodeIcon,
   getEffectiveNodeStyle,
 } from '../../features/mindmap/nodeStyles';
-import { NODE_TYPE_ICONS, NODE_TYPE_SHAPES } from '../../features/mindmap/nodeTypes';
+import { NODE_TYPE_ICONS } from '../../features/mindmap/nodeTypes';
 import type { MindmapNode, MindmapNodeStyle, MindmapNodeType } from '../../features/mindmap/types';
 
 const CLEAR_NODE_ICON = '__clear-node-icon__';
@@ -107,16 +107,6 @@ export function NodeStyleToolbar({
         >
           <option value={CLEAR_NODE_ICON}>无图标</option>
           {iconOptions.map((icon) => <option key={icon.value} value={icon.value}>{icon.label}</option>)}
-        </select>
-
-        <select
-          aria-label="节点形状"
-          title="节点形状"
-          disabled={disabled}
-          value={effectiveStyle.shape}
-          onChange={(event) => onNodeStyleChange({ shape: event.target.value as MindmapNodeStyle['shape'] })}
-        >
-          {NODE_TYPE_SHAPES.map((shape) => <option key={shape.value} value={shape.value}>{shape.label.replace(`${shape.value} `, '')}</option>)}
         </select>
 
         <div className="node-style-toolbar-colors" role="group" aria-label="节点颜色">
