@@ -60,6 +60,8 @@ describe('v1.18 information architecture components', () => {
     const html = renderToStaticMarkup(<TopMenuBar currentTitle="Document" menus={[{ id: 'file', label: 'File', items: [{ id: 'open', label: 'Open', children: [{ id: 'recent', label: 'Recent files', children: [{ id: 'entry', label: 'Example', shortcut: 'Ctrl+O', checked: true, execute: noop }] }] }] }]} isDirty={false} />);
     expect(html).toContain('data-menu-item-id="file"');
     expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('class="chevron-icon top-menu-chevron"');
+    expect(html).toContain('data-chevron-direction="down"');
   });
 
   it('places the quick-action disclosure in the top menu layer', () => {
@@ -92,26 +94,26 @@ describe('v1.18 information architecture components', () => {
     expect(getMenuHoverPath(['file', 'settings'], false)).toEqual(['file']);
   });
 
-  it('keeps the inspector remark-only without repeating node text or type', () => {
+  it('uses the selected node type name as the remark inspector title without repeating node text', () => {
     const html = renderToStaticMarkup(<RightInspectorPanel selectedNode={selectedNode} nodeTypes={[nodeType]} remarkMode="edit" activeRemarkMatch={null} onRemarkModeChange={noop} onRemarkChange={noop} onCollapse={noop} />);
 
     expect(html).toContain('备注');
     expect(html).not.toContain('Current node');
-    expect(html).not.toContain('Task');
-    expect(html).not.toContain('inspector-remark-context-details');
-    expect(html).not.toContain('当前节点');
+    expect(html).toContain('>Task</h2>');
+    expect(html).toContain('remark-node-title');
+    expect(html).not.toContain('>备注面板<');
     expect(html).not.toContain('节点样式');
-    expect(html).toContain('备注');
     expect(html).not.toContain('节点形状');
     expect(html).not.toContain('背景色');
     expect(html).not.toContain('重置为类型默认样式');
   });
 
-  it('separates inspector collapse from remark actions in distinct header rows', () => {
+  it('keeps node name, remark actions, and collapse action in one header row', () => {
     const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
     const html = renderToStaticMarkup(
       <RightInspectorPanel
         selectedNode={selectedNode}
+        nodeTypes={[nodeType]}
         remarkMode="preview"
         activeRemarkMatch={null}
         onRemarkModeChange={noop}
@@ -120,17 +122,21 @@ describe('v1.18 information architecture components', () => {
       />,
     );
 
-    expect(html).toContain('inspector-header inspector-remark-header');
-    expect(html).toContain('inspector-remark-collapse');
     expect(html).toContain('remark-section-header');
-    expect(html.indexOf('inspector-remark-header')).toBeLessThan(html.indexOf('remark-section-header'));
-    expect(html.indexOf('inspector-remark-collapse')).toBeLessThan(html.indexOf('remark-inline-actions'));
-    expect(css).toContain('.inspector-panel-remark .inspector-remark-header');
-    expect(css).not.toMatch(/\.inspector-panel-remark \.inspector-remark-collapse\s*\{[\s\S]*?position:\s*absolute/);
+    expect(html).toContain('remark-node-title');
+    expect(html).toContain('aria-label="编辑备注"');
+    expect(html).toContain('aria-label="预览备注"');
+    expect(html).toContain('aria-label="放大备注"');
+    expect(html).toContain('aria-label="隐藏备注面板"');
+    expect(html).not.toContain('inspector-remark-header');
+    expect(html).not.toContain('inspector-remark-collapse');
+    expect(html.indexOf('remark-node-title')).toBeLessThan(html.indexOf('remark-inline-actions'));
+    expect(css).toContain('.inspector-panel-remark .remark-panel.is-embedded');
   });
 
   it('moves compact batch-capable style controls to the canvas toolbar', () => {
     const html = renderToStaticMarkup(<NodeStyleToolbar selectedNode={selectedNode} selectedNodeCount={2} isRoot={false} nodeTypes={[nodeType]} onNodeStyleChange={noop} onNodeIconChange={noop} onResetNodeStyle={noop} />);
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
 
     expect(html).toContain('node-style-toolbar');
     expect(html).toContain('aria-label="节点图标"');
@@ -142,6 +148,8 @@ describe('v1.18 information architecture components', () => {
     expect(html).toContain('aria-label="边框色"');
     expect(html).toContain('aria-label="文字色"');
     expect(html).toContain('aria-label="字号"');
+    expect(css).toContain('.node-style-toolbar select');
+    expect(css).toContain('background-image: url("data:image/svg+xml');
     expect(html).toContain('aria-label="加粗"');
     expect(html).toContain('将应用到 2 个节点');
   });

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyNodeContentSizeOverride,
   clearMindmapPositions,
   createMindmapLayout,
+  getEditingNodeContentSize,
   getNodeContentSize,
   getDiamondBoundaryAnchor,
   LAYOUT_DENSITY_CONFIG,
@@ -89,7 +91,6 @@ describe('mindmap layout positions', () => {
     const line = layout.lines[0];
 
     expect(root.width).toBeGreaterThan(child.width);
-    expect(child.width).toBeGreaterThanOrEqual(88);
     expect(line.from).toEqual({
       x: root.x + root.width,
       y: root.y + root.height / 2,
@@ -244,12 +245,11 @@ describe('mindmap layout positions', () => {
     expect(resetMindmap.children[1].position).toBeUndefined();
   });
 
-  it('sizes short nodes close to the minimum and grows wider for longer text', () => {
+  it('keeps the left and right horizontal padding equal for short left-aligned nodes', () => {
     const short = getNodeContentSize({ id: 'short', text: '短', remark: '', children: [] });
     const long = getNodeContentSize({ id: 'long', text: '这是一个明显更长的节点标题', remark: '', children: [] });
 
-    expect(short.width).toBeGreaterThanOrEqual(88);
-    expect(short.width).toBeLessThan(140);
+    expect(short.width - short.textWidth).toBe(32);
     expect(long.width).toBeGreaterThan(short.width);
   });
 
@@ -316,6 +316,66 @@ describe('mindmap layout positions', () => {
 
     expect(marked.height).toBeGreaterThan(plain.height);
     expect(marked.width).toBeGreaterThanOrEqual(plain.width);
+  });
+
+  it('uses the rendered node measurement for editing drafts, including max-width wrapping', () => {
+    const node: MindmapNode = { id: 'editing', text: '测试', remark: '', children: [] };
+    const short = getEditingNodeContentSize(node, '测试');
+    const growingText = '测试节点内容继续不断增加文字';
+    const growing = getEditingNodeContentSize(node, growingText);
+    const long = getEditingNodeContentSize(node, '测试节点内容继续不断增加文字'.repeat(4));
+
+    expect(growing).toEqual(getNodeContentSize({ ...node, text: growingText }));
+    expect(growing.width).toBeGreaterThan(short.width);
+    expect(long.width).toBeLessThanOrEqual(POSITIONED_LAYOUT.nodeWidth);
+    expect(long.height).toBeGreaterThan(growing.height);
+    expect(getEditingNodeContentSize(node, '测').width).toBeLessThan(growing.width);
+  });
+
+  it('lets a long tag expand the shared node bounds before tags wrap', () => {
+    const plain = getNodeContentSize({ id: 'plain', text: '测试', remark: '', children: [] });
+    const longTag = getNodeContentSize({
+      id: 'long-tag',
+      text: '测试',
+      remark: '',
+      tags: ['这是一个特别特别特别长的项目风险跟踪标签'],
+      children: [],
+    });
+    const multipleTags = getNodeContentSize({
+      id: 'multiple-tags',
+      text: '测试',
+      remark: '',
+      tags: ['需求', '开发', '高优先级', '第一阶段', '风险跟踪'],
+      children: [],
+    });
+
+    expect(longTag.width).toBeGreaterThan(plain.width);
+    expect(longTag.width).toBeLessThanOrEqual(POSITIONED_LAYOUT.nodeWidth);
+    expect(longTag.tagHeight).toBeGreaterThan(0);
+    expect(multipleTags.tagHeight).toBeGreaterThan(0);
+    expect(multipleTags.height).toBeGreaterThan(plain.height);
+  });
+
+  it('updates only the editing node bounds and its edge anchors', () => {
+    const layout = createMindmapLayout({
+      id: 'root',
+      text: '中心主题',
+      remark: '',
+      children: [{ id: 'child', text: '测试', remark: '', children: [] }],
+    });
+    const originalChild = layout.nodes.find((node) => node.id === 'child')!;
+    const originalLine = layout.lines.find((line) => line.toNodeId === 'child')!;
+    const updated = applyNodeContentSizeOverride(layout, 'child', {
+      width: originalChild.width + 80,
+      height: originalChild.height + 40,
+    });
+    const updatedChild = updated.nodes.find((node) => node.id === 'child')!;
+    const updatedLine = updated.lines.find((line) => line.toNodeId === 'child')!;
+
+    expect(updatedChild.width).toBe(originalChild.width + 80);
+    expect(updatedChild.height).toBe(originalChild.height + 40);
+    expect(updatedLine.to.y).not.toBe(originalLine.to.y);
+    expect(updated.nodes.find((node) => node.id === 'root')).toBe(layout.nodes.find((node) => node.id === 'root'));
   });
 
   it('reuses content measurements for unchanged text and font attributes', () => {

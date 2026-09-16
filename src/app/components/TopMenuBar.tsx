@@ -1,5 +1,6 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MenuGroupDefinition, MenuItemDefinition } from '../../features/menu/menuTypes';
+import { ChevronIcon } from './ChevronIcon';
 
 export type TopMenuItem = MenuItemDefinition;
 export type TopMenuGroup = MenuGroupDefinition;
@@ -128,7 +129,7 @@ export function TopMenuBar({
       {menus.map((menu) => {
         const isOpen = activeMenuId === menu.id;
         return <div className="top-menu" key={menu.id}>
-          <button type="button" data-menu-item-id={menu.id} className={isOpen ? 'top-menu-trigger is-open' : 'top-menu-trigger'} aria-haspopup="menu" aria-expanded={isOpen} onClick={() => { clearCloseTimer(); setActiveMenuId((current) => current === menu.id ? null : menu.id); setOpenPath([]); }} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setActiveMenuId(menu.id); setOpenPath([]); focusMenuItem([menu.id, menu.items[0]?.id]); } else if (event.key === 'Escape') closeAll(); }}>{menu.label}<span aria-hidden="true">⌄</span></button>
+          <button type="button" data-menu-item-id={menu.id} className={isOpen ? 'top-menu-trigger is-open' : 'top-menu-trigger'} aria-haspopup="menu" aria-expanded={isOpen} onClick={() => { clearCloseTimer(); setActiveMenuId((current) => current === menu.id ? null : menu.id); setOpenPath([]); }} onKeyDown={(event) => { if (event.nativeEvent.isComposing) return; if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setActiveMenuId(menu.id); setOpenPath([]); focusMenuItem([menu.id, menu.items[0]?.id]); } else if (event.key === 'Escape') closeAll(); }}>{menu.label}<ChevronIcon direction={isOpen ? 'up' : 'down'} className="top-menu-chevron" /></button>
           {isOpen ? <div className="top-menu-popover has-submenus" role="menu" onMouseEnter={clearCloseTimer} onMouseLeave={closeLater}>{menu.items.map((item) => renderItem(item, [menu.id, item.id], 1))}</div> : null}
         </div>;
       })}
@@ -142,7 +143,7 @@ export function TopMenuBar({
         onClick={onToggleQuickToolbar}
         title={isQuickToolbarExpanded ? '收起快捷操作' : '展开快捷操作'}
       >
-        <span aria-hidden="true">{isQuickToolbarExpanded ? '⌃' : '⌄'}</span>
+        <ChevronIcon direction={isQuickToolbarExpanded ? 'up' : 'down'} className="topbar-quick-toolbar-chevron" />
         {isQuickToolbarExpanded ? '收起快捷操作' : '展开快捷操作'}
       </button>
     ) : null}
