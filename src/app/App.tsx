@@ -107,8 +107,10 @@ import {
 import { importMindmapJson } from '../features/mindmap/importJson';
 import { importMindmapMarkdown } from '../features/mindmap/importMarkdown';
 import {
+  applyNodeContentSizeOverride,
   clearMindmapPositions,
   createMindmapLayout,
+  getEditingNodeContentSize,
   POSITIONED_LAYOUT,
   type MindmapLayoutNode,
 } from '../features/mindmap/layout';
@@ -646,7 +648,7 @@ function NodeTextEditor({
       onChange={(event) => onChange(event.target.value)}
       onBlur={onCommit}
       onKeyDown={(event) => {
-        if (event.key === 'Enter') {
+        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
           event.preventDefault();
           onCommit();
         }
@@ -863,6 +865,11 @@ export function App() {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
+  const [editingNodeSize, setEditingNodeSize] = useState<{
+    nodeId: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const [remarkMode, setRemarkMode] = useState<'edit' | 'preview'>('edit');
   const [message, setMessage] = useState('');
   const [messageKind, setMessageKind] = useState<ToastKind>('info');
@@ -1003,6 +1010,8 @@ export function App() {
   const editingSessionRef = useRef<EditingSession | null>(null);
   const commandPaletteSuspendsEditingRef = useRef(false);
   const editingTextRef = useRef('');
+  const editingMeasurementFrameRef = useRef<number | null>(null);
+  const pendingEditingMeasurementRef = useRef<{ nodeId: string; text: string } | null>(null);
   const nodeEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -1118,7 +1127,16 @@ export function App() {
     const result = createMindmapLayout(layoutRoot, availableNodeTypes, layoutDensity);
     return { result, durationMs: (typeof performance === 'undefined' ? Date.now() : performance.now()) - startedAt };
   }, [layoutDensity, layoutRoot, availableNodeTypes]);
-  const mindmapLayout = measuredLayout.result;
+  const mindmapLayout = useMemo(() => {
+    if (!editingNodeSize || editingNodeSize.nodeId !== editingNodeId) {
+      return measuredLayout.result;
+    }
+    return applyNodeContentSizeOverride(
+      measuredLayout.result,
+      editingNodeSize.nodeId,
+      editingNodeSize,
+    );
+  }, [editingNodeId, editingNodeSize, measuredLayout.result]);
   const layoutDurationMs = measuredLayout.durationMs;
   const isViewportCullingEnabled = autoPerformanceMode && mindmapIndex.flattenedNodeIds.length > viewportCullingThreshold;
   const worldViewport = useMemo(
@@ -1166,6 +1184,46 @@ export function App() {
       ),
     [mindmapLayout.nodes],
   );
+  const scheduleEditingNodeMeasurement = (nodeId: string, text: string) => {
+    pendingEditingMeasurementRef.current = { nodeId, text };
+    if (editingMeasurementFrameRef.current !== null) return;
+
+    editingMeasurementFrameRef.current = window.requestAnimationFrame(() => {
+      editingMeasurementFrameRef.current = null;
+      const pending = pendingEditingMeasurementRef.current;
+      pendingEditingMeasurementRef.current = null;
+      const node = pending ? mindmapIndex.nodeById.get(pending.nodeId) : null;
+      if (!node || !pending) return;
+
+      const size = getEditingNodeContentSize(
+        node,
+        pending.text,
+        availableNodeTypes,
+        node.id === layoutRoot.id,
+      );
+      setEditingNodeSize((current) => (
+        current?.nodeId === node.id &&
+        current.width === size.width &&
+        current.height === size.height
+          ? current
+          : { nodeId: node.id, width: size.width, height: size.height }
+      ));
+    });
+  };
+  const clearEditingNodeMeasurement = () => {
+    if (editingMeasurementFrameRef.current !== null) {
+      window.cancelAnimationFrame(editingMeasurementFrameRef.current);
+      editingMeasurementFrameRef.current = null;
+    }
+    pendingEditingMeasurementRef.current = null;
+    setEditingNodeSize(null);
+  };
+
+  useEffect(() => () => {
+    if (editingMeasurementFrameRef.current !== null) {
+      window.cancelAnimationFrame(editingMeasurementFrameRef.current);
+    }
+  }, []);
   const nodeTypeCreationOptions = useMemo(
     () => getNodeTypeCreationOptions(availableNodeTypes),
     [availableNodeTypes],
@@ -4244,6 +4302,7 @@ export function App() {
     editingTextRef.current = node.text;
     setEditingNodeId(node.id);
     setEditingText(node.text);
+    scheduleEditingNodeMeasurement(node.id, node.text);
   };
 
   const finishEditing = (blurEditor = false) => {
@@ -4252,6 +4311,7 @@ export function App() {
 
     // Clear the session first: canvas pointerup and textarea blur can occur in either order.
     editingSessionRef.current = null;
+    clearEditingNodeMeasurement();
     const draft = session ? editingTextRef.current : editingText;
     const nextText = resolveCommittedNodeText(draft);
     const currentNode = nodeId ? findNodeById(mindmap, nodeId) : null;
@@ -4283,6 +4343,9 @@ export function App() {
   const handleEditingTextChange = (text: string) => {
     editingTextRef.current = text;
     setEditingText(text);
+    if (editingNodeId) {
+      scheduleEditingNodeMeasurement(editingNodeId, text);
+    }
   };
 
   const commitEditingAndClearSelection = () => {
@@ -6743,6 +6806,7 @@ export function App() {
           onAddChild={() => handleAddChild(childNodeTypeId, { startEditing: true })}
           onAddSibling={() => handleAddSibling(siblingNodeTypeId, { startEditing: true })}
           onAddParent={() => handleAddParent(childNodeTypeId, { startEditing: true })}
+          onOpenRemark={handleOpenRemarkEditor}
           onSetPriority={handlePriorityChange}
           onSetProgress={handleProgressChange}
           onAddTag={handleAddTag}
@@ -7427,6 +7491,7 @@ export function App() {
               />
               <RightInspectorPanel
                 selectedNode={selectedNode}
+                nodeTypes={availableNodeTypes}
                 remarkMode={remarkMode}
                 activeRemarkMatch={
                   activeMatch?.field === 'remark' ? activeMatch : null

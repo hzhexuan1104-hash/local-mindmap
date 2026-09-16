@@ -2,7 +2,7 @@ export type MindmapNodeStyle = {
   /** `null` explicitly suppresses a node-type icon; omitted keeps type fallback. */
   icon?: string | null;
   shape?: MindmapNodeType['shape'];
-  /** Optional override. Normal nodes are left aligned; the root remains centered. */
+  /** Optional override. Ordinary nodes default to left alignment; the root stays centered. */
   textAlign?: 'left' | 'center' | 'right';
   backgroundColor?: string;
   borderColor?: string;

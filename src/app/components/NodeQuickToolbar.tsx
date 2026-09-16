@@ -5,6 +5,7 @@ import {
   NODE_PRIORITY_VALUES,
   NODE_PROGRESS_VALUES,
 } from '../../features/mindmap/nodeMarkers';
+import { ChevronIcon } from './ChevronIcon';
 import type {
   MindmapNode,
   MindmapNodePriority,
@@ -23,6 +24,7 @@ type NodeQuickToolbarProps = {
   onAddChild: () => void;
   onAddSibling: () => void;
   onAddParent: () => void;
+  onOpenRemark: () => void;
   onSetPriority: (priority?: MindmapNodePriority) => void;
   onSetProgress: (progress?: MindmapNodeProgress) => void;
   onAddTag: (tag: string) => boolean;
@@ -81,6 +83,7 @@ export function NodeQuickToolbar({
   onAddChild,
   onAddSibling,
   onAddParent,
+  onOpenRemark,
   onSetPriority,
   onSetProgress,
   onAddTag,
@@ -208,6 +211,20 @@ export function NodeQuickToolbar({
           <button type="button" className="node-quick-toolbar-structure-action" disabled={!hasSelection} onClick={onAddParent} title="插入上级主题"><span className="node-quick-action-symbol" aria-hidden="true">↰</span><span>上级</span></button>
         </div>
 
+        <div className="node-quick-toolbar-group" aria-label="备注">
+          <button
+            type="button"
+            className="node-quick-toolbar-remark-action"
+            disabled={!hasSelection}
+            onClick={onOpenRemark}
+            aria-label="打开备注编辑"
+            title="打开备注"
+          >
+            <span className="node-quick-action-symbol" aria-hidden="true">▤</span>
+            <span>备注</span>
+          </button>
+        </div>
+
         <div className="node-quick-toolbar-group" aria-label="优先级">
           <label className="node-quick-select node-quick-select-priority" title="优先级">
             <span className="node-quick-select-label">优先级</span>
@@ -264,7 +281,7 @@ export function NodeQuickToolbar({
           >
             <span>标签</span>
             <span>{tags.length ? `${tags.length} 个` : '添加'}</span>
-            <span aria-hidden="true">▾</span>
+            <ChevronIcon direction={isTagMenuOpen ? 'up' : 'down'} />
           </button>
 
         </div>

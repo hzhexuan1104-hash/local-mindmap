@@ -209,10 +209,17 @@ describe('node style helpers', () => {
     });
   });
 
-  it('uses normal left alignment, preserves a centered root, and honors a custom override', () => {
+  it('left-aligns ordinary nodes while keeping the root centered and honoring custom overrides', () => {
     expect(getEffectiveNodeStyle({ ...node, nodeTypeId: undefined }, null).textAlign).toBe('left');
     expect(getEffectiveNodeStyle({ ...node, nodeTypeId: undefined }, null, true).textAlign).toBe('center');
     expect(getEffectiveNodeStyle({ ...node, style: { textAlign: 'right' } }, null).textAlign).toBe('right');
+  });
+
+  it('keeps the renderer fallback left-aligned when no CSS variables are present', () => {
+    const css = readFileSync(resolve('src/styles/global.css'), 'utf8');
+
+    expect(css).toContain('text-align: var(--node-text-align, left);');
+    expect(css).toContain('justify-content: var(--node-content-justify, flex-start);');
   });
 
   it('reports editable node-type validation errors with a field-level name message', () => {

@@ -8,7 +8,10 @@ const MINDMAP_LAYOUT = {
   canvasPadding: 80,
   childHorizontalGap: 96,
   childVerticalGap: 80,
-  nodeMinWidth: 88,
+  // A normal node must be able to shrink to its measured text plus the two
+  // horizontal paddings; otherwise short, left-aligned labels have visibly
+  // unequal gaps on the two sides of the frame.
+  nodeMinWidth: 0,
   // The default 16px CJK font can keep roughly 25 Chinese characters on one
   // line before wrapping, while still retaining a bounded map width.
   nodeMaxWidth: 460,
@@ -87,6 +90,8 @@ export type MindmapLayoutNode = {
 
 export type MindmapLayoutLine = {
   id: string;
+  fromNodeId: string;
+  toNodeId: string;
   from: { x: number; y: number };
   to: { x: number; y: number };
 };
@@ -102,6 +107,9 @@ export type NodeContentSize = {
   width: number;
   height: number;
   lineCount: number;
+  textWidth: number;
+  textHeight: number;
+  tagHeight: number;
 };
 
 type AutoLayoutEntry = { id: string; x: number; y: number };
@@ -196,30 +204,53 @@ function getNodeMarkerWidth(node: MindmapNode, nodeType: MindmapNodeType | null)
       MINDMAP_LAYOUT.iconGap;
 }
 
-function getTagRowCount(tags: string[], availableWidth: number) {
+function getTagLayout(tags: string[], availableWidth: number) {
   if (tags.length === 0) {
-    return 0;
+    return { preferredWidth: 0, height: 0, rowCount: 0 };
   }
 
-  let rows = 1;
+  const tagHorizontalInsets = 14;
+  const tagLineHeight = Math.ceil(MINDMAP_LAYOUT.tagFontSize * 1.2);
+  const tagVerticalInsets = 6;
+  const tagWidths = tags.map((tag) => Math.ceil(
+    measureNodeText(tag, MINDMAP_LAYOUT.tagFontSize, false),
+  ) + tagHorizontalInsets);
+  const preferredWidth = Math.min(availableWidth, Math.max(...tagWidths));
   let rowWidth = 0;
-  tags.forEach((tag) => {
-    const tagWidth = Math.min(
-      availableWidth,
-      Math.ceil(measureNodeText(tag, MINDMAP_LAYOUT.tagFontSize, false)) + 14,
+  let rowHeight = 0;
+  let rowsHeight = 0;
+  let rowCount = 0;
+
+  tagWidths.forEach((naturalWidth, index) => {
+    const tagWidth = Math.min(availableWidth, naturalWidth);
+    const textWidth = Math.max(1, tagWidth - tagHorizontalInsets);
+    const lineCount = Math.max(
+      1,
+      wrapText(tags[index]!, textWidth, MINDMAP_LAYOUT.tagFontSize, false).length,
+    );
+    const tagHeight = Math.max(
+      MINDMAP_LAYOUT.tagHeight,
+      lineCount * tagLineHeight + tagVerticalInsets,
     );
     const nextWidth = rowWidth === 0 ? tagWidth : rowWidth + MINDMAP_LAYOUT.tagGap + tagWidth;
 
     if (rowWidth > 0 && nextWidth > availableWidth) {
-      rows += 1;
+      rowsHeight += rowHeight + MINDMAP_LAYOUT.tagGap;
+      rowCount += 1;
       rowWidth = tagWidth;
+      rowHeight = tagHeight;
       return;
     }
 
     rowWidth = nextWidth;
+    rowHeight = Math.max(rowHeight, tagHeight);
   });
 
-  return rows;
+  return {
+    preferredWidth,
+    height: rowsHeight + rowHeight,
+    rowCount: rowCount + 1,
+  };
 }
 
 export function getNodeContentSize(
@@ -245,22 +276,42 @@ export function getNodeContentSize(
   const widestLine = Math.max(...lines.map((line) => measureNodeText(line, style.fontSize, style.bold)));
   const lineHeight = Math.ceil(style.fontSize * 1.4);
   const contentWidth = widestLine + markerWidth;
-  const unclampedWidth = (contentWidth + horizontalPadding * 2 + pillExtra) * diamondFactor;
-  const width = Math.max(minWidth, Math.min(MINDMAP_LAYOUT.nodeMaxWidth, Math.ceil(unclampedWidth)));
   const tags = normalizeNodeTags(node.tags);
-  const tagRows = getTagRowCount(
-    tags,
-    Math.max(48, width - horizontalPadding * 2),
-  );
-  const tagHeight = tagRows
-    ? tagRows * MINDMAP_LAYOUT.tagHeight + (tagRows - 1) * MINDMAP_LAYOUT.tagGap + 6
-    : 0;
-  const baseHeight = lines.length * lineHeight + tagHeight + verticalPadding * 2;
+  const availableTagWidth = Math.max(48, MINDMAP_LAYOUT.nodeMaxWidth - horizontalPadding * 2);
+  const tagLayoutAtMaximumWidth = getTagLayout(tags, availableTagWidth);
+  const unclampedTextWidth = (contentWidth + horizontalPadding * 2 + pillExtra) * diamondFactor;
+  const unclampedTagWidth = (tagLayoutAtMaximumWidth.preferredWidth + horizontalPadding * 2 + pillExtra) * diamondFactor;
+  const unclampedWidth = Math.max(unclampedTextWidth, unclampedTagWidth);
+  const width = Math.max(minWidth, Math.min(MINDMAP_LAYOUT.nodeMaxWidth, Math.ceil(unclampedWidth)));
+  const tagLayout = getTagLayout(tags, Math.max(48, width - horizontalPadding * 2));
+  const tagHeight = tagLayout.rowCount ? tagLayout.height + 6 : 0;
+  const textHeight = lines.length * lineHeight;
+  const baseHeight = textHeight + tagHeight + verticalPadding * 2;
   const height = Math.max(
     minHeight,
     Math.ceil(shape === 'diamond' ? baseHeight + Math.max(18, width * 0.12) : baseHeight),
   );
-  return { width, height, lineCount: lines.length };
+  return {
+    width,
+    height,
+    lineCount: lines.length,
+    textWidth: Math.ceil(widestLine),
+    textHeight,
+    tagHeight,
+  };
+}
+
+/**
+ * Editing is deliberately a thin wrapper around the display measurement so
+ * draft text cannot drift into a second, CSS-only sizing model.
+ */
+export function getEditingNodeContentSize(
+  node: MindmapNode,
+  editingText: string,
+  nodeTypes: MindmapNodeType[] = [],
+  isRoot = false,
+) {
+  return getNodeContentSize({ ...node, text: editingText }, nodeTypes, isRoot);
 }
 
 function collectVisibleNodes(node: MindmapNode, nodes: MindmapNode[] = []) {
@@ -356,7 +407,13 @@ export function createMindmapLayout(
       if (!childNode) return;
       const fromRect = { x: layoutNode.x, y: layoutNode.y, width: layoutNode.width, height: layoutNode.height };
       const toRect = { x: childNode.x, y: childNode.y, width: childNode.width, height: childNode.height };
-      lines.push({ id: `${layoutNode.id}-${child.id}`, from: getNodeBoundaryAnchor(fromRect, getRectCenter(toRect), layoutNode.shape), to: getNodeBoundaryAnchor(toRect, getRectCenter(fromRect), childNode.shape) });
+      lines.push({
+        id: `${layoutNode.id}-${child.id}`,
+        fromNodeId: layoutNode.id,
+        toNodeId: child.id,
+        from: getNodeBoundaryAnchor(fromRect, getRectCenter(toRect), layoutNode.shape),
+        to: getNodeBoundaryAnchor(toRect, getRectCenter(fromRect), childNode.shape),
+      });
     });
   });
   const maxX = Math.max(...nodes.map((node) => node.x + node.width), POSITIONED_LAYOUT.nodeWidth);
@@ -368,6 +425,52 @@ export function createMindmapLayout(
     lines: lines.map((line) => ({ ...line, from: { x: line.from.x + offsetX, y: line.from.y + offsetY }, to: { x: line.to.x + offsetX, y: line.to.y + offsetY } })),
     width: Math.max(maxX + POSITIONED_LAYOUT.canvasPadding * 2, POSITIONED_LAYOUT.nodeWidth),
     height: Math.max(maxY + POSITIONED_LAYOUT.canvasPadding * 2, POSITIONED_LAYOUT.nodeHeight),
+  };
+}
+
+/**
+ * Applies a transient, editor-only size without measuring or relaying out the
+ * rest of the tree. The committed layout remains the source of truth once the
+ * edit finishes, while hitboxes, edges, culling and the mini map all use the
+ * current visible bounds.
+ */
+export function applyNodeContentSizeOverride(
+  layout: MindmapLayoutResult,
+  nodeId: string,
+  size: Pick<NodeContentSize, 'width' | 'height'>,
+): MindmapLayoutResult {
+  const target = layout.nodes.find((node) => node.id === nodeId);
+  if (!target || (target.width === size.width && target.height === size.height)) {
+    return layout;
+  }
+
+  const nodes = layout.nodes.map((node) => node.id === nodeId
+    ? { ...node, width: size.width, height: size.height }
+    : node,
+  );
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const lines = layout.lines.map((line) => {
+    if (line.fromNodeId !== nodeId && line.toNodeId !== nodeId) return line;
+    const fromNode = nodeById.get(line.fromNodeId);
+    const toNode = nodeById.get(line.toNodeId);
+    if (!fromNode || !toNode) return line;
+    const fromRect = { x: fromNode.x, y: fromNode.y, width: fromNode.width, height: fromNode.height };
+    const toRect = { x: toNode.x, y: toNode.y, width: toNode.width, height: toNode.height };
+    return {
+      ...line,
+      from: getNodeBoundaryAnchor(fromRect, getRectCenter(toRect), fromNode.shape),
+      to: getNodeBoundaryAnchor(toRect, getRectCenter(fromRect), toNode.shape),
+    };
+  });
+  const maxX = Math.max(...nodes.map((node) => node.x + node.width));
+  const maxY = Math.max(...nodes.map((node) => node.y + node.height));
+
+  return {
+    ...layout,
+    nodes,
+    lines,
+    width: Math.max(maxX + POSITIONED_LAYOUT.canvasPadding, POSITIONED_LAYOUT.nodeWidth),
+    height: Math.max(maxY + POSITIONED_LAYOUT.canvasPadding, POSITIONED_LAYOUT.nodeHeight),
   };
 }
 

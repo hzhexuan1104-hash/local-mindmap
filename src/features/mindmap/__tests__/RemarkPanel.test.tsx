@@ -37,18 +37,21 @@ describe('RemarkPanel', () => {
     expect(html).toContain('>实际备注</textarea>');
   });
 
-  it('places the three icon actions in the remark section header', () => {
+  it('places the embedded node title and four icon actions in one remark header', () => {
     const html = renderToStaticMarkup(
       <RemarkPanel
         selectedNode={{ id: 'node-1', text: '新节点', remark: '', children: [] }}
         mode="edit"
         onModeChange={noop}
         onRemarkChange={noop}
+        onCollapse={noop}
         embedded
       />,
     );
 
     expect(html).toContain('remark-section-header');
+    expect(html).toContain('remark-node-title');
+    expect(html).toContain('>新节点</h2>');
     expect(html).toContain('remark-content-frame is-edit');
     expect(html).toContain('remark-inline-actions');
     expect(html.indexOf('remark-section-header')).toBeLessThan(html.indexOf('remark-content-frame is-edit'));
@@ -56,6 +59,7 @@ describe('RemarkPanel', () => {
     expect(html).toContain('aria-label="编辑备注"');
     expect(html).toContain('aria-label="预览备注"');
     expect(html).toContain('aria-label="放大备注"');
+    expect(html).toContain('aria-label="隐藏备注面板"');
     expect(html).not.toContain('remark-mode-switch');
     expect(html).not.toContain('remark-panel-actions');
   });

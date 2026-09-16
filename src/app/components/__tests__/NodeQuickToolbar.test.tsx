@@ -16,6 +16,7 @@ describe('NodeQuickToolbar', () => {
         onAddChild={() => undefined}
         onAddSibling={() => undefined}
         onAddParent={() => undefined}
+        onOpenRemark={() => undefined}
         onSetPriority={() => undefined}
         onSetProgress={() => undefined}
         onAddTag={() => false}
@@ -34,6 +35,8 @@ describe('NodeQuickToolbar', () => {
     expect(html).toContain('node-quick-action-symbol');
     expect(html).toContain('aria-label="设置优先级"');
     expect(html).toContain('aria-label="设置完成度"');
+    expect(html).toContain('class="chevron-icon"');
+    expect(html).toContain('data-chevron-direction="down"');
     expect(html).toContain('title="优先级"');
     expect(html).toContain('title="完成度"');
     expect(html).toContain('⚑ 无');
@@ -44,7 +47,9 @@ describe('NodeQuickToolbar', () => {
     expect(html).not.toContain('很高');
     expect(html).not.toContain('未开始');
     expect(html).not.toContain('进行中');
-    expect(html).not.toContain('>备注<');
+    expect(html).toContain('>备注</span>');
+    expect(html).toContain('aria-label="打开备注编辑"');
+    expect(html).toContain('>▤</span>');
     expect(html).not.toContain('node-note-popover');
     expect(html).not.toContain('<textarea');
   });
@@ -73,6 +78,7 @@ describe('NodeQuickToolbar', () => {
         onAddChild={() => undefined}
         onAddSibling={() => undefined}
         onAddParent={() => undefined}
+        onOpenRemark={() => undefined}
         onSetPriority={() => undefined}
         onSetProgress={() => undefined}
         onAddTag={() => true}
@@ -99,6 +105,7 @@ describe('NodeQuickToolbar', () => {
         onAddChild={() => undefined}
         onAddSibling={() => undefined}
         onAddParent={() => undefined}
+        onOpenRemark={() => undefined}
         onSetPriority={() => undefined}
         onSetProgress={() => undefined}
         onAddTag={() => false}
@@ -119,6 +126,9 @@ describe('NodeQuickToolbar', () => {
     expect(css).toMatch(/\.node-quick-select select\s*\{[^}]*min-width:\s*104px;/);
     expect(css).toMatch(/\.node-quick-select-progress select\s*\{[^}]*min-width:\s*104px;/);
     expect(css).not.toContain('最高优先级');
+    expect(css).toContain('.node-quick-select select,\n.node-style-toolbar select');
+    expect(css).toContain('appearance: none;');
+    expect(css).toContain('stroke-width=\'1.75\'');
   });
 
   it('anchors the tag dialog outside the horizontally scrolling toolbar row', () => {

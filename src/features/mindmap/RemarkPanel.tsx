@@ -13,11 +13,12 @@ type RemarkPanelProps = {
   onRemarkChange: (remark: string) => void;
   onCollapse?: () => void;
   embedded?: boolean;
+  embeddedTitle?: string;
   activeMatch?: SearchMatch | null;
   focusRequestId?: number;
 };
 
-type RemarkActionIconName = 'edit' | 'preview' | 'expand';
+type RemarkActionIconName = 'edit' | 'preview' | 'expand' | 'collapse';
 
 function RemarkActionIcon({ name }: { name: RemarkActionIconName }) {
   if (name === 'edit') {
@@ -38,6 +39,14 @@ function RemarkActionIcon({ name }: { name: RemarkActionIconName }) {
     );
   }
 
+  if (name === 'collapse') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m14.5 5.5-6.5 6.5 6.5 6.5" />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="10.5" cy="10.5" r="5.5" />
@@ -53,6 +62,7 @@ export function RemarkPanel({
   onRemarkChange,
   onCollapse,
   embedded = false,
+  embeddedTitle,
   activeMatch = null,
   focusRequestId,
 }: RemarkPanelProps) {
@@ -62,6 +72,7 @@ export function RemarkPanel({
     activeMatch?.field === 'remark' && activeMatch.nodeId === selectedNode.id
       ? activeMatch
       : null;
+  const panelTitle = embeddedTitle?.trim() || selectedNode.text.trim() || '未命名节点';
 
   useEffect(() => {
     if (!remarkMatch || mode !== 'edit') {
@@ -125,7 +136,11 @@ export function RemarkPanel({
         ) : null}
 
         <header className="remark-section-header">
-          <span>备注</span>
+          {embedded ? (
+            <h2 className="remark-node-title" title={panelTitle}>
+              {panelTitle}
+            </h2>
+          ) : <span>备注</span>}
           <div className="remark-inline-actions" role="toolbar" aria-label="备注工具">
             <button
               type="button"
@@ -160,6 +175,21 @@ export function RemarkPanel({
               <RemarkActionIcon name="expand" />
               <span className="sr-only">放大备注</span>
             </button>
+            {embedded && onCollapse ? (
+              <>
+                <span className="remark-inline-action-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="remark-inline-action"
+                  onClick={onCollapse}
+                  aria-label="隐藏备注面板"
+                  title="隐藏备注面板"
+                >
+                  <RemarkActionIcon name="collapse" />
+                  <span className="sr-only">隐藏备注面板</span>
+                </button>
+              </>
+            ) : null}
           </div>
         </header>
 

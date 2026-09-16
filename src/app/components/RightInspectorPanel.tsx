@@ -1,4 +1,5 @@
 import { RemarkPanel } from '../../features/mindmap/RemarkPanel';
+import { findNodeTypeById } from '../../features/mindmap/nodeTypes';
 import type { SearchMatch } from '../../features/mindmap/searchReplace';
 import type { MindmapNode, MindmapNodeType } from '../../features/mindmap/types';
 
@@ -6,7 +7,6 @@ export type RemarkFocusRequest = { id: number; nodeId: string };
 
 type RightInspectorPanelProps = {
   selectedNode: MindmapNode;
-  /** Kept in the panel contract so existing callers remain compatible. */
   nodeTypes?: MindmapNodeType[];
   remarkMode: 'edit' | 'preview';
   activeRemarkMatch: SearchMatch | null;
@@ -19,7 +19,7 @@ type RightInspectorPanelProps = {
 /** The inspector is deliberately remark-only; node style controls live on the canvas. */
 export function RightInspectorPanel({
   selectedNode,
-  nodeTypes: _nodeTypes,
+  nodeTypes = [],
   remarkMode,
   activeRemarkMatch,
   remarkFocusRequest = null,
@@ -27,24 +27,10 @@ export function RightInspectorPanel({
   onRemarkChange,
   onCollapse,
 }: RightInspectorPanelProps) {
+  const nodeTypeName = findNodeTypeById(nodeTypes, selectedNode.nodeTypeId)?.name ?? '普通节点';
+
   return (
     <aside className="inspector-panel inspector-panel-remark" aria-label="节点备注">
-      <header className="inspector-header inspector-remark-header">
-        <div>
-          <span>节点</span>
-          <h2>备注面板</h2>
-        </div>
-        <button
-          type="button"
-          className="panel-collapse-action inspector-remark-collapse"
-          onClick={onCollapse}
-          aria-label="收起右侧备注面板"
-          title="收起右侧备注面板"
-        >
-          ‹
-        </button>
-      </header>
-
       <div className="inspector-content">
         <RemarkPanel
           selectedNode={selectedNode}
@@ -53,6 +39,8 @@ export function RightInspectorPanel({
           onRemarkChange={onRemarkChange}
           activeMatch={activeRemarkMatch}
           focusRequestId={remarkFocusRequest?.nodeId === selectedNode.id ? remarkFocusRequest.id : undefined}
+          onCollapse={onCollapse}
+          embeddedTitle={nodeTypeName}
           embedded
         />
       </div>
