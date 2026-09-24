@@ -1630,7 +1630,7 @@ h3 {
 }
 
 .markdown-preview table {
-  display: block;
+  display: table;
   max-width: 100%;
   width: 100%;
   overflow-x: auto;
@@ -1641,7 +1641,7 @@ h3 {
 
 .markdown-preview th,
 .markdown-preview td {
-  max-width: 0;
+  min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
   padding: 8px;
@@ -1673,7 +1673,7 @@ h3 {
 .remark-preview-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 1400;
   display: grid;
   place-items: center;
   padding: 32px;
@@ -6569,15 +6569,15 @@ body.is-resizing-inspector * {
 }
 
 .node-style-toolbar select {
-  min-width: 62px;
-  max-width: 82px;
-  padding: 0 20px 0 7px;
+  min-width: 76px;
+  max-width: 96px;
+  padding: 0 28px 0 7px;
   cursor: pointer;
 }
 
 .node-style-toolbar .node-style-toolbar-icon-select {
-  min-width: 76px;
-  max-width: 96px;
+  min-width: 100px;
+  max-width: 128px;
 }
 
 .node-style-toolbar select:hover:not(:disabled),
@@ -6587,7 +6587,7 @@ body.is-resizing-inspector * {
 .node-style-toolbar-color:focus-within {
   border-color: rgb(55 124 246 / 24%);
   color: var(--accent-strong);
-  background: var(--accent-soft);
+  background-color: var(--accent-soft);
   outline: 0;
 }
 
@@ -7167,4 +7167,57 @@ body.is-resizing-inspector * {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Screenshot feedback: preserve explicit title breaks and separate preview sections. */
+.node-text-content { white-space: pre-wrap; }
+
+.remark-preview-dialog-header {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.remark-preview-dialog-header > div { flex: 1; }
+.remark-preview-dialog-header h2 {
+  max-height: 20vh;
+  overflow: auto;
+  margin: 6px 0 0;
+  font-size: 18px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.remark-preview-dialog-header button { flex-shrink: 0; }
+.remark-preview-dialog-body { min-height: 0; flex: 1 1 auto; }
+.remark-preview-section-label { margin: 0 0 12px; color: var(--text-secondary); font-size: 12px; font-weight: 700; }
+.remark-preview-navigation { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.remark-preview-navigation span { color: var(--text-secondary); font-size: 13px; }
+.remark-preview-navigation button:disabled { opacity: .45; cursor: default; }
+
+/* Portal notification stays readable at narrow widths, outside document status. */
+.top-status-message {
+  position: fixed;
+  z-index: 1500;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  min-width: 200px;
+  max-width: min(560px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 12px 18px;
+  border-radius: 12px;
+  color: var(--toast-text, #24364b);
+  background: var(--toast-bg, #f0f6ff);
+  border-color: var(--toast-border, #8eb5e6);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 8px 24px rgb(20 28 40 / 18%);
+  pointer-events: none;
 }

@@ -285,6 +285,7 @@ import {
   SEARCH_SCOPE_LABELS,
   shouldResetSearchOnPanelClose,
   type SearchMatch,
+  type SearchCursor,
   type SearchOptions,
   type SearchScope,
 } from '../features/mindmap/searchReplace';
@@ -648,7 +649,8 @@ function NodeTextEditor({
       onChange={(event) => onChange(event.target.value)}
       onBlur={onCommit}
       onKeyDown={(event) => {
-        if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+        event.stopPropagation();
+        if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
           event.preventDefault();
           onCommit();
         }
@@ -863,6 +865,7 @@ export function App() {
     useState<CanvasViewState>(DEFAULT_CANVAS_VIEW);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [pendingLocateNodeId, setPendingLocateNodeId] = useState<string | null>(null);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [editingNodeSize, setEditingNodeSize] = useState<{
@@ -900,6 +903,8 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [replacementText, setReplacementText] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('all');
+  const [searchBranchId, setSearchBranchId] = useState<string | null>(null);
+  const replacementCursorRef = useRef<SearchCursor | null>(null);
   const [searchOptions, setSearchOptions] = useState<SearchOptions>(DEFAULT_SEARCH_OPTIONS);
   const [searchHasRun, setSearchHasRun] = useState(false);
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
@@ -1290,23 +1295,35 @@ export function App() {
   }, [boxSelection, canvasView]);
   const searchRoot = useMemo(
     () =>
-      focusedRootId
+      searchScope === 'branch' && searchBranchId
+        ? findNodeById(mindmap, searchBranchId) ?? mindmap
+        : focusedRootId
         ? focusedMindmap
-        : searchScope === 'branch' && selectedNodeId
-        ? findNodeById(mindmap, selectedNodeId) ?? mindmap
         : mindmap,
-    [focusedMindmap, focusedRootId, mindmap, searchScope, selectedNodeId],
+    [focusedMindmap, focusedRootId, mindmap, searchScope, searchBranchId],
   );
   const rawSearchMatches = useMemo(
     () => findMindmapMatches(searchRoot, searchQuery, searchScope, searchOptions),
     [searchOptions, searchRoot, searchQuery, searchScope],
   );
   const searchMatches = searchHasRun ? rawSearchMatches : [];
-  const searchMatchNodeIds = useMemo(
-    () => new Set(searchMatches.map((match) => match.nodeId)),
-    [searchMatches],
-  );
   const activeMatch = searchMatches[activeMatchIndex] ?? null;
+  const searchMatchNodeIds = useMemo(
+    () => new Set(activeMatch ? [activeMatch.nodeId] : []),
+    [activeMatch?.nodeId],
+  );
+  useEffect(() => {
+    if (!pendingLocateNodeId || !canvasRef.current) return;
+    const node = layoutNodeById.get(pendingLocateNodeId);
+    if (!node) return;
+    const viewport = canvasRef.current.getBoundingClientRect();
+    setCanvasView((view) => ({
+      ...view,
+      offsetX: viewport.width / 2 - (node.x + node.width / 2) * view.scale,
+      offsetY: viewport.height / 2 - (node.y + node.height / 2) * view.scale,
+    }));
+    setPendingLocateNodeId(null);
+  }, [pendingLocateNodeId, layoutNodeById]);
   const templateCategories = useMemo(
     () => getTemplateCategories([...availableOfficialTemplates, ...templates]),
     [availableOfficialTemplates, templates],
@@ -1702,6 +1719,7 @@ export function App() {
   useEffect(() => {
     setActiveMatchIndex(0);
     setSearchHasRun(false);
+    replacementCursorRef.current = null;
   }, [searchOptions, searchQuery, searchScope]);
 
   useEffect(() => {
@@ -1885,7 +1903,7 @@ export function App() {
     messageTimerRef.current = window.setTimeout(() => {
       setMessage('');
       setMessageKind('info');
-    }, 2400);
+    }, kind === 'warning' || kind === 'error' ? 5000 : 3200);
   };
 
   const openCommandPalette = () => {
@@ -4426,41 +4444,46 @@ export function App() {
       return;
     }
 
-    const normalizedIndex =
-      (nextIndex + currentMatches.length) % currentMatches.length;
+    const normalizedIndex = !searchHasRun
+      ? (nextIndex < 0 ? currentMatches.length - 1 : 0)
+      : (nextIndex + currentMatches.length) % currentMatches.length;
     setActiveMatchIndex(normalizedIndex);
     locateNode(currentMatches[normalizedIndex].nodeId);
   };
 
   const handleReplaceCurrent = () => {
     const query = searchQuery.trim();
+    const currentMatches = searchHasRun ? searchMatches : rawSearchMatches;
+    const cursor = replacementCursorRef.current;
+    const match = activeMatch ?? currentMatches[cursor
+      ? findNextMatchIndex(searchRoot, currentMatches, cursor)
+      : 0];
 
-    if (!query || !activeMatch) {
+    setSearchHasRun(true);
+    if (!query || !match) {
       showMessage('没有可替换的匹配项');
       return;
     }
 
     const nextMindmap = replaceMatchInMindmap(
       mindmap,
-      activeMatch,
+      match,
       query,
       replacementText,
     );
-    const nextMatches = findMindmapMatches(nextMindmap, query, searchScope, searchOptions);
-    const nextMatchIndex = findNextMatchIndex(nextMindmap, nextMatches, {
-      nodeId: activeMatch.nodeId,
-      field: activeMatch.field,
-      offset: activeMatch.start + replacementText.length,
-    });
+    replacementCursorRef.current = {
+      nodeId: match.nodeId,
+      field: match.field,
+      offset: match.start + replacementText.length,
+    };
 
     recordHistory();
-    setMindmap(nextMindmap);
-    setActiveMatchIndex(Math.max(0, nextMatchIndex));
-
-    const nextMatch = nextMatches[nextMatchIndex];
-    if (nextMatch) {
-      setSelectedNodeId(nextMatch.nodeId);
-      setSelectedNodeIds([nextMatch.nodeId]);
+    setMindmap(expandAncestors(nextMindmap, match.nodeId, mindmapIndex));
+    setActiveMatchIndex(-1);
+    locateNode(match.nodeId);
+    if (match.field === 'remark') {
+      setIsRemarkPanelCollapsed(false);
+      setRemarkMode('edit');
     }
     showMessage('已替换 1 处');
   };
@@ -4484,11 +4507,9 @@ export function App() {
 
     recordHistory();
     setMindmap((currentMindmap) =>
-      searchScope === 'branch' && selectedNodeId
-        ? updateNodeById(currentMindmap, selectedNodeId, (node) =>
-            replaceAllInMindmap(node, query, replacementText, 'all', searchOptions),
-          )
-        : replaceAllInMindmap(currentMindmap, query, replacementText, searchScope, searchOptions),
+      updateNodeById(currentMindmap, searchRoot.id, (node) =>
+        replaceAllInMindmap(node, query, replacementText, searchScope, searchOptions),
+      ),
     );
     setSearchHasRun(true);
     showMessage(`全部替换完成：${currentMatches.length} 处`);
@@ -4813,16 +4834,7 @@ export function App() {
     setMindmap((currentMindmap) => expandAncestors(currentMindmap, nodeId, mindmapIndex));
     setSelectedNodeId(nodeId);
     setSelectedNodeIds([nodeId]);
-    requestAnimationFrame(() => {
-      const layoutNode = layoutNodeById.get(nodeId);
-      if (!layoutNode || !canvasRef.current) return;
-      const viewport = canvasRef.current.getBoundingClientRect();
-      setCanvasView((view) => ({
-        ...view,
-        offsetX: viewport.width / 2 - (layoutNode.x + layoutNode.width / 2) * view.scale,
-        offsetY: viewport.height / 2 - (layoutNode.y + layoutNode.height / 2) * view.scale,
-      }));
-    });
+    setPendingLocateNodeId(nodeId);
   };
 
   const handleFocusBranch = (nodeId: string) => {
@@ -6748,7 +6760,7 @@ export function App() {
       { id: 'types', label: '节点类型', children: [{ id: 'manage', label: '节点类型管理', checked: activeWorkspacePanel === 'node-manager', execute: () => openNodeManager() }, { id: 'default', label: '新建子节点默认类型', children: [{ id: 'normal', label: '普通节点', checked: !childNodeTypeId, execute: () => setChildNodeTypeId('') }, ...availableNodeTypes.map((nodeType) => ({ id: nodeType.id, label: nodeType.name, checked: childNodeTypeId === nodeType.id, execute: () => setChildNodeTypeId(nodeType.id) }))] }] },
     ] },
     { id: 'view', label: '视图', items: [
-      { id: 'panels', label: '面板', children: [{ id: 'outline', label: '大纲导航', checked: activeWorkspacePanel === 'outline', execute: () => setActiveWorkspacePanel((current) => current === 'outline' ? null : 'outline') }, { id: 'inspector', label: '右侧属性面板', checked: !isRemarkPanelCollapsed, execute: () => setIsRemarkPanelCollapsed((collapsed) => !collapsed) }, { id: 'minimap', label: '小地图', checked: showMiniMap, execute: () => setShowMiniMap((visible) => !visible) }, { id: 'performance', label: '性能信息', checked: activeWorkspacePanel === 'performance', execute: () => setActiveWorkspacePanel('performance') }] },
+      { id: 'panels', label: '面板', children: [{ id: 'outline', label: '大纲导航', checked: activeWorkspacePanel === 'outline', execute: () => setActiveWorkspacePanel((current) => current === 'outline' ? null : 'outline') }, { id: 'inspector', label: '右侧备注面板', checked: !isRemarkPanelCollapsed, execute: () => setIsRemarkPanelCollapsed((collapsed) => !collapsed) }, { id: 'minimap', label: '小地图', checked: showMiniMap, execute: () => setShowMiniMap((visible) => !visible) }, { id: 'performance', label: '性能信息', checked: activeWorkspacePanel === 'performance', execute: () => setActiveWorkspacePanel('performance') }] },
       { id: 'zoom', label: '缩放与定位', children: [{ id: 'in', label: '放大', execute: () => setCanvasView((view) => zoomCanvasView(view, 'in')) }, { id: 'out', label: '缩小', execute: () => setCanvasView((view) => zoomCanvasView(view, 'out')) }, { id: 'reset', label: '重置缩放', execute: () => setCanvasView((view) => ({ ...view, scale: 1 })) }, { id: 'center', label: '居中画布', execute: () => setCanvasView(centerCanvasView()) }] },
       { id: 'expand', label: '展开与折叠', children: [{ id: 'all', label: '全部展开', execute: handleExpandAll }, { id: 'none', label: '全部折叠', execute: handleCollapseAll }, { id: 'one', label: '展开到第 1 层', execute: () => handleExpandToDepth(1) }, { id: 'two', label: '展开到第 2 层', execute: () => handleExpandToDepth(2) }, { id: 'three', label: '展开到第 3 层', execute: () => handleExpandToDepth(3) }] },
       { id: 'layout', label: '布局结构', children: [{ id: 'density', label: '布局密度', children: [{ id: 'compact', label: '紧凑', checked: layoutDensity === 'compact', execute: () => handleLayoutDensityChange('compact') }, { id: 'comfortable', label: '标准', checked: layoutDensity === 'comfortable', execute: () => handleLayoutDensityChange('comfortable') }] }, { id: 'auto', label: '重新自动布局', execute: handleResetAutoLayout }, { id: 'focus', label: isFocusMode ? '退出专注模式' : '进入专注模式', execute: isFocusMode ? handleExitFocusMode : handleEnterFocusMode }] },
@@ -7352,7 +7364,7 @@ export function App() {
                 <span>{getSearchPanelStatusText({ query: searchQuery, hasRun: searchHasRun, matchCount: searchMatches.length, activeIndex: activeMatchIndex })}</span>
                 <details>
                   <summary>选项</summary>
-                  <select value={searchScope} aria-label="查找范围" onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
+                  <select value={searchScope} aria-label="查找范围" onChange={(event) => { setSearchBranchId(selectedNodeId); setSearchScope(event.target.value as SearchScope); }}>
                     {Object.entries(SEARCH_SCOPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                   <label>
@@ -7470,14 +7482,14 @@ export function App() {
 
         {!isFocusMode ? (
           isRemarkPanelCollapsed ? (
-            <aside className="inspector-collapsed-bar" aria-label="属性面板已收起">
+            <aside className="inspector-collapsed-bar" aria-label="备注面板已收起">
               <button
                 type="button"
                 onClick={() => setIsRemarkPanelCollapsed(false)}
-                aria-label="打开右侧属性面板"
-                title="打开右侧属性面板"
+                aria-label="打开右侧备注面板"
+                title="打开右侧备注面板"
               >
-                ‹ {selectedNodeId ? '当前节点' : '属性'}
+                ‹ 备注
               </button>
             </aside>
           ) : (
@@ -7490,6 +7502,8 @@ export function App() {
                 onPointerDown={handleInspectorResizePointerDown}
               />
               <RightInspectorPanel
+                siblings={mindmapIndex.nodeById.get(mindmapIndex.parentById.get(selectedNode.id) ?? '')?.children ?? [selectedNode]}
+                onNavigate={(nodeId) => locateNode(nodeId, { exitFocusIfNeeded: true })}
                 selectedNode={selectedNode}
                 nodeTypes={availableNodeTypes}
                 remarkMode={remarkMode}

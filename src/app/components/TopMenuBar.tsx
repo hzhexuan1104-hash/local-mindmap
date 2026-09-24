@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MenuGroupDefinition, MenuItemDefinition } from '../../features/menu/menuTypes';
 import { ChevronIcon } from './ChevronIcon';
@@ -124,7 +125,8 @@ export function TopMenuBar({
     );
   };
 
-  return <header className="top-menu-bar" aria-label="应用工具栏">
+  const toast = message ? <div className={`top-status-message is-${messageKind}`} role={messageKind === 'error' || messageKind === 'warning' ? 'alert' : 'status'} aria-atomic="true"><span aria-hidden="true">{messageKind === 'success' ? '✓' : messageKind === 'warning' || messageKind === 'error' ? '!' : 'ℹ'}</span>{message}</div> : null;
+  return <><header className="top-menu-bar" aria-label="应用工具栏">
     <nav className="top-menu-nav topbar-left-menus topbar-non-shrink" aria-label="顶部菜单" data-testid="topbar-left-menus" ref={menuBarRef}>
       {menus.map((menu) => {
         const isOpen = activeMenuId === menu.id;
@@ -147,6 +149,6 @@ export function TopMenuBar({
         {isQuickToolbarExpanded ? '收起快捷操作' : '展开快捷操作'}
       </button>
     ) : null}
-    <div className="topbar-document-status topbar-true-center" data-testid="topbar-document-status"><button type="button" className="top-document-title topbar-title-ellipsis" title={currentPath ?? currentTitle} onClick={onOpenFileStatus}><span className={['document-status-dot', isDirty ? 'is-dirty' : '', `is-${saveStatus}`].filter(Boolean).join(' ')} aria-hidden="true" /><strong>{currentTitle}</strong><span className="document-status-label">{saveStatusLabel}</span></button>{message ? <span className={`top-status-message is-${messageKind}`} role="status" title={message}>{message}</span> : null}</div>
-  </header>;
+    <div className="topbar-document-status topbar-true-center" data-testid="topbar-document-status"><button type="button" className="top-document-title topbar-title-ellipsis" title={currentPath ?? currentTitle} onClick={onOpenFileStatus}><span className={['document-status-dot', isDirty ? 'is-dirty' : '', `is-${saveStatus}`].filter(Boolean).join(' ')} aria-hidden="true" /><strong>{currentTitle}</strong><span className="document-status-label">{saveStatusLabel}</span></button></div>
+  </header>{typeof document === 'undefined' ? toast : createPortal(toast, document.body)}</>;
 }

@@ -126,7 +126,7 @@ describe('NodeQuickToolbar', () => {
     expect(css).toMatch(/\.node-quick-select select\s*\{[^}]*min-width:\s*104px;/);
     expect(css).toMatch(/\.node-quick-select-progress select\s*\{[^}]*min-width:\s*104px;/);
     expect(css).not.toContain('最高优先级');
-    expect(css).toContain('.node-quick-select select,\n.node-style-toolbar select');
+    expect(css).toMatch(/\.node-quick-select select,\r?\n\.node-style-toolbar select/);
     expect(css).toContain('appearance: none;');
     expect(css).toContain('stroke-width=\'1.75\'');
   });

@@ -14,6 +14,8 @@ type RightInspectorPanelProps = {
   onRemarkModeChange: (mode: 'edit' | 'preview') => void;
   onRemarkChange: (remark: string) => void;
   onCollapse: () => void;
+  siblings?: MindmapNode[];
+  onNavigate?: (nodeId: string) => void;
 };
 
 /** The inspector is deliberately remark-only; node style controls live on the canvas. */
@@ -26,6 +28,8 @@ export function RightInspectorPanel({
   onRemarkModeChange,
   onRemarkChange,
   onCollapse,
+  siblings,
+  onNavigate,
 }: RightInspectorPanelProps) {
   const nodeTypeName = findNodeTypeById(nodeTypes, selectedNode.nodeTypeId)?.name ?? '普通节点';
 
@@ -34,6 +38,8 @@ export function RightInspectorPanel({
       <div className="inspector-content">
         <RemarkPanel
           selectedNode={selectedNode}
+          siblings={siblings}
+          onNavigate={onNavigate}
           mode={remarkMode}
           onModeChange={onRemarkModeChange}
           onRemarkChange={onRemarkChange}
