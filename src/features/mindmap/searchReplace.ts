@@ -39,6 +39,8 @@ export function getSearchPanelStatusText(options: {
     return '未找到匹配项';
   }
 
+  if (options.activeIndex < 0) return `剩余 ${options.matchCount} 处匹配`;
+
   return `${options.activeIndex + 1} / ${options.matchCount}`;
 }
 

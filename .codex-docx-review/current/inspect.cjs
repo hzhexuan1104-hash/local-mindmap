@@ -1,0 +1,2 @@
+const {chromium}=require('C:/Users/11624/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+(async()=>{const browser=await chromium.launch({headless:true,channel:'msedge'}); const page=await browser.newPage({viewport:{width:1440,height:950}});await page.goto('http://127.0.0.1:5173');await page.waitForSelector('.mindmap-node');console.log((await page.locator('body').innerText()).slice(0,6500));await browser.close()})().catch(e=>{console.error(e);process.exit(1)});

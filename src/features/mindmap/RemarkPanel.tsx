@@ -16,6 +16,8 @@ type RemarkPanelProps = {
   embeddedTitle?: string;
   activeMatch?: SearchMatch | null;
   focusRequestId?: number;
+  siblings?: MindmapNode[];
+  onNavigate?: (nodeId: string) => void;
 };
 
 type RemarkActionIconName = 'edit' | 'preview' | 'expand' | 'collapse';
@@ -65,6 +67,8 @@ export function RemarkPanel({
   embeddedTitle,
   activeMatch = null,
   focusRequestId,
+  siblings,
+  onNavigate,
 }: RemarkPanelProps) {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -215,6 +219,9 @@ export function RemarkPanel({
         <RemarkPreviewDialog
           title={selectedNode.text}
           content={selectedNode.remark}
+          nodeId={selectedNode.id}
+          siblings={siblings}
+          onNavigate={onNavigate}
           onClose={() => setIsPreviewOpen(false)}
         />
       ) : null}
