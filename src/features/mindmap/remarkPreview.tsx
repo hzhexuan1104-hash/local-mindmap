@@ -81,7 +81,6 @@ export function RemarkPreviewDialog({
       >
         <header className="remark-preview-dialog-header">
           <div>
-            <p className="eyebrow">节点内容</p>
             <h2 id="remark-preview-title">{title}</h2>
           </div>
           <button type="button" data-preview-close className="secondary-action" onClick={onClose}>
@@ -89,7 +88,6 @@ export function RemarkPreviewDialog({
           </button>
         </header>
         <div ref={bodyRef} className="remark-preview-dialog-body">
-          <p className="remark-preview-section-label">备注内容</p>
           <MarkdownPreview key={nodeId} content={content} />
         </div>
         <nav className="remark-preview-navigation" aria-label="同级节点备注切换">

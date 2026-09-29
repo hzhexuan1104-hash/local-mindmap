@@ -195,6 +195,7 @@ function getNodeMarkerWidth(node: MindmapNode, nodeType: MindmapNodeType | null)
     Boolean(node.priority),
     node.progress !== undefined,
     Boolean(node.remark.trim()),
+    Boolean(node.attachment),
   ].filter(Boolean).length;
 
   return markerCount === 0

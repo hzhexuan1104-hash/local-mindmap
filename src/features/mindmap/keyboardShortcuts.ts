@@ -70,6 +70,10 @@ export function getKeyboardShortcutAction(
       : null;
   }
 
+  if ((event.ctrlKey || event.metaKey) && ['f', 'h'].includes(event.key.toLowerCase())) {
+    return event.key.toLowerCase() === 'f' ? 'find' : 'replace';
+  }
+
   if (isEditableShortcutTarget(event.target)) {
     return null;
   }

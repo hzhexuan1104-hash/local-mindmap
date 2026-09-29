@@ -7221,3 +7221,24 @@ body.is-resizing-inspector * {
   box-shadow: 0 8px 24px rgb(20 28 40 / 18%);
   pointer-events: none;
 }
+
+/* Plugin tabs must stay hidden even when their sections use grid/flex. */
+.plugin-manager-dialog [hidden] { display: none !important; }
+.plugin-manager-dialog > nav { padding: 12px 24px; border-bottom: 1px solid #dde3ed; }
+.plugin-manager-dialog > nav button[aria-pressed="true"] { background: #eaf1ff; color: #2459c4; }
+
+.feedback-dialog button {
+  padding: 7px 12px;
+  border: 1px solid #dce3ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+}
+.feedback-dialog button:hover:not(:disabled) { background: #edf3ff; }
+.feedback-dialog button:disabled { opacity: .5; cursor: default; }
+.feedback-dialog input:not([type="checkbox"]):not([type="file"]), .feedback-dialog select {
+  padding: 7px 10px; border: 1px solid #dce3ee; border-radius: 7px; max-width: 100%;
+}
+.feedback-dialog .stacked-control { margin: 14px 0; }
+.feedback-dialog pre { overflow: auto; }

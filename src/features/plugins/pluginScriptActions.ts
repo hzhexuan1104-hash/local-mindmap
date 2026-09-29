@@ -87,6 +87,7 @@ export type ScriptContextNode = {
   parentId: string | null;
   childrenIds: string[];
   type: string;
+  tags: string[];
 };
 
 export type ScriptPluginContext = {
@@ -96,6 +97,7 @@ export type ScriptPluginContext = {
     platform: 'desktop';
   };
   mindmap: {
+    filePath: string;
     title: string;
     nodeCount: number;
     selectedNodeId: string | null;
@@ -140,6 +142,7 @@ function collectNodes(
     parentId,
     childrenIds: node.children.map((child) => child.id),
     type: node.nodeTypeId ?? 'default',
+    tags: [...(node.tags ?? [])],
   });
   for (const child of node.children) {
     collectNodes(child, node.id, nodes, limit);
@@ -163,6 +166,7 @@ function findContextNode(
       parentId,
       childrenIds: node.children.map((child) => child.id),
       type: node.nodeTypeId ?? 'default',
+      tags: [...(node.tags ?? [])],
     };
   }
   for (const child of node.children) {
@@ -176,6 +180,7 @@ export function createScriptPluginContext(
   rootNode: MindmapNode,
   selectedNodeId: string | null,
   selectedNodeIds: string[] = selectedNodeId ? [selectedNodeId] : [],
+  filePath: string | null = null,
 ): ScriptPluginContext {
   const nodeCount = countNodes(rootNode);
   const nodes: ScriptContextNode[] = [];
@@ -191,6 +196,7 @@ export function createScriptPluginContext(
       platform: 'desktop',
     },
     mindmap: {
+      filePath: filePath ?? '',
       title: rootNode.text,
       nodeCount,
       selectedNodeId: selectedNode?.id ?? null,

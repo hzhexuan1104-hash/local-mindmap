@@ -4,9 +4,10 @@ import { preserveStandaloneTripleAsterisks } from './remarkMarkdown';
 
 type MarkdownPreviewProps = {
   content: string;
+  allowRemoteImages?: boolean;
 };
 
-export function MarkdownPreview({ content }: MarkdownPreviewProps) {
+export function MarkdownPreview({ content, allowRemoteImages = true }: MarkdownPreviewProps) {
   if (!content.trim()) {
     return <div className="remark-empty">暂无备注</div>;
   }
@@ -20,6 +21,7 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          ...(!allowRemoteImages ? { img: ({ alt }: { alt?: string }) => <span>{alt || '图片'}</span> } : {}),
           // Preserve author-entered soft breaks inside ordinary paragraphs without
           // changing Markdown block semantics for lists, tables, or code fences.
           p: ({ children }) => (

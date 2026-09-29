@@ -2,6 +2,8 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+mod node_attachments;
+
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -7198,6 +7200,8 @@ fn main() {
             read_local_file,
             open_local_file_with_dialog,
             open_file_location,
+            node_attachments::open_attachment_link,
+            node_attachments::open_embedded_attachment,
             check_local_file_health,
             open_user_data_subdir,
             get_desktop_config_dir,
