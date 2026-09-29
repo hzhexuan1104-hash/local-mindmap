@@ -85,8 +85,8 @@ afterEach(() => {
 });
 
 describe('release version validation', () => {
-  it('keeps the five release version sources aligned at 1.24.3', () => {
-    expect(assertVersionState(PROJECT_ROOT, 'v1.24.3')).toMatchObject({ version: '1.24.3' });
+  it('keeps the five release version sources aligned at 1.24.4', () => {
+    expect(assertVersionState(PROJECT_ROOT, 'v1.24.4')).toMatchObject({ version: '1.24.4' });
   });
 
   it('rejects a tag that differs from the application version', () => {
