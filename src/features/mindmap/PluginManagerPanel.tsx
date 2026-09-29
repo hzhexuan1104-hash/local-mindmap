@@ -1,3 +1,7 @@
+import { MarketplacePanel } from '../plugins/MarketplacePanel';
+import { loadPluginInstallOrigins, type PluginInstallOrigin } from '../plugins/marketplace';
+import { readUserText } from '../storage/userDataStorage';
+import { FeedbackDialog } from '../plugins/FeedbackDialog';
 import { useEffect, useMemo, useState } from 'react';
 import type { PluginCategory, PluginManifest } from './plugins';
 import { resolveUserDataPath } from '../storage/userDataStorage';
@@ -57,6 +61,9 @@ type PluginRunInfo = {
 };
 
 type PluginManagerPanelProps = {
+  view?: 'manager' | 'workbench' | 'logs' | 'diagnostics';
+  initialTab?: 'config' | 'installed' | 'gallery';
+  onOpenDiagnostics?: () => void;
   plugins: PluginManifest[];
   lastInstallError: string;
   userDataDir: string;
@@ -450,6 +457,9 @@ function ContributionDetails({ plugin }: { plugin: PluginManifest }) {
 }
 
 export function PluginManagerPanel({
+  view = 'manager',
+  initialTab = 'installed',
+  onOpenDiagnostics,
   plugins,
   lastInstallError,
   userDataDir,
@@ -507,6 +517,10 @@ export function PluginManagerPanel({
   logs,
   onClearLogs,
 }: PluginManagerPanelProps) {
+  const [origins, setOrigins] = useState<Record<string, PluginInstallOrigin>>({});
+  const [readme, setReadme] = useState<{ title: string; content: string } | null>(null);
+  useEffect(() => { void loadPluginInstallOrigins().then(setOrigins).catch(() => undefined); }, [plugins]);
+  const [tab, setTab] = useState<'config' | 'installed' | 'gallery'>(initialTab);
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<'' | PluginCategory>('');
   const [showApiDocs, setShowApiDocs] = useState(false);
@@ -531,6 +545,7 @@ export function PluginManagerPanel({
   const [diagnosticKeyword, setDiagnosticKeyword] = useState('');
 
   useEffect(() => {
+    if (readme || view === 'logs' || view === 'workbench') return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing) {
         return;
@@ -551,7 +566,7 @@ export function PluginManagerPanel({
 
     window.addEventListener('keydown', handleEscape, true);
     return () => window.removeEventListener('keydown', handleEscape, true);
-  }, [onClose, showApiDocs, showPluginLogs]);
+  }, [onClose, showApiDocs, showPluginLogs, readme, view]);
 
   const refreshGallery = async () => {
     setGalleryLoading(true);
@@ -675,6 +690,42 @@ export function PluginManagerPanel({
     [diagnosticReport],
   );
 
+  if (readme) return <FeedbackDialog {...readme} markdown onClose={() => setReadme(null)} />;
+  if (view === 'logs') return <FeedbackDialog title="插件日志" onClose={onClose}>
+    <button type="button" className="secondary-action" onClick={onClearLogs}>清空日志</button>
+    {logs.length ? <ol className="plugin-log-list">{logs.map((log) => <li key={log.id}><time>{new Date(log.timestamp).toLocaleString()}</time> <strong>{log.level}</strong> <code>{log.pluginId} {log.event}</code><p>{log.message}</p></li>)}</ol> : <p>暂无插件日志</p>}
+  </FeedbackDialog>;
+  if (view === 'workbench') return <FeedbackDialog title="插件开发者工作台" onClose={onClose}>              <PluginDevWorkbench
+                isDesktopApp={isDesktopApp}
+                devRootPath={resolveUserDataPath(userDataDir, 'plugins/dev')}
+                recentProject={recentDevProject}
+                recentValidation={recentDevValidation}
+                recentPackage={recentDevPackage}
+                onCreateProject={
+                  onCreateDevProject ?? (async () => null)
+                }
+                onValidateProject={
+                  onValidateDevProject ?? (async () => null)
+                }
+                onBuildPackage={
+                  onBuildDevPackage ?? (async () => null)
+                }
+                onImportPackage={onImportDevPackage ?? onInstall}
+                onOpenDevDir={onOpenPluginDevDir}
+                onOpenProjectDir={onOpenDevProjectDir ?? (() => undefined)}
+                onOpenExamplesDir={
+                  onOpenPluginExamplesDir ?? (() => undefined)
+                }
+                onOpenDocs={
+                  onOpenPluginDevelopmentDocs ?? (() => undefined)
+                }
+                onCopyPath={onCopyPath}
+                onOpenPackageLocation={
+                  onOpenExportLocation ?? (() => undefined)
+                }
+              />
+</FeedbackDialog>;
+
   return (
     <div
       className="plugin-manager-backdrop"
@@ -701,8 +752,78 @@ export function PluginManagerPanel({
           </div>
         </header>
 
+        <nav className="plugin-manager-actions" aria-label="插件管理分类">
+          {(['config', 'installed', 'gallery'] as const).map((key) => <button key={key} type="button" className="secondary-action" aria-pressed={tab === key} onClick={() => setTab(key)}>{key === 'config' ? '插件配置' : key === 'installed' ? '已安装插件' : '插件商城'}</button>)}
+        </nav>
         <div className="plugin-manager-content">
-          <section className="plugin-manager-section">
+          {tab === 'config' && view === 'manager' ? <section className="plugin-manager-section">
+            <h3>插件配置</h3>
+            <p>插件安装目录：{resolveUserDataPath(userDataDir, 'plugins/installed')}</p>
+            <p>日志目录：{resolveUserDataPath(userDataDir, 'logs')}</p>
+            <button type="button" className="secondary-action" onClick={onOpenPluginDir}>打开插件目录</button>
+              <label className="stacked-control">
+                <span>启用实验性脚本插件运行器</span>
+                <input
+                  type="checkbox"
+                  checked={isScriptRunnerEnabled}
+                  onChange={(event) =>
+                    onScriptRunnerEnabledChange?.(event.target.checked)
+                  }
+                />
+              </label>
+              <p className="plugin-safety-note">
+                脚本插件是实验能力，默认关闭。脚本只能返回 actions，由宿主校验后执行；本批不支持 Shell、DLL、文件系统或网络访问。
+              </p>
+              <label className="stacked-control">
+                <span>启用外部命令插件运行器</span>
+                <input
+                  type="checkbox"
+                  checked={isExternalRunnerEnabled}
+                  onChange={(event) =>
+                    onExternalRunnerEnabledChange?.(event.target.checked)
+                  }
+                />
+              </label>
+              <p className="plugin-safety-note">
+                外部命令插件是高风险实验功能，默认关闭。宿主不使用 Shell，
+                仅以固定参数启动 Python 或直接启动本地可执行文件；外部进程在
+                操作系统层面仍可能访问本机资源，请只运行可信插件。
+              </p>
+              <label className="stacked-control">
+                <span>Python 运行时路径</span>
+                <input
+                  type="text"
+                  value={pythonPathDraft}
+                  placeholder="auto（自动检测）或受控 Python 路径"
+                  onChange={(event) => setPythonPathDraft(event.target.value)}
+                />
+              </label>
+              <div className="plugin-manager-actions">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => onSavePythonPath?.(pythonPathDraft)}
+                >
+                  保存 Python 路径
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => onTestPython?.(pythonPathDraft)}
+                >
+                  测试 Python
+                </button>
+              </div>
+              {pythonRuntimeLabel ? (
+                <p className="plugin-safety-note">已检测解释器：{pythonRuntimeLabel}</p>
+              ) : null}
+              {!isDesktopApp ? (
+                <p className="plugin-web-warning">
+                  不支持在 Web 端打开本地目录。
+                </p>
+              ) : null}
+</section> : null}
+          <section hidden={tab !== 'config' || view !== 'manager'} className="plugin-manager-section">
             <div className="plugin-section-heading">
               <div>
                 <h3>用户数据目录</h3>
@@ -736,7 +857,7 @@ export function PluginManagerPanel({
             </p>
           </section>
 
-          <details className="plugin-manager-section plugin-developer-section">
+          <details hidden={view !== 'diagnostics'} open={view === 'diagnostics'} className="plugin-manager-section plugin-developer-section">
             <summary>
               <span>
                 <strong>开发者模式</strong>
@@ -752,35 +873,6 @@ export function PluginManagerPanel({
                 仅在显式启用后通过 Web Worker 执行本地脚本插件。脚本只接收
                 JSON context snapshot，只能返回由宿主校验的 actions。
               </p>
-              <PluginDevWorkbench
-                isDesktopApp={isDesktopApp}
-                devRootPath={resolveUserDataPath(userDataDir, 'plugins/dev')}
-                recentProject={recentDevProject}
-                recentValidation={recentDevValidation}
-                recentPackage={recentDevPackage}
-                onCreateProject={
-                  onCreateDevProject ?? (async () => null)
-                }
-                onValidateProject={
-                  onValidateDevProject ?? (async () => null)
-                }
-                onBuildPackage={
-                  onBuildDevPackage ?? (async () => null)
-                }
-                onImportPackage={onImportDevPackage ?? onInstall}
-                onOpenDevDir={onOpenPluginDevDir}
-                onOpenProjectDir={onOpenDevProjectDir ?? (() => undefined)}
-                onOpenExamplesDir={
-                  onOpenPluginExamplesDir ?? (() => undefined)
-                }
-                onOpenDocs={
-                  onOpenPluginDevelopmentDocs ?? (() => undefined)
-                }
-                onCopyPath={onCopyPath}
-                onOpenPackageLocation={
-                  onOpenExportLocation ?? (() => undefined)
-                }
-              />
               <section className="plugin-diagnostics-center">
                 <div className="plugin-section-heading">
                   <div>
@@ -788,7 +880,7 @@ export function PluginManagerPanel({
                     <p>本地扫描 registry、installed、dev、gallery 和 .lmplugin 能力；不联网、不上传报告、不执行插件代码。</p>
                   </div>
                   <div className="plugin-manager-actions">
-                    <button type="button" onClick={() => void runDiagnostics('all')} disabled={diagnosticLoading || !isDesktopApp}>
+                    <button type="button" className="secondary-action" onClick={() => void runDiagnostics('all')} disabled={diagnosticLoading || !isDesktopApp}>
                       一键扫描插件
                     </button>
                     <button
@@ -911,67 +1003,6 @@ export function PluginManagerPanel({
                   <p className="empty-note">尚未生成诊断报告。点击“一键扫描插件”开始。</p>
                 )}
               </section>
-              <label className="stacked-control">
-                <span>启用实验性脚本插件运行器</span>
-                <input
-                  type="checkbox"
-                  checked={isScriptRunnerEnabled}
-                  onChange={(event) =>
-                    onScriptRunnerEnabledChange?.(event.target.checked)
-                  }
-                />
-              </label>
-              <p className="plugin-safety-note">
-                脚本插件是实验能力，默认关闭。脚本只能返回 actions，由宿主校验后执行；本批不支持 Shell、DLL、文件系统或网络访问。
-              </p>
-              <label className="stacked-control">
-                <span>启用外部命令插件运行器</span>
-                <input
-                  type="checkbox"
-                  checked={isExternalRunnerEnabled}
-                  onChange={(event) =>
-                    onExternalRunnerEnabledChange?.(event.target.checked)
-                  }
-                />
-              </label>
-              <p className="plugin-safety-note">
-                外部命令插件是高风险实验功能，默认关闭。宿主不使用 Shell，
-                仅以固定参数启动 Python 或直接启动本地可执行文件；外部进程在
-                操作系统层面仍可能访问本机资源，请只运行可信插件。
-              </p>
-              <label className="stacked-control">
-                <span>Python 运行时路径</span>
-                <input
-                  type="text"
-                  value={pythonPathDraft}
-                  placeholder="auto（自动检测）或受控 Python 路径"
-                  onChange={(event) => setPythonPathDraft(event.target.value)}
-                />
-              </label>
-              <div className="plugin-manager-actions">
-                <button
-                  type="button"
-                  className="secondary-action"
-                  onClick={() => onSavePythonPath?.(pythonPathDraft)}
-                >
-                  保存 Python 路径
-                </button>
-                <button
-                  type="button"
-                  className="secondary-action"
-                  onClick={() => onTestPython?.(pythonPathDraft)}
-                >
-                  测试 Python
-                </button>
-              </div>
-              {pythonRuntimeLabel ? (
-                <p className="plugin-safety-note">已检测解释器：{pythonRuntimeLabel}</p>
-              ) : null}
-              {!isDesktopApp ? (
-                <p className="plugin-web-warning">
-                  不支持在 Web 端打开本地目录。
-                </p>
-              ) : null}
               <div className="plugin-manager-actions plugin-developer-actions">
                 <button
                   type="button"
@@ -1115,7 +1146,8 @@ export function PluginManagerPanel({
             </div>
           </details>
 
-          <section className="plugin-manager-section plugin-gallery-section">
+          {tab === 'gallery' && view === 'manager' ? <MarketplacePanel /> : null}
+          <section hidden={tab !== 'gallery' || view !== 'manager'} className="plugin-manager-section plugin-gallery-section">
             <div className="plugin-section-heading">
               <div>
                 <h3>本地插件中心</h3>
@@ -1254,7 +1286,7 @@ export function PluginManagerPanel({
                         <button
                           type="button"
                           className="secondary-action"
-                          onClick={() => void runDiagnostics('all')}
+                          onClick={onOpenDiagnostics ?? (() => void runDiagnostics('all'))}
                           disabled={!isDesktopApp}
                         >
                           打开诊断中心
@@ -1365,10 +1397,10 @@ export function PluginManagerPanel({
             </div>
           </section>
 
-          <section className="plugin-manager-section">
+          <section hidden={tab !== 'installed' || view !== 'manager'} className="plugin-manager-section">
             <div className="plugin-section-heading">
               <div>
-                <h3>声明式 JSON 插件</h3>
+                <h3>已安装插件</h3>
                 <p>
                   仅接受 .json / .lmplugin；JSON workflow 不执行 JS、命令、
                   Shell 或远程代码，script 插件仍受实验 runner 控制。
@@ -1426,7 +1458,8 @@ export function PluginManagerPanel({
                     <div className="plugin-item-main">
                       <div className="plugin-item-title">
                         <strong>{plugin.name}</strong>
-                        {plugin.builtIn ? <span>内置</span> : null}
+                        {!plugin.builtIn ? <button type="button" className="secondary-action" onClick={() => { const item = galleryCatalog?.items.find((item) => item.id === plugin.pluginId); if (origins[plugin.pluginId] === 'gallery' && item) onInstallGallery?.(item); else onInstall(); }}>重新安装</button> : null}
+                        <span>{plugin.builtIn ? '内置' : origins[plugin.pluginId] === 'gallery' ? '插件商城安装' : origins[plugin.pluginId] === 'local' ? '本地导入' : '历史安装（来源未记录）'}</span>
                         <span className="plugin-type-pill">
                           {pluginTypeLabel(plugin.pluginType)}
                         </span>
@@ -1446,6 +1479,9 @@ export function PluginManagerPanel({
                         </span>
                       </div>
                       <p>{plugin.description || '暂无描述'}</p>
+                      {!plugin.builtIn ? <div className="plugin-manager-actions"><button type="button" className="secondary-action" onClick={() => onOpenManifestDir(plugin.pluginId)} disabled={!isDesktopApp}>打开安装目录</button><button type="button" className="secondary-action" onClick={() => {
+                        void readUserText(`plugins/installed/${plugin.pluginId}/README.md`).then((content) => setReadme({ title: `${plugin.name} · 使用说明`, content })).catch(() => setReadme({ title: `${plugin.name} · 使用说明`, content: plugin.description || '此插件未提供 README.md。' }));
+                      }}>使用说明</button></div> : null}
                       {abnormalPlugin ? (
                         <div className="plugin-next-steps" role="group" aria-label="异常插件下一步操作">
                           <span>{statusText}</span>

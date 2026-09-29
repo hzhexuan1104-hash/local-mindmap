@@ -125,7 +125,7 @@ export function TopMenuBar({
     );
   };
 
-  const toast = message ? <div className={`top-status-message is-${messageKind}`} role={messageKind === 'error' || messageKind === 'warning' ? 'alert' : 'status'} aria-atomic="true"><span aria-hidden="true">{messageKind === 'success' ? '✓' : messageKind === 'warning' || messageKind === 'error' ? '!' : 'ℹ'}</span>{message}</div> : null;
+  const toast = message ? <div className={`top-status-message is-${messageKind}`} role={messageKind === 'error' || messageKind === 'warning' ? 'alert' : 'status'} aria-atomic="true">{message}<span aria-hidden="true">{messageKind === 'success' ? '✓' : messageKind === 'warning' || messageKind === 'error' ? '!' : 'ℹ'}</span></div> : null;
   return <><header className="top-menu-bar" aria-label="应用工具栏">
     <nav className="top-menu-nav topbar-left-menus topbar-non-shrink" aria-label="顶部菜单" data-testid="topbar-left-menus" ref={menuBarRef}>
       {menus.map((menu) => {

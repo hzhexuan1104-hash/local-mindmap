@@ -155,6 +155,11 @@ export function PluginDevWorkbench({
         <span className="plugin-dev-badge">v1.11 MVP</span>
       </div>
 
+      <details className="plugin-manager-section" open><summary>支持的插件类型与实现示例</summary>
+        {DEV_PLUGIN_TEMPLATE_OPTIONS.map((option) => <div key={option.value}><strong>{option.label}</strong><p>{option.description}</p></div>)}
+        <p>选择“新建插件项目”可生成对应 manifest、入口代码和 README；完整协议见开发文档。</p>
+        <pre>{'import json, sys\ncontext = json.load(sys.stdin)\npath = context["mindmap"]["filePath"]\ntags = context["selectedNode"]["tags"] if context["selectedNode"] else []\nprint(json.dumps({"actions": [{"type": "showMessage", "message": path or "未保存"}]}))'}</pre>
+      </details>
       <dl className="plugin-dev-summary">
         <div>
           <dt>dev 根目录</dt>

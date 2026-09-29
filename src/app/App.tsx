@@ -1,3 +1,8 @@
+import { recordPluginInstallOrigin } from '../features/plugins/marketplace';
+import { AttachmentDialog } from '../features/mindmap/AttachmentDialog';
+import { attachmentBytes, attachmentIcon } from '../features/mindmap/nodeAttachments';
+import { buildSelectionExport } from '../features/mindmap/exportSelection';
+import type { NodeAttachment } from '../features/mindmap/types';
 import {
   type CSSProperties,
   type MouseEvent,
@@ -158,6 +163,8 @@ import { parseLmindProject } from '../features/mindmap/openMindmap';
 import { OFFICIAL_TEMPLATES } from '../features/mindmap/officialTemplates';
 import { PerformancePanel } from '../features/mindmap/PerformancePanel';
 import type { PerformanceBenchmarkResult } from '../features/mindmap/performanceTest';
+import { FeedbackDialog } from '../features/plugins/FeedbackDialog';
+import pluginDevelopmentDocs from '../../docs/plugin-development.md?raw';
 import { PluginManagerPanel } from '../features/mindmap/PluginManagerPanel';
 import {
   getPluginIcons,
@@ -351,8 +358,8 @@ import {
   openPluginDir,
   openPluginDevDir,
   openGalleryPluginDir,
-  openPluginDevelopmentDocs,
   openPluginManifestDir,
+  readUserJson,
   readUserText,
   resolveUserDataPath,
   openUserDataSubdir,
@@ -611,6 +618,7 @@ type MindmapTreeProps = {
   onEditorRef: (element: HTMLTextAreaElement | null) => void;
   onCommitEdit: () => void;
   onStartDrag: (nodeId: string, event: MouseEvent<HTMLElement>) => void;
+  onOpenAttachment: (node: MindmapNode) => void;
   onOpenRemark: (nodeId: string) => void;
   onOpenContextMenu: (node: MindmapNode, event: MouseEvent<HTMLElement>) => void;
 };
@@ -679,6 +687,7 @@ function MindmapTree({
   onCommitEdit,
   onStartDrag,
   onOpenRemark,
+  onOpenAttachment,
   onOpenContextMenu,
 }: MindmapTreeProps) {
   const node = layoutNode.node;
@@ -812,6 +821,7 @@ function MindmapTree({
                     node.text
                   )}
                 </span>
+                {node.attachment ? <button type="button" className="node-note-indicator" title={node.attachment.name} aria-label={`打开附件：${node.attachment.name}`} onMouseDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onOpenAttachment(node); }}>{attachmentIcon(node.attachment)}</button> : null}
                 {node.remark.trim() ? (
                   <button
                     type="button"
@@ -937,6 +947,19 @@ export function App() {
   const [recentDevPackage, setRecentDevPackage] =
     useState<DevPluginPackageResult | null>(null);
   const [pluginLogs, setPluginLogs] = useState<PluginLogEntry[]>([]);
+  const [pluginLogsLoaded, setPluginLogsLoaded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void readUserJson<PluginLogEntry[]>('logs/plugins.json', []).then((logs) => {
+      if (active && Array.isArray(logs)) setPluginLogs((current) => [...current, ...logs.filter((log) => log && typeof log.id === 'string' && typeof log.message === 'string' && typeof log.timestamp === 'string')].slice(0, 100));
+    }).catch(() => undefined).finally(() => { if (active) setPluginLogsLoaded(true); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!pluginLogsLoaded) return;
+    const timer = window.setTimeout(() => { void writeUserJson('logs/plugins.json', pluginLogs).catch(() => undefined); }, 300);
+    return () => window.clearTimeout(timer);
+  }, [pluginLogs, pluginLogsLoaded]);
   const [isScriptRunnerEnabled, setIsScriptRunnerEnabled] = useState(false);
   const [isExternalRunnerEnabled, setIsExternalRunnerEnabled] = useState(false);
   const [pythonPath, setPythonPath] = useState('auto');
@@ -952,6 +975,12 @@ export function App() {
   >({});
   const [userDataDir, setUserDataDir] = useState('浏览器本地存储');
   const [isDesktopApp] = useState(isDesktopRuntime);
+  const [attachmentNodeId, setAttachmentNodeId] = useState<string | null>(null);
+  const [imageAttachment, setImageAttachment] = useState<NodeAttachment | null>(null);
+  const [exportSelectionOpen, setExportSelectionOpen] = useState(false);
+  const [pluginManagerInitialTab, setPluginManagerInitialTab] = useState<'config' | 'installed' | 'gallery'>('installed');
+  const [pluginPanelView, setPluginPanelView] = useState<'manager' | 'workbench' | 'logs' | 'diagnostics'>('manager');
+  const [feedbackDialog, setFeedbackDialog] = useState<{ title: string; content: string; markdown?: boolean } | null>(null);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
@@ -1749,6 +1778,7 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
+      if (feedbackDialog || attachmentNodeId || imageAttachment || exportSelectionOpen || (isPluginManagerVisible && pluginPanelView !== 'manager')) return;
       if (
         commandPaletteSettings.shortcutEnabled &&
         isCommandPaletteShortcut(event)
@@ -1825,11 +1855,11 @@ export function App() {
           return;
         case 'find':
           openSearchPanel();
-          showMessage('已打开查找');
+          showMessage('已打开查找和替换');
           return;
         case 'replace':
           openSearchPanel();
-          showMessage('已打开替换');
+          showMessage('已打开查找和替换');
           return;
         case 'add-child':
           setHasUsedShortcutCreation(true);
@@ -1848,8 +1878,8 @@ export function App() {
       }
     };
 
-    window.addEventListener('keydown', handleKeyboardShortcut);
-    return () => window.removeEventListener('keydown', handleKeyboardShortcut);
+    window.addEventListener('keydown', handleKeyboardShortcut, true);
+    return () => window.removeEventListener('keydown', handleKeyboardShortcut, true);
   });
 
   useEffect(() => {
@@ -2924,6 +2954,7 @@ export function App() {
         pluginPackage.manifestSourcePath,
         pluginPackage.packagePath,
       );
+      await recordPluginInstallOrigin(installedManifest.pluginId, 'local');
       setPlugins(nextPlugins);
       setLastPluginInstallError('');
       const installPaths =
@@ -3008,6 +3039,7 @@ export function App() {
 
     try {
       const result = await installGalleryPlugin(item.id, Boolean(existing));
+      await recordPluginInstallOrigin(item.id, 'gallery');
       const reloadedPlugins = await loadPluginRegistry();
       setPlugins(reloadedPlugins);
       setLastPluginInstallError('');
@@ -3055,16 +3087,8 @@ export function App() {
   };
 
   const handleOpenPluginDevelopmentDocs = async () => {
-    try {
-      const opened = await openPluginDevelopmentDocs();
-      showMessage(
-        opened ? '已打开插件开发文档。' : 'Web 端不支持打开本地文档。',
-      );
-    } catch (error) {
-      showMessage(
-        `打开插件开发文档失败：${getErrorMessage(error, '未知错误')}`,
-      );
-    }
+    setIsPluginManagerVisible(false);
+    setFeedbackDialog({ title: '插件开发文档', content: pluginDevelopmentDocs, markdown: true });
   };
 
   const handleTogglePlugin = async (pluginId: string, enabled: boolean) => {
@@ -4135,6 +4159,36 @@ export function App() {
     showMessage('已清空内部剪贴板');
   };
 
+  const saveNodeAttachment = (attachment?: NodeAttachment) => {
+    if (!attachmentNodeId || !mindmapIndex.nodeById.has(attachmentNodeId)) return;
+    recordHistory();
+    setMindmap((current) => updateNodeById(current, attachmentNodeId, (node) => {
+      const updated = { ...node }; delete updated.attachment;
+      return attachment ? { ...updated, attachment } : updated;
+    }));
+    setAttachmentNodeId(null);
+  };
+
+  const handleOpenAttachment = async (node: MindmapNode) => {
+    const attachment = node.attachment; if (!attachment) return;
+    if (attachment.kind === 'image') { setImageAttachment(attachment); return; }
+    try {
+      if (isDesktopApp) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (attachment.kind === 'link') await invoke('open_attachment_link', { url: attachment.url });
+        else await invoke('open_embedded_attachment', { name: attachment.name, bytes: Array.from(attachmentBytes(attachment)) });
+      } else if (attachment.kind === 'link') window.open(attachment.url, '_blank', 'noopener,noreferrer');
+      else await saveLocalFile({ content: attachmentBytes(attachment), defaultFileName: attachment.name, mimeType: 'application/octet-stream', filterName: '附件', extensions: [attachment.name.split('.').pop() || 'bin'], forceDialog: true });
+    } catch (error) { showMessage(`打开附件失败：${getErrorMessage(error, '未知错误')}`, 'error'); }
+  };
+
+  const handleExportSelection = async (format: 'lmind' | 'md' | 'xlsx') => {
+    const root = buildSelectionExport(mindmap, selectedNodeIds);
+    if (!root) { showMessage('请先选择要导出的节点', 'warning'); return; }
+    await exportFile({ content: format === 'lmind' ? serializeLmindDocument(root, nodeTypes, themeId) : format === 'md' ? serializeMindmapMarkdown(root) : createMindmapExcelBytes(root), extension: format, mimeType: format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : format === 'md' ? 'text/markdown;charset=utf-8' : 'application/json;charset=utf-8', filterName: format, defaultFileName: `${sanitizeFileName(root.text)}.${format}` });
+    setExportSelectionOpen(false);
+  };
+
   const handleRemarkChange = (remark: string) => {
     recordHistory();
     setMindmap((currentMindmap) =>
@@ -4372,8 +4426,11 @@ export function App() {
   };
 
   const openSearchPanel = () => {
+    const selection = window.getSelection()?.toString();
+    if (selection?.trim()) { setSearchQuery(selection); setSearchHasRun(true); }
     setActiveWorkspacePanel(null);
     setIsSearchPanelOpen(true);
+    requestAnimationFrame(() => searchInputRef.current?.focus());
   };
 
   const handleCloseSearchPanel = () => {
@@ -4398,6 +4455,14 @@ export function App() {
   const openPluginManager = () => {
     setActiveWorkspacePanel(null);
     setIsSearchPanelOpen(false);
+    setPluginManagerInitialTab('installed');
+    setPluginPanelView('manager');
+    setIsPluginManagerVisible(true);
+  };
+
+  const openPluginView = (view: typeof pluginPanelView) => {
+    setActiveWorkspacePanel(null);
+    setPluginPanelView(view);
     setIsPluginManagerVisible(true);
   };
 
@@ -5562,10 +5627,7 @@ export function App() {
   };
 
   const showScriptMessages = (messages: ScriptShowMessageAction[]) => {
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage) {
-      showMessage(lastMessage.message);
-    }
+    if (messages.length) setFeedbackDialog({ title: '插件消息', content: messages.map((item) => `${item.level === 'error' ? '错误：' : item.level === 'warning' ? '提示：' : ''}${item.message}`).join('\n\n') });
   };
 
   const setScriptRunResult = (
@@ -5652,6 +5714,7 @@ export function App() {
         mindmap,
         effectiveSelectedNodeId,
         contextNodeId ? [contextNodeId] : selectedNodeIds,
+        currentFilePath,
       );
       recordPluginLog(
         'info',
@@ -5886,6 +5949,7 @@ export function App() {
         mindmap,
         effectiveSelectedNodeId,
         contextNodeId ? [contextNodeId] : selectedNodeIds,
+        currentFilePath,
       );
       const resolution = resolveWorkflowActions(
         plugin.workflow.actions,
@@ -6149,6 +6213,7 @@ export function App() {
       mindmap,
       effectiveSelectedNodeId,
       contextNodeId ? [contextNodeId] : selectedNodeIds,
+      currentFilePath,
     );
     recordPluginLog(
       'info',
@@ -6546,10 +6611,10 @@ export function App() {
     'view.layout': handleResetAutoLayout,
     'template.library': () => setActiveWorkspacePanel('templates'),
     'plugin.manager': openPluginManager,
-    'plugin.gallery': openPluginManager,
-    'plugin.workbench': openPluginManager,
-    'plugin.diagnostics': openPluginManager,
-    'plugin.logs': openPluginManager,
+    'plugin.gallery': () => { openPluginManager(); setPluginManagerInitialTab('gallery'); },
+    'plugin.workbench': () => openPluginView('workbench'),
+    'plugin.diagnostics': () => openPluginView('diagnostics'),
+    'plugin.logs': () => openPluginView('logs'),
     'help.guide': () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
     'help.shortcuts': () => setIsShortcutHelpVisible(true),
     'help.about': () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
@@ -6727,7 +6792,7 @@ export function App() {
         { id: 'markdown', label: '导入 Markdown', execute: () => void handleImportMarkdown() }, { id: 'excel', label: '导入 Excel', execute: () => void handleImportExcel() }, { id: 'json', label: '导入 JSON', execute: () => void handleImportJson() }, { id: 'node-types', label: '导入节点类型包', execute: () => void handleImportNodeTypePack() }, { id: 'template-pack', label: '导入模板包', execute: () => void handleImportTemplatePack() },
       ] },
       { id: 'export', label: '导出', children: [
-        { id: 'markdown', label: '导出 Markdown', execute: handleExportMarkdown }, { id: 'excel', label: '导出 Excel', execute: handleExportExcel }, { id: 'json', label: '导出 JSON', execute: handleExportJson }, { id: 'png', label: '导出 PNG', execute: () => void handleExportImage('png') }, { id: 'jpg', label: '导出 JPG', execute: () => void handleExportImage('jpg') }, { id: 'txt', label: canExportTxt ? '导出 TXT' : '导出 TXT（需启用插件）', disabled: !canExportTxt, disabledReason: 'TXT 导出插件未启用', execute: handleExportTxt }, { id: 'node-types', label: '导出节点类型包', execute: handleExportNodeTypePack }, { id: 'template-pack', label: '导出模板包', execute: handleExportTemplatePack },
+        { id: 'selection', label: '导出选中节点…', disabled: !selectedNodeIds.length, execute: () => setExportSelectionOpen(true) }, { id: 'markdown', label: '导出 Markdown', execute: handleExportMarkdown }, { id: 'excel', label: '导出 Excel', execute: handleExportExcel }, { id: 'json', label: '导出 JSON', execute: handleExportJson }, { id: 'png', label: '导出 PNG', execute: () => void handleExportImage('png') }, { id: 'jpg', label: '导出 JPG', execute: () => void handleExportImage('jpg') }, { id: 'txt', label: canExportTxt ? '导出 TXT' : '导出 TXT（需启用插件）', disabled: !canExportTxt, disabledReason: 'TXT 导出插件未启用', execute: handleExportTxt }, { id: 'node-types', label: '导出节点类型包', execute: handleExportNodeTypePack }, { id: 'template-pack', label: '导出模板包', execute: handleExportTemplatePack },
       ] },
       { id: 'location', label: '文件位置', children: [
         { id: 'directory', label: '打开文件所在目录', disabled: !currentFilePath, execute: () => void handleOpenCurrentFileLocation() }, { id: 'path', label: '复制文件路径', disabled: !currentFilePath, execute: () => void handleCopyCurrentFilePath() },
@@ -6753,6 +6818,7 @@ export function App() {
           ...availableNodeTypes.map((nodeType) => ({ id: `type-${nodeType.id}`, label: nodeType.name, execute: () => handleAddSibling(nodeType.id) })),
         ] },
       ] },
+      { id: 'attachment', label: '附件', children: [{ id: 'manage', label: selectedNode.attachment ? '修改或删除附件' : '添加附件', disabled: !selectedNodeId, execute: () => setAttachmentNodeId(selectedNodeId) }] },
       { id: 'edit', label: '编辑', children: [{ id: 'text', label: '编辑当前节点', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleStartEdit(selectedNode); } }, { id: 'remark', label: '打开备注', disabled: !selectedNodeId, execute: handleOpenRemarkEditor }, { id: 'delete', label: '删除当前节点', danger: true, disabled: !selectedNodeId || selectedNodeId === mindmap.id, execute: handleDeleteNode }] },
       { id: 'structure', label: '结构', children: [{ id: 'collapse', label: '折叠当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'expand', label: '展开当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleToggleCollapse(selectedNodeId); } }, { id: 'focus', label: '聚焦当前分支', disabled: !selectedNodeId, execute: () => { if (selectedNodeId) handleFocusBranch(selectedNodeId); } }, { id: 'exit-focus', label: '退出分支聚焦', disabled: !focusedRootId, execute: handleExitBranchFocus }] },
       { id: 'order', label: '排序', children: [{ id: 'up', label: '上移当前节点', disabled: !selectedNodeId || getSiblingMoveState(mindmap, selectedNodeId)?.index === 0 || !getSiblingMoveState(mindmap, selectedNodeId), execute: () => handleMoveSelectedNode('up') }, { id: 'down', label: '下移当前节点', disabled: !selectedNodeId || !getSiblingMoveState(mindmap, selectedNodeId) || getSiblingMoveState(mindmap, selectedNodeId)!.index === getSiblingMoveState(mindmap, selectedNodeId)!.parent.children.length - 1, execute: () => handleMoveSelectedNode('down') }] },
@@ -6767,10 +6833,10 @@ export function App() {
       { id: 'performance-mode', label: '性能模式', children: [{ id: 'auto', label: '自动性能模式', checked: autoPerformanceMode, execute: () => setAutoPerformanceMode((enabled) => !enabled) }] },
     ] },
     { id: 'plugins', label: '插件', items: [
-      { id: 'center', label: '插件中心', children: [{ id: 'manage', label: '插件管理', execute: openPluginManager }, { id: 'gallery', label: '本地插件中心', execute: openPluginManager }, { id: 'import', label: '导入插件', execute: () => void handleInstallPlugin() }, { id: 'reload', label: '重新加载插件', execute: () => void runPluginCommand('builtin.reloadPlugins') }, ...(isDesktopApp ? [{ id: 'directory', label: '打开插件目录', execute: () => void runPluginCommand('builtin.openPluginDirectory') }] : [])] },
+      { id: 'center', label: '插件中心', children: [{ id: 'manage', label: '插件管理', execute: openPluginManager }, { id: 'import', label: '导入插件', execute: () => void handleInstallPlugin() }, { id: 'reload', label: '重新加载插件', execute: () => void runPluginCommand('builtin.reloadPlugins') }, ...(isDesktopApp ? [{ id: 'directory', label: '打开插件目录', execute: () => void runPluginCommand('builtin.openPluginDirectory') }] : [])] },
       { id: 'commands', label: '插件命令', children: pluginCommandMenu.length ? pluginCommandMenu : [{ id: 'empty', label: '暂无已启用插件命令', disabled: true }] },
-      { id: 'developer', label: '开发者工具', children: [{ id: 'workbench', label: '插件开发者工作台', execute: openPluginManager }, { id: 'docs', label: '打开插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
-      { id: 'diagnostics', label: '诊断与日志', children: [{ id: 'diagnostics', label: '插件诊断中心', execute: openPluginManager }, { id: 'logs', label: '插件日志', execute: openPluginManager }] },
+      { id: 'developer', label: '开发者工具', children: [{ id: 'workbench', label: '插件开发者工作台', execute: () => openPluginView('workbench') }, { id: 'docs', label: '打开插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
+      { id: 'diagnostics', label: '诊断与日志', children: [{ id: 'logs', label: '插件日志', execute: () => openPluginView('logs') }] },
     ] },
     { id: 'help', label: '帮助', items: [
       { id: 'usage', label: '使用帮助', children: [{ id: 'guide', label: '使用指南', execute: () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。') }, { id: 'shortcuts', label: '快捷键', execute: () => setIsShortcutHelpVisible(true) }, { id: 'palette', label: '命令面板（Ctrl+K）', execute: openCommandPalette }] },
@@ -7460,6 +7526,7 @@ export function App() {
                   }}
                   onCommitEdit={handleCommitEdit}
                   onStartDrag={handleStartNodeDrag}
+                  onOpenAttachment={(node) => void handleOpenAttachment(node)}
                   onOpenRemark={openNodeRemark}
                   onOpenContextMenu={handleNodeContextMenu}
                 />
@@ -7646,6 +7713,10 @@ export function App() {
 
       {isPluginManagerVisible ? (
         <PluginManagerPanel
+          key={`${pluginPanelView}-${pluginManagerInitialTab}`}
+          initialTab={pluginManagerInitialTab}
+          onOpenDiagnostics={() => openPluginView('diagnostics')}
+          view={pluginPanelView}
           plugins={plugins}
           lastInstallError={lastPluginInstallError}
           userDataDir={userDataDir}
@@ -7745,6 +7816,11 @@ export function App() {
           onClearLogs={() => setPluginLogs(clearPluginLogs())}
         />
       ) : null}
+
+      {attachmentNodeId ? <AttachmentDialog key={attachmentNodeId} attachment={mindmapIndex.nodeById.get(attachmentNodeId)?.attachment} onSave={saveNodeAttachment} onClose={() => setAttachmentNodeId(null)} /> : null}
+      {imageAttachment?.kind === 'image' ? <FeedbackDialog title={imageAttachment.name} onClose={() => setImageAttachment(null)}><img src={imageAttachment.dataUrl} alt={imageAttachment.name} style={{ maxWidth: '100%', height: 'auto' }} /></FeedbackDialog> : null}
+      {exportSelectionOpen ? <FeedbackDialog title="导出选中节点" onClose={() => setExportSelectionOpen(false)}><p>导出选中节点及其子节点；父子重复选择只导出一次。多个独立分支将放在同一中心主题下。</p><div className="plugin-manager-actions">{(['lmind', 'md', 'xlsx'] as const).map((format) => <button key={format} type="button" onClick={() => void handleExportSelection(format)}>导出 {format === 'lmind' ? 'LMIND（含附件）' : format === 'md' ? 'Markdown' : 'Excel'}</button>)}</div></FeedbackDialog> : null}
+      {feedbackDialog ? <FeedbackDialog {...feedbackDialog} onClose={() => setFeedbackDialog(null)} /> : null}
 
       {isShortcutHelpVisible ? (
         <div className="shortcut-help-backdrop" role="presentation">
@@ -7909,6 +7985,8 @@ export function App() {
               >
                 删除节点
               </button>
+              <button type="button" role="menuitem" onClick={() => runContextMenuAction(() => setAttachmentNodeId(selectedNode.id))}>{selectedNode.attachment ? '修改或删除附件' : '添加附件'}</button>
+              <button type="button" role="menuitem" onClick={() => runContextMenuAction(() => setExportSelectionOpen(true))}>导出选中节点…</button>
               <button
                 type="button"
                 role="menuitem"

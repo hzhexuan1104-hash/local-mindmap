@@ -61,6 +61,7 @@ describe('Script Plugin Action validation', () => {
       contextVersion: 1,
       app: { version: '1.11.0', platform: 'desktop' },
       mindmap: {
+        filePath: '',
         title: 'Root',
         nodeCount: 2,
         selectedNodeId: 'node-1',
@@ -72,7 +73,7 @@ describe('Script Plugin Action validation', () => {
         remark: 'Remark',
         parentId: 'root',
         childrenIds: [],
-        type: 'default',
+        type: 'default', tags: [],
       },
       nodes: [
         {
@@ -81,7 +82,7 @@ describe('Script Plugin Action validation', () => {
           parentId: null,
           remark: '',
           childrenIds: ['node-1'],
-          type: 'default',
+          type: 'default', tags: [],
         },
         {
           id: 'node-1',
@@ -89,14 +90,14 @@ describe('Script Plugin Action validation', () => {
           parentId: 'root',
           remark: 'Remark',
           childrenIds: [],
-          type: 'default',
+          type: 'default', tags: [],
         },
       ],
       selection: { nodeIds: ['node-1'] },
     });
     expect(JSON.parse(JSON.stringify(context))).toEqual(context);
     expect(JSON.stringify(context)).not.toMatch(
-      /filePath|userData|__TAURI__|function/,
+      /userData|__TAURI__|function/,
     );
   });
 

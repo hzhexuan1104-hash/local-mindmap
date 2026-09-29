@@ -314,9 +314,9 @@ describe('PluginManagerPanel installation errors', () => {
     expect(html).toContain('卸载');
   });
 
-  it('renders a collapsed developer mode with safe local tooling entries', () => {
+  it('opens the workbench directly without showing the manager or logs', () => {
     const html = renderToStaticMarkup(
-      <PluginManagerPanel
+      <PluginManagerPanel view="workbench"
         {...developerProps}
         plugins={[]}
         lastInstallError=""
@@ -338,28 +338,13 @@ describe('PluginManagerPanel installation errors', () => {
       />,
     );
 
-    expect(html).toContain('<details');
-    expect(html).not.toContain('<details open=""');
-    expect(html).toContain('插件诊断中心');
-    expect(html).toContain('一键扫描插件');
-    expect(html).toContain('扫描已安装插件');
-    expect(html).toContain('导出 Markdown 报告');
-    expect(html).toContain('不联网、不上传报告、不执行插件代码');
-    expect(html).toContain('开发者模式');
-    expect(html).toContain('插件开发者工作台');
+    expect(html).toContain('aria-label="插件开发者工作台"');
     expect(html).toContain('新建插件项目');
     expect(html).toContain('校验插件项目');
     expect(html).toContain('打包为 .lmplugin');
-    expect(html).toContain('导入本地打包插件');
-    expect(html).toContain('查看示例插件目录');
-    expect(html).toContain('打开插件开发目录');
-    expect(html).toContain('创建示例插件');
-    expect(html).toContain('查看插件 API 文档');
-    expect(html).toContain('查看插件日志');
-    expect(html).toContain('复制用户数据目录路径');
-    expect(html).toContain('通过 Web Worker 执行本地脚本插件');
-    expect(html).toContain('不支持 Shell、DLL、文件系统或网络访问');
-    expect(html).toContain('不支持在 Web 端打开本地目录');
+    expect(html).toContain('支持的插件类型与实现示例');
+    expect(html).not.toContain('plugin-manager-backdrop');
+    expect(html).not.toContain('一键扫描插件');
   });
 
   it('renders the local gallery with install state, security, details and docs actions', () => {

@@ -159,7 +159,7 @@ plugins/installed/<pluginId>/
 
 ### Context Snapshot
 
-脚本收到的是 JSON 可序列化快照，不是 React state、DOM、Tauri API 或文件路径：
+脚本收到的是 JSON 可序列化快照，不是 React state、DOM 或 Tauri API；包含当前导图路径 `mindmap.filePath`（未保存时为空字符串）：
 
 ```json
 {
@@ -209,7 +209,7 @@ Action 校验采用整批拒绝策略：任一 action 非法时，本批 actions
 
 ### 安全边界与限制
 
-脚本运行在 Web Worker 中，只接收 context JSON，只返回 actions JSON，并设置超时。宿主不会把内部函数、React state、DOM、Tauri API、用户数据目录绝对路径或文件路径传入脚本。
+脚本运行在 Web Worker 中，只接收 context JSON，只返回 actions JSON，并设置超时。宿主不会把内部函数、React state、DOM、Tauri API、用户数据目录绝对路径传入脚本。当前导图路径通过 `mindmap.filePath` 提供，未保存时为空字符串。
 
 当前限制：
 
@@ -245,6 +245,7 @@ plugins/dev/sample-script-plugin/
   "app": { "version": "1.8.0", "platform": "desktop" },
   "mindmap": {
     "title": "中心主题",
+    "filePath": "",
     "nodeCount": 5,
     "selectedNodeId": "node-1",
     "rootNodeId": "root"
@@ -255,6 +256,7 @@ plugins/dev/sample-script-plugin/
     "remark": "备注",
     "parentId": "root",
     "childrenIds": ["node-2"],
+    "tags": [],
     "type": "default"
   },
   "nodes": [
@@ -264,7 +266,8 @@ plugins/dev/sample-script-plugin/
       "remark": "",
       "parentId": null,
       "childrenIds": ["node-1"],
-      "type": "default"
+      "tags": [],
+    "type": "default"
     }
   ],
   "selection": { "nodeIds": ["node-1"] }
@@ -273,7 +276,7 @@ plugins/dev/sample-script-plugin/
 
 `nodes` 最多包含 1000 个节点，只提供上例必要字段。超过限制时
 `mindmap.nodeCount` 仍是实际总数，并增加 `truncated: true` 与 `warning`。
-快照是深拷贝的 JSON，不包含函数、DOM、Tauri API、文件路径、用户数据目录
+快照是深拷贝的 JSON，不包含函数、DOM、Tauri API、用户数据目录
 或 React state 引用。
 
 ### 新增 Actions
@@ -614,6 +617,7 @@ snapshot，新增显式 `contextVersion: 1`：
   "app": { "version": "1.9.1", "platform": "desktop" },
   "mindmap": {
     "title": "中心主题",
+    "filePath": "C:/maps/example.lmind",
     "nodeCount": 10,
     "selectedNodeId": "node-1",
     "rootNodeId": "root"
@@ -624,6 +628,7 @@ snapshot，新增显式 `contextVersion: 1`：
     "remark": "",
     "parentId": "root",
     "childrenIds": [],
+    "tags": [],
     "type": "default"
   },
   "nodes": [],
@@ -631,7 +636,7 @@ snapshot，新增显式 `contextVersion: 1`：
 }
 ```
 
-context 不含函数、DOM、Tauri API、access token、文件路径、用户数据目录或插件
+context 不含函数、DOM、Tauri API、access token、用户数据目录或插件
 安装目录。`nodes` 最多 1000 个；超限时附加 `truncated: true` 和 `warning`。
 node-context 菜单运行时，`selectedNode` 和 selection 绑定用户右键点击的节点。
 
@@ -695,7 +700,7 @@ plugins/dev/sample-python-plugin/
 ### 安全边界
 
 Local Mindmap 不提供 Shell、DLL、远程 URL、远程插件市场、网络 API、依赖下载
-或自动安装 Python，也不向插件 context 暴露文件系统路径。外部程序仍是操作系统
+或自动安装 Python，仅向插件 context 提供当前导图路径，不提供用户数据目录或插件安装目录。外部程序仍是操作系统
 进程，宿主无法把它等同于 Web Worker 沙箱：它可能凭当前用户的系统权限访问文件
 或网络。因此此功能默认关闭并标记为高风险实验能力，只应运行用户信任的本地程序。
 无论外部程序做什么，Local Mindmap 仅接受 stdout 中通过 Action Protocol 校验的
@@ -1102,3 +1107,43 @@ registry 孤儿记录是指 registry 中存在插件记录，但 `plugins/instal
 JSON 报告包含 `scanId`、`scannedAt`、`appVersion`、`userDataDir`、`summary`、`counts`、`items`、`fixResults`。Markdown 报告包含标题、扫描时间、汇总表、critical/error/warning/info 分组、pluginId、category、path、message、fixable 和修复建议。
 
 报告不会导出插件源码内容，不会导出 `main.py` / `main.js` 内容，也不会导出用户导图内容。
+
+
+## 2026-09-29 文档反馈增量
+
+- 插件管理分为“插件配置 / 已安装插件 / 插件商城”。日志、开发者工作台和开发文档通过各自菜单直接打开窗口。
+- `script`、`action-workflow` 和 `external-command` 的上下文均包含 `mindmap.filePath`，尚未保存的导图使用空字符串。每个 `nodes` 项以及 `selectedNode` 均含 `tags: string[]`，无标签时为空数组；附件内容不进入插件上下文。
+- Python 从 `sys.stdin` 读取上述 JSON；stdout 仍只能输出 actions 协议 JSON。`showMessage` 的所有消息在同一弹窗中显示。
+
+```python
+import json
+import sys
+context = json.load(sys.stdin)
+path = context["mindmap"]["filePath"]
+selected = context.get("selectedNode")
+tags = selected["tags"] if selected else []
+print(json.dumps({"actions": [{
+    "type": "showMessage",
+    "message": "文件：" + (path or "未保存") + "；标签：" + ", ".join(tags)
+}]}, ensure_ascii=False))
+```
+
+### 可选公共商城清单
+
+商城地址保存在 `config/marketplace.json`，默认留空，只有用户点击“查询公共资源 / 下载”才发起匿名 HTTPS GET。请求不带导图内容、附件、身份凭证或 Referer，不跟随重定向。离线状态不影响本地插件与编辑功能。
+
+服务需允许应用 WebView 的跨域 GET（公共无凭证资源可使用 `Access-Control-Allow-Origin: *`），并返回如下清单；`url` 可为 HTTPS 绝对地址或相对清单地址。资源类型支持 `plugin`、`node-type`、`template`，文件支持 `.json` 与 `.lmplugin`。
+
+```json
+{
+  "items": [
+    { "id": "example.plugin", "name": "示例插件", "kind": "plugin", "description": "说明", "url": "./example.lmplugin", "fileName": "example.lmplugin" },
+    { "id": "example.nodes", "name": "节点类型包", "kind": "node-type", "description": "说明", "url": "./nodes.json", "fileName": "nodes.json" },
+    { "id": "example.templates", "name": "模板包", "kind": "template", "description": "说明", "url": "./templates.json", "fileName": "templates.json" }
+  ]
+}
+```
+
+清单上限 2 MB / 1000 项，资源文件上限 20 MB，单次请求超时 15 秒。下载通过本地保存流程完成，之后使用既有导入入口校验安装，不自动执行或信任代码。
+本地商城安装与本地导入的来源保存在 `config/plugin-install-sources.json`；旧安装没有来源记录时显示“历史安装（来源未记录）”，不会根据同名插件猜测来源。
+插件日志最近 100 条保存在 `logs/plugins.json`。插件配置页显示固定的安装和日志目录，不提供任意目录迁移。

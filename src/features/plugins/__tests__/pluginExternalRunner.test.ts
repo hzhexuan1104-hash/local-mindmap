@@ -16,6 +16,7 @@ const context: ScriptPluginContext = {
   contextVersion: 1,
   app: { version: '1.9.1', platform: 'desktop' },
   mindmap: {
+    filePath: '',
     title: 'Root',
     nodeCount: 1,
     selectedNodeId: 'root',
@@ -27,7 +28,7 @@ const context: ScriptPluginContext = {
     remark: '',
     parentId: null,
     childrenIds: [],
-    type: 'default',
+    type: 'default', tags: [],
   },
   nodes: [],
   selection: { nodeIds: ['root'] },

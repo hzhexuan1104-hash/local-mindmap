@@ -14,6 +14,10 @@ export type MindmapNodeStyle = {
 export type MindmapNodeProgress = 0 | 25 | 50 | 75 | 100;
 export type MindmapNodePriority = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
+export type NodeAttachment =
+  | { kind: 'link'; name: string; url: string }
+  | { kind: 'file' | 'image'; name: string; dataUrl: string };
+
 export type MindmapNode = {
   id: string;
   text: string;
@@ -22,6 +26,7 @@ export type MindmapNode = {
   priority?: MindmapNodePriority;
   progress?: MindmapNodeProgress;
   tags?: string[];
+  attachment?: NodeAttachment;
   nodeTypeId?: string;
   style?: MindmapNodeStyle;
   collapsed?: boolean;

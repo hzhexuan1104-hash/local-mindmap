@@ -92,7 +92,7 @@ export function createPluginLog(
 ): PluginLogEntry {
   return {
     ...entry,
-    id: `plugin-log-${nextPluginLogId++}`,
+    id: `plugin-log-${Date.now()}-${nextPluginLogId++}`,
     timestamp: entry.timestamp ?? new Date().toISOString(),
   };
 }

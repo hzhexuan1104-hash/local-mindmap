@@ -1,3 +1,4 @@
+import { normalizeAttachment } from './nodeAttachments';
 import type {
   LmindDocument,
   MindmapNode,
@@ -70,6 +71,7 @@ function isRawMindmapNode(value: unknown): value is {
   priority?: unknown;
   progress?: unknown;
   tags?: unknown;
+  attachment?: unknown;
   nodeTypeId?: unknown;
   style?: unknown;
   collapsed?: unknown;
@@ -104,6 +106,7 @@ function normalizeMindmapNode(node: {
   priority?: unknown;
   progress?: unknown;
   tags?: unknown;
+  attachment?: unknown;
   nodeTypeId?: unknown;
   style?: unknown;
   collapsed?: unknown;
@@ -112,6 +115,7 @@ function normalizeMindmapNode(node: {
 }): MindmapNode {
   const style = normalizeNodeStyle(node.style);
   const tags = normalizeNodeTags(node.tags);
+  const attachment = normalizeAttachment(node.attachment);
 
   return {
     id: node.id,
@@ -120,6 +124,7 @@ function normalizeMindmapNode(node: {
     ...(isNodePriority(node.priority) ? { priority: node.priority } : {}),
     ...(isNodeProgress(node.progress) ? { progress: node.progress } : {}),
     ...(tags.length > 0 ? { tags } : {}),
+    ...(attachment ? { attachment } : {}),
     ...(typeof node.nodeTypeId === 'string' && node.nodeTypeId
       ? { nodeTypeId: node.nodeTypeId }
       : {}),
@@ -137,6 +142,7 @@ function normalizeMindmapNode(node: {
           priority?: unknown;
           progress?: unknown;
           tags?: unknown;
+  attachment?: unknown;
           nodeTypeId?: unknown;
           style?: unknown;
           collapsed?: unknown;
