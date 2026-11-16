@@ -1,3 +1,6 @@
+import appPackage from '../../package.json';
+import usageGuide from '../../docs/usage-guide.md?raw';
+import { ImageAttachmentPreview } from '../features/mindmap/ImageAttachmentPreview';
 import { recordPluginInstallOrigin } from '../features/plugins/marketplace';
 import { AttachmentDialog } from '../features/mindmap/AttachmentDialog';
 import { attachmentBytes, attachmentIcon } from '../features/mindmap/nodeAttachments';
@@ -888,7 +891,8 @@ export function App() {
   const [messageKind, setMessageKind] = useState<ToastKind>('info');
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
-  const [isDocumentDirty, setIsDocumentDirty] = useState(true);
+  // The initial blank canvas contains no user edits; startup file opening must not prompt to discard it.
+  const [isDocumentDirty, setIsDocumentDirty] = useState(false);
   const [fileSaveStatus, setFileSaveStatus] = useState<FileSaveStatus>('draft');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
@@ -926,6 +930,7 @@ export function App() {
   const [templateCategoryFilter, setTemplateCategoryFilter] = useState('');
   const [templateSortMode, setTemplateSortMode] =
     useState<TemplateSortMode>('created-desc');
+  const [startupReady, setStartupReady] = useState(false);
   const [childNodeTypeId, setChildNodeTypeId] = useState('');
   const [siblingNodeTypeId, setSiblingNodeTypeId] = useState('');
   const [isNodeQuickToolbarExpanded, setIsNodeQuickToolbarExpanded] =
@@ -980,7 +985,7 @@ export function App() {
   const [exportSelectionOpen, setExportSelectionOpen] = useState(false);
   const [pluginManagerInitialTab, setPluginManagerInitialTab] = useState<'config' | 'installed' | 'gallery'>('installed');
   const [pluginPanelView, setPluginPanelView] = useState<'manager' | 'workbench' | 'logs' | 'diagnostics'>('manager');
-  const [feedbackDialog, setFeedbackDialog] = useState<{ title: string; content: string; markdown?: boolean } | null>(null);
+  const [feedbackDialog, setFeedbackDialog] = useState<{ title: string; content: string; markdown?: boolean; exportPaths?: string[] } | null>(null);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
@@ -1662,6 +1667,7 @@ export function App() {
           showMessage(getErrorMessage(error, '用户数据目录初始化失败，应用仍可继续使用'));
         }
       }
+      if (isActive) setStartupReady(true);
     })();
 
     return () => {
@@ -1863,7 +1869,7 @@ export function App() {
           return;
         case 'add-child':
           setHasUsedShortcutCreation(true);
-          handleAddChild('', { startEditing: true });
+          handleAddChild(childNodeTypeId, { startEditing: true });
           return;
         case 'add-sibling':
           setHasUsedShortcutCreation(true);
@@ -2497,6 +2503,18 @@ export function App() {
     }
   };
 
+  useEffect(() => {
+    if (!isDesktopApp || !startupReady) return;
+    let active = true;
+    void import('../desktop/bridge').then(({ invoke }) => invoke<string | null>('get_launch_file')).then(path => {
+      if (active && path) {
+        setIsRecoveryCenterVisible(false);
+        void handleOpenRecentFile({ path, name: path.split(/[\\/]/).pop() || path });
+      }
+    }).catch(error => { if (active) showMessage('读取启动文件失败：' + String(error)); });
+    return () => { active = false; };
+  }, [startupReady]);
+
   const handleOpenRecentFile = async (entry: RecentFileEntry) => {
     if (!isDesktopApp) {
       showMessage(`最近下载：${entry.name}。浏览器无法重新打开本地下载路径。`);
@@ -2854,7 +2872,7 @@ export function App() {
       const nameConflictText =
         result.nameConflictCount > 0 ? `，同名 ${result.nameConflictCount}` : '';
       showMessage(
-        `已导入节点类型包：${pack.meta.name}。${savedPackPath ? `已保存到用户目录：${savedPackPath}。` : ''}成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，重命名冲突 ${result.renamedConflictCount} 个，无效条目 ${result.invalidCount} 个${nameConflictText}`,
+        `已导入节点类型包：${pack.meta.name}。${savedPackPath ? `已保存到用户目录：${savedPackPath}。` : ''}成功导入 ${result.importedCount} 个，跳过重复 ${result.skippedDuplicateCount} 个，冲突类型：${result.conflictingTypes.join("、") || "无"}（需先删除已有类型方可重新导入），无效条目 ${result.invalidCount} 个${nameConflictText}`,
       );
     } catch (error) {
       showMessage(`导入失败：${getErrorMessage(error, '节点类型包格式不正确')}`);
@@ -4174,7 +4192,7 @@ export function App() {
     if (attachment.kind === 'image') { setImageAttachment(attachment); return; }
     try {
       if (isDesktopApp) {
-        const { invoke } = await import('@tauri-apps/api/core');
+        const { invoke } = await import('../desktop/bridge');
         if (attachment.kind === 'link') await invoke('open_attachment_link', { url: attachment.url });
         else await invoke('open_embedded_attachment', { name: attachment.name, bytes: Array.from(attachmentBytes(attachment)) });
       } else if (attachment.kind === 'link') window.open(attachment.url, '_blank', 'noopener,noreferrer');
@@ -5627,7 +5645,7 @@ export function App() {
   };
 
   const showScriptMessages = (messages: ScriptShowMessageAction[]) => {
-    if (messages.length) setFeedbackDialog({ title: '插件消息', content: messages.map((item) => `${item.level === 'error' ? '错误：' : item.level === 'warning' ? '提示：' : ''}${item.message}`).join('\n\n') });
+    if (messages.length) setFeedbackDialog({ title: '插件消息', exportPaths: messages.map(item => item.exportPath?.trim()).filter((path): path is string => Boolean(path)), content: messages.map((item) => `${item.level === 'error' ? '错误：' : item.level === 'warning' ? '提示：' : ''}${item.message}`).join('\n\n') });
   };
 
   const setScriptRunResult = (
@@ -5722,6 +5740,13 @@ export function App() {
         `script context built nodeCount=${context.nodes.length} truncated=${Boolean(context.truncated)}`,
         pluginId,
       );
+      if (plugin.capabilities.includes('import')) {
+        if (!isDesktopApp) throw new Error('插件文件路径导入仅支持桌面端。');
+        const { invoke } = await import('../desktop/bridge');
+        const inputFile = await invoke<{ path: string; name: string } | null>('select_plugin_input_file');
+        if (!inputFile) return;
+        context.inputFile = inputFile;
+      }
       const runResult = await runScriptPlugin({ source, context });
       if (!runResult.ok) {
         const isTimeout = runResult.error.includes('执行超时');
@@ -5800,10 +5825,17 @@ export function App() {
       const mutatesMindmap = validation.actions.some(
         (action) => action.type !== 'showMessage',
       );
+      if (validation.actions.some(action => action.type === 'createMindmap') && !confirmReplaceDirtyDocument('插件新建导图')) return;
       const applied = applyScriptPluginActions(mindmap, validation.actions);
       if (mutatesMindmap) {
         recordHistory();
         setMindmap(applied.rootNode);
+        if (validation.actions.some(action => action.type === 'createMindmap')) {
+          setCurrentFilePath(null);
+          setCurrentFileName('未命名.lmind');
+          setSelectedNodeId(applied.rootNode.id);
+          setSelectedNodeIds([applied.rootNode.id]);
+        }
         setIsDocumentDirty(true);
         recordPluginLog(
           'info',
@@ -6068,10 +6100,17 @@ export function App() {
       }
 
       const mutatesMindmap = workflowHasWriteActions(resolution.actions);
+      if (validation.actions.some(action => action.type === 'createMindmap') && !confirmReplaceDirtyDocument('插件新建导图')) return;
       const applied = applyScriptPluginActions(mindmap, validation.actions);
       if (mutatesMindmap) {
         recordHistory();
         setMindmap(applied.rootNode);
+        if (validation.actions.some(action => action.type === 'createMindmap')) {
+          setCurrentFilePath(null);
+          setCurrentFileName('未命名.lmind');
+          setSelectedNodeId(applied.rootNode.id);
+          setSelectedNodeIds([applied.rootNode.id]);
+        }
         setIsDocumentDirty(true);
         recordPluginLog(
           'info',
@@ -6231,6 +6270,13 @@ export function App() {
     );
 
     try {
+      if (plugin.capabilities.includes('import')) {
+        if (!isDesktopApp) throw new Error('插件文件路径导入仅支持桌面端。');
+        const { invoke } = await import('../desktop/bridge');
+        const inputFile = await invoke<{ path: string; name: string } | null>('select_plugin_input_file');
+        if (!inputFile) return;
+        context.inputFile = inputFile;
+      }
       const processResult = await runExternalCommandPlugin({
         pluginId,
         context,
@@ -6390,10 +6436,17 @@ export function App() {
         return;
       }
 
+      if (validation.actions.some(action => action.type === 'createMindmap') && !confirmReplaceDirtyDocument('插件新建导图')) return;
       const applied = applyScriptPluginActions(mindmap, validation.actions);
       if (mutatesMindmap) {
         recordHistory();
         setMindmap(applied.rootNode);
+        if (validation.actions.some(action => action.type === 'createMindmap')) {
+          setCurrentFilePath(null);
+          setCurrentFileName('未命名.lmind');
+          setSelectedNodeId(applied.rootNode.id);
+          setSelectedNodeIds([applied.rootNode.id]);
+        }
         setIsDocumentDirty(true);
         recordPluginLog(
           'info',
@@ -6615,9 +6668,9 @@ export function App() {
     'plugin.workbench': () => openPluginView('workbench'),
     'plugin.diagnostics': () => openPluginView('diagnostics'),
     'plugin.logs': () => openPluginView('logs'),
-    'help.guide': () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。'),
+    'help.guide': () => setFeedbackDialog({ title: '使用指南', content: usageGuide, markdown: true }),
     'help.shortcuts': () => setIsShortcutHelpVisible(true),
-    'help.about': () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。'),
+    'help.about': () => setFeedbackDialog({ title: '关于 Local Mindmap', content: 'Local Mindmap\n版本：' + appPackage.version + '\n纯本地、离线运行的思维导图工具。\n软件权利归相应著作权人所有。' }),
     'settings.commandPalette': () => setActiveWorkspacePanel('settings'),
   };
 
@@ -6839,9 +6892,8 @@ export function App() {
       { id: 'diagnostics', label: '诊断与日志', children: [{ id: 'logs', label: '插件日志', execute: () => openPluginView('logs') }] },
     ] },
     { id: 'help', label: '帮助', items: [
-      { id: 'usage', label: '使用帮助', children: [{ id: 'guide', label: '使用指南', execute: () => showMessage('使用指南：从模板开始，双击编辑节点，Tab 添加子节点，Enter 添加同级节点。') }, { id: 'shortcuts', label: '快捷键', execute: () => setIsShortcutHelpVisible(true) }, { id: 'palette', label: '命令面板（Ctrl+K）', execute: openCommandPalette }] },
-      { id: 'docs', label: '开发文档', children: [{ id: 'plugin', label: '插件开发文档', execute: () => void handleOpenPluginDevelopmentDocs() }] },
-      { id: 'about', label: '关于', children: [{ id: 'local-mindmap', label: '关于 Local Mindmap', execute: () => showMessage('Local Mindmap：纯本地、离线运行的思维导图工具。') }] },
+      { id: 'usage', label: '使用帮助', children: [{ id: 'guide', label: '使用指南', execute: () => setFeedbackDialog({ title: '使用指南', content: usageGuide, markdown: true }) }, { id: 'shortcuts', label: '快捷键', execute: () => setIsShortcutHelpVisible(true) }] },
+      { id: 'about', label: '关于', children: [{ id: 'local-mindmap', label: '关于 Local Mindmap', execute: () => setFeedbackDialog({ title: '关于 Local Mindmap', content: 'Local Mindmap\n版本：' + appPackage.version + '\n纯本地、离线运行的思维导图工具。\n软件权利归相应著作权人所有。' }) }] },
     ] },
   ];
 
@@ -7818,9 +7870,13 @@ export function App() {
       ) : null}
 
       {attachmentNodeId ? <AttachmentDialog key={attachmentNodeId} attachment={mindmapIndex.nodeById.get(attachmentNodeId)?.attachment} onSave={saveNodeAttachment} onClose={() => setAttachmentNodeId(null)} /> : null}
-      {imageAttachment?.kind === 'image' ? <FeedbackDialog title={imageAttachment.name} onClose={() => setImageAttachment(null)}><img src={imageAttachment.dataUrl} alt={imageAttachment.name} style={{ maxWidth: '100%', height: 'auto' }} /></FeedbackDialog> : null}
+      {imageAttachment?.kind === 'image' ? <FeedbackDialog title={imageAttachment.name} onClose={() => setImageAttachment(null)}><ImageAttachmentPreview key={imageAttachment.dataUrl} src={imageAttachment.dataUrl} name={imageAttachment.name} /></FeedbackDialog> : null}
       {exportSelectionOpen ? <FeedbackDialog title="导出选中节点" onClose={() => setExportSelectionOpen(false)}><p>导出选中节点及其子节点；父子重复选择只导出一次。多个独立分支将放在同一中心主题下。</p><div className="plugin-manager-actions">{(['lmind', 'md', 'xlsx'] as const).map((format) => <button key={format} type="button" onClick={() => void handleExportSelection(format)}>导出 {format === 'lmind' ? 'LMIND（含附件）' : format === 'md' ? 'Markdown' : 'Excel'}</button>)}</div></FeedbackDialog> : null}
-      {feedbackDialog ? <FeedbackDialog {...feedbackDialog} onClose={() => setFeedbackDialog(null)} /> : null}
+      {feedbackDialog ? <FeedbackDialog {...feedbackDialog} onClose={() => {
+        const paths = feedbackDialog.exportPaths ?? [];
+        setFeedbackDialog(null);
+        for (const path of paths) void handleOpenExportedPluginLocation(path);
+      }} /> : null}
 
       {isShortcutHelpVisible ? (
         <div className="shortcut-help-backdrop" role="presentation">

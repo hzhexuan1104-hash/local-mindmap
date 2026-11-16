@@ -33,6 +33,17 @@
       "icons/icon.icns",
       "icons/icon.ico",
       "icons/icon.png"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "lmind"
+        ],
+        "name": "Local Mindmap Document",
+        "description": "Local Mindmap 思维导图",
+        "role": "Editor",
+        "mimeType": "application/x-local-mindmap"
+      }
     ]
   }
 }

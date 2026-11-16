@@ -67,6 +67,7 @@ export function NodeManagerDrawer({
             }}
           >
             {hasErrors ? <p className="node-manager-error-summary" role="alert">请先修正以下必填或格式错误字段。</p> : null}
+            <label><span>节点类型 ID（只读）</span><input readOnly value={editingNodeTypeId ?? draft.id ?? ""} /></label>
             <label>
               <span>类型名称</span>
               <input

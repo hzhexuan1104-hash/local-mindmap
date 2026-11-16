@@ -2,8 +2,8 @@ import type { MindmapNode } from '../mindmap/types';
 
 export const SCRIPT_ACTION_LIMIT = 20;
 export const SCRIPT_CONTEXT_NODE_LIMIT = 1000;
-export const SCRIPT_UPDATE_NODES_LIMIT = 50;
-export const SCRIPT_ADD_CHILD_NODES_LIMIT = 20;
+export const SCRIPT_UPDATE_NODES_LIMIT = 500;
+export const SCRIPT_ADD_CHILD_NODES_LIMIT = 500;
 export const SCRIPT_TEXT_MAX_LENGTH = 500;
 export const SCRIPT_REMARK_MAX_LENGTH = 5000;
 export const SCRIPT_TEXT_FRAGMENT_MAX_LENGTH = 100;
@@ -13,6 +13,7 @@ export type ScriptShowMessageAction = {
   type: 'showMessage';
   level?: 'info' | 'warning' | 'error';
   message: string;
+  exportPath?: string;
 };
 
 export type ScriptNodePatch = {
@@ -46,6 +47,7 @@ export type ScriptAddChildNodeAction = {
   node: {
     text: string;
     remark?: string;
+    nodeTypeId?: string;
   };
 };
 
@@ -55,6 +57,7 @@ export type ScriptAddChildNodesAction = {
   nodes: Array<{
     text: string;
     remark?: string;
+    nodeTypeId?: string;
   }>;
 };
 
@@ -70,7 +73,10 @@ export type ScriptAppendNodeRemarkAction = {
   text: string;
 };
 
+export type ImportedPluginNode = { text: string; remark?: string; nodeTypeId?: string; children?: ImportedPluginNode[] };
+
 export type ScriptPluginAction =
+  | { type: "createMindmap"; rootNode: ImportedPluginNode }
   | ScriptShowMessageAction
   | ScriptUpdateNodeAction
   | ScriptUpdateNodesAction
@@ -92,6 +98,7 @@ export type ScriptContextNode = {
 
 export type ScriptPluginContext = {
   contextVersion: 1;
+  inputFile?: { path: string; name: string };
   app: {
     version: string;
     platform: 'desktop';
@@ -287,11 +294,12 @@ function validateChildNode(value: unknown, field: string) {
     return `${field} 必须是对象。`;
   }
   const illegalKey = Object.keys(value).find(
-    (key) => key !== 'text' && key !== 'remark',
+    (key) => key !== 'text' && key !== 'remark' && key !== 'nodeTypeId',
   );
   if (illegalKey) {
     return `${field} 不允许字段 ${illegalKey}。`;
   }
+  if (value.nodeTypeId !== undefined && (typeof value.nodeTypeId !== "string" || !value.nodeTypeId.trim() || value.nodeTypeId.length > 200)) return "nodeTypeId 必须是非空字符串且不超过 200 字符。";
   return (
     validateText(value.text, `${field}.text`, SCRIPT_TEXT_MAX_LENGTH, true) ??
     (value.remark === undefined
@@ -325,7 +333,27 @@ function validateSingleAction(
   }
 
   switch (value.type) {
+    case 'createMindmap': {
+      let count = 0;
+      const check = (node: unknown, depth: number): string | null => {
+        if (++count > 1000 || depth > 64) return '导入导图最多 1000 节点、64 层。';
+        if (!isRecord(node)) return '导入节点必须为对象。';
+        const { children, ...fields } = node;
+        const error = validateChildNode(fields, 'rootNode');
+        if (error) return error;
+        if (children !== undefined && !Array.isArray(children)) return 'children 必须为数组。';
+        for (const child of (children ?? []) as unknown[]) {
+          const error = check(child, depth + 1);
+          if (error) return error;
+        }
+        return null;
+      };
+      const error = check(value.rootNode, 1);
+      return error ? fail(error) : { valid: true, actions: [{ type: 'createMindmap', rootNode: value.rootNode as ImportedPluginNode }], error: null };
+    }
+
     case 'showMessage': {
+      if (value.exportPath !== undefined && (typeof value.exportPath !== 'string' || value.exportPath.length > 4096 || /[\x00-\x1f]/.test(value.exportPath))) return fail('exportPath 无效。');
       const messageError = validateText(value.message, 'message', 1000);
       if (messageError) return fail(messageError);
       if (
@@ -342,6 +370,7 @@ function validateSingleAction(
           type: 'showMessage',
           level: value.level as ScriptShowMessageAction['level'],
           message: value.message as string,
+          exportPath: value.exportPath as string | undefined,
         }],
         error: null,
       };
@@ -437,13 +466,13 @@ function validateSingleAction(
       if (parentError) return fail(parentError);
       const nodeError = validateChildNode(value.node, 'node');
       if (nodeError) return fail(nodeError);
-      const node = value.node as { text: string; remark?: string };
+      const node = value.node as { text: string; remark?: string; nodeTypeId?: string };
       return {
         valid: true,
         actions: [{
           type: 'addChildNode',
           parentId: value.parentId as string,
-          node: { text: node.text, remark: node.remark },
+          node: { text: node.text, remark: node.remark, nodeTypeId: node.nodeTypeId },
         }],
         error: null,
       };
@@ -460,8 +489,8 @@ function validateSingleAction(
       for (const [nodeIndex, node] of value.nodes.entries()) {
         const nodeError = validateChildNode(node, `nodes[${nodeIndex}]`);
         if (nodeError) return fail(nodeError);
-        const child = node as { text: string; remark?: string };
-        nodes.push({ text: child.text, remark: child.remark });
+        const child = node as { text: string; remark?: string; nodeTypeId?: string };
+        nodes.push({ text: child.text, remark: child.remark, nodeTypeId: child.nodeTypeId });
       }
       return {
         valid: true,
@@ -569,6 +598,9 @@ export function validateScriptPluginActions(
     actions.push(...result.actions);
   }
 
+  if (actions.some(action => action.type === 'createMindmap') && actions.filter(action => action.type !== 'showMessage').length !== 1) {
+    return { valid: false, actions: [], error: 'createMindmap 必须为本批唯一的修改操作。' };
+  }
   return { valid: true, actions, error: null };
 }
 
@@ -659,6 +691,14 @@ export function applyScriptPluginActions(
             ? `${node.text}${action.text}`
             : `${action.text}${node.text}`,
       }));
+    } else if (action.type === 'createMindmap') {
+      let serial = 0;
+      const create = (node: ImportedPluginNode): MindmapNode => ({
+        id: createScriptNodeId(ids, actionIndex, serial++),
+        text: node.text, remark: node.remark ?? '', nodeTypeId: node.nodeTypeId,
+        children: (node.children ?? []).map(create),
+      });
+      nextRoot = create(action.rootNode);
     } else if (action.type === 'appendNodeRemark') {
       nextRoot = updateNode(nextRoot, action.nodeId, (node) => ({
         ...node,
@@ -679,6 +719,7 @@ export function applyScriptPluginActions(
             id: createScriptNodeId(ids, actionIndex, nodeIndex),
             text: child.text,
             remark: child.remark ?? '',
+            nodeTypeId: child.nodeTypeId,
             children: [],
           })),
         ],

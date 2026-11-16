@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getDesktopPluginDir,
   installDesktopPluginManifest,
-  isTauriDesktopRuntime,
+  isNativeDesktopRuntime,
   listDesktopPlugins,
   normalizeNativeDesktopPluginManifest,
   setDesktopPluginEnabled,
@@ -511,6 +511,7 @@ describe('declarative plugin manifest validation', () => {
       'external-command',
     ]);
     expect(SUPPORTED_CAPABILITIES).toEqual([
+      'import',
       'themes',
       'icons',
       'export',
@@ -1385,7 +1386,7 @@ describe('normalizeNativeDesktopPluginManifest', () => {
 
 describe('desktop plugin API web fallback', () => {
   it('detects non-Tauri test environment without throwing', () => {
-    expect(isTauriDesktopRuntime()).toBe(false);
+    expect(isNativeDesktopRuntime()).toBe(false);
   });
 
   it('returns an empty plugin directory outside Tauri', async () => {

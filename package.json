@@ -10,11 +10,13 @@
     "test": "vitest run",
     "test:release-ci": "vitest run scripts/ci/__tests__",
     "perf:mindmap": "vitest run src/features/mindmap/__tests__/performanceBenchmark.test.ts --silent=false",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "native:build": "cargo build --manifest-path src-tauri/Cargo.toml --release --offline",
+    "desktop:dev": "npm run build && npm run native:build && electron .",
+    "desktop:build": "npm run build && npm run native:build && electron-builder --dir",
+    "desktop:package": "npm run build && npm run native:build && electron-builder",
+    "desktop:smoke": "electron electron/smoke.cjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
     "html-to-image": "^1.11.13",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -23,13 +25,69 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^45.3.3",
+    "electron-builder": "^26.18.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^4.1.9"
-  }
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.localmindmap.desktop",
+    "productName": "Local Mindmap",
+    "directories": {
+      "output": "release-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main.cjs",
+      "electron/preload.cjs",
+      "electron/commands.json",
+      "package.json",
+      "src-tauri/icons/icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "src-tauri/target/release",
+        "to": "native",
+        "filter": [
+          "local-mindmap-service",
+          "local-mindmap-service.exe"
+        ]
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "lmind",
+        "name": "Local Mindmap Document",
+        "role": "Editor"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src-tauri/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "icon": "src-tauri/icons"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "src-tauri/icons/icon.icns"
+    }
+  },
+  "description": "Offline local mindmap with bundled Chromium",
+  "author": "local-mindmap contributors"
 }

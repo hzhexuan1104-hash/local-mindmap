@@ -35,6 +35,7 @@ export const NODE_TYPE_SHAPES = [
 ] as const;
 
 export type NodeTypeDraft = {
+  id?: string;
   name: string;
   icon: string | null;
   shape: MindmapNodeType['shape'];
@@ -49,6 +50,7 @@ export type NodeTypeDraft = {
 };
 
 export const createEmptyNodeTypeDraft = (): NodeTypeDraft => ({
+  id: crypto.randomUUID(),
   name: '',
   icon: null,
   shape: DEFAULT_NODE_STYLE.shape,
@@ -88,7 +90,7 @@ export function createMindmapNodeType(
   }
 
   return {
-    id: crypto.randomUUID(),
+    id: draft.id ?? crypto.randomUUID(),
     name,
     icon: draft.icon?.trim() || null,
     shape: draft.shape || DEFAULT_NODE_STYLE.shape,

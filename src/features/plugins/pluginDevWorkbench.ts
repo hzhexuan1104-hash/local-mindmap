@@ -210,7 +210,7 @@ async function invokeDevPlugin<T>(
   if (invokerOverride) {
     return invokerOverride<T>(command, args);
   }
-  const { invoke } = await import('@tauri-apps/api/core');
+  const { invoke } = await import('../../desktop/bridge');
   return invoke<T>(command, args);
 }
 

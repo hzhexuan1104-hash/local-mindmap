@@ -108,16 +108,16 @@ describe('node type packs', () => {
     expect(result.skippedDuplicateCount).toBe(1);
   });
 
-  it('generates a new id for same-id node types with different content', () => {
+  it('skips and reports same-id node types with different content', () => {
     const existing = [createNodeType()];
     const pack = createNodeTypePack([
       createNodeType({ name: 'Different task', backgroundColor: '#ff0000' }),
     ]);
     const result = importNodeTypesFromPack(existing, pack);
 
-    expect(result.nodeTypes).toHaveLength(2);
-    expect(result.nodeTypes[1].id).toBe('task-imported-1');
-    expect(result.renamedConflictCount).toBe(1);
+    expect(result.nodeTypes).toHaveLength(1);
+    expect(result.conflictingTypes).toEqual(['Different task (task)']);
+    expect(result.renamedConflictCount).toBe(0);
   });
 
   it('skips node types missing required fields', () => {

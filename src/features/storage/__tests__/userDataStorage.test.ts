@@ -122,7 +122,7 @@ function installWindow(desktop = false) {
     configurable: true,
     value: {
       localStorage: new MemoryStorage(),
-      ...(desktop ? { __TAURI_INTERNALS__: {} } : {}),
+      ...(desktop ? { localMindmap: {} } : {}),
     },
   });
 }
@@ -156,12 +156,11 @@ describe('userDataStorage web fallback', () => {
     await expect(ensureUserDataDirs()).resolves.toBe('浏览器本地存储');
   });
 
-  it('recognizes the Tauri v2 runtime marker', () => {
-    (globalThis as typeof globalThis & { isTauri?: boolean }).isTauri = true;
-
+  it('recognizes the isolated Electron desktop bridge', () => {
+    Object.defineProperty(window, 'localMindmap', { value: {}, configurable: true });
     expect(isDesktopRuntime()).toBe(true);
-
-    Reflect.deleteProperty(globalThis, 'isTauri');
+    Reflect.deleteProperty(window, 'localMindmap');
+    expect(isDesktopRuntime()).toBe(false);
   });
 });
 

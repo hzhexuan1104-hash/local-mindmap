@@ -48,6 +48,7 @@ export type PluginType =
   | 'external-command';
 
 export type PluginCapability =
+  | 'import'
   | 'export'
   | 'nodeTypes'
   | 'templates'
@@ -199,6 +200,7 @@ export const SUPPORTED_PLUGIN_TYPES: readonly PluginType[] = [
 ] as const;
 
 export const SUPPORTED_CAPABILITIES: readonly PluginCapability[] = [
+  'import',
   'themes',
   'icons',
   'export',
@@ -360,7 +362,7 @@ export async function invokeTauriDesktopCommand<T>(
   command: string,
   args?: Record<string, unknown>,
 ) {
-  const { invoke } = await import('@tauri-apps/api/core');
+  const { invoke } = await import('../../desktop/bridge');
   return invoke(command, args) as Promise<T>;
 }
 
@@ -948,6 +950,7 @@ function warnCapabilityContributionMismatch(
     script: contributions?.menus?.length ?? 0,
     workflow: 0,
     'external-command': 0,
+    'import': 0,
     'mindmap:read': 0,
     'mindmap:write': 0,
     'node:read': 0,
@@ -956,7 +959,7 @@ function warnCapabilityContributionMismatch(
 
   for (const capability of SUPPORTED_CAPABILITIES) {
     if (
-      capability === 'mindmap:read' ||
+      capability === 'import' || capability === 'mindmap:read' ||
       capability === 'mindmap:write' ||
       capability === 'node:read' ||
       capability === 'node:write' ||

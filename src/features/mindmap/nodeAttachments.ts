@@ -38,11 +38,11 @@ export function attachmentBytes(attachment: Exclude<NodeAttachment, { kind: 'lin
 }
 
 export function attachmentIcon(attachment: NodeAttachment): string {
-  if (attachment.kind === 'link') return '↗';
-  if (attachment.kind === 'image') return '▧';
+  if (attachment.kind === 'link') return '🔗';
+  if (attachment.kind === 'image') return '🖼';
   const extension = attachment.name.split('.').pop()?.toLowerCase();
   if (['xlsx', 'xls', 'csv', 'ods'].includes(extension ?? '')) return '▦';
-  if (['pdf', 'doc', 'docx', 'txt', 'md', 'odt'].includes(extension ?? '')) return '▤';
+  if (['pdf', 'doc', 'docx', 'txt', 'md', 'odt'].includes(extension ?? '')) return '📄';
   if (['zip', '7z', 'rar'].includes(extension ?? '')) return '▣';
   return '📎';
 }

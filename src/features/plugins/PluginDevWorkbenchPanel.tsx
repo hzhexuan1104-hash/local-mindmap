@@ -75,6 +75,10 @@ export function PluginDevWorkbench({
     }
   }, [recentProject?.pluginId]);
 
+  useEffect(() => {
+    if (showWizard) document.querySelector('.plugin-dev-wizard')?.scrollIntoView({ block: 'nearest' });
+  }, [showWizard]);
+
   const pluginIdError = getDevPluginIdError(draft.pluginId);
   const selectedPluginIdError = getDevPluginIdError(selectedPluginId);
   const updateDraft = <Key extends keyof DevPluginProjectRequest>(

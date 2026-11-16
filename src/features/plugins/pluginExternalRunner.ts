@@ -38,7 +38,7 @@ async function invokeExternal<T>(
   const invoker =
     invokerOverride ??
     (async <R>(name: string, commandArgs?: Record<string, unknown>) => {
-      const { invoke } = await import('@tauri-apps/api/core');
+      const { invoke } = await import('../../desktop/bridge');
       return invoke<R>(name, commandArgs);
     });
   return invoker<T>(command, args);

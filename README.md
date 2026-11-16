@@ -1,3 +1,18 @@
+# 当前桌面架构：Electron + Chromium + Rust 本地服务
+
+桌面版本已迁移到自带 Chromium 的 Electron，不依赖系统 Edge/WebView2，也不要求用户安装 Chrome。
+下方原有 Tauri 命令属于历史文档，当前启动与打包命令以此节为准。
+
+- npm run desktop:dev：构建界面和 Rust 服务后启动 Electron。
+- npm run desktop:build：生成自包含程序目录。
+- npm run desktop:package：生成对应平台安装包。
+- npm test、cargo test --manifest-path src-tauri/Cargo.toml --offline：回归测试。
+- Rust 目录仍名为 src-tauri，以保持路径兼容；Cargo 依赖已移除 Tauri/WebView2。
+
+详见 [Chromium 迁移与内网部署](docs/chromium-migration.md)。
+
+---
+
 # 本地化思维导图工具
 
 一个纯本地运行的思维导图工具，使用 React + TypeScript + Vite + Tauri 构建。项目目标是提供离线可用、文件可迁移、无云端依赖的思维导图编辑体验。当前阶段：v1.19.0 跨平台构建与 Draft Release 流水线。

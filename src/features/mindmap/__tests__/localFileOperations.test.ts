@@ -14,7 +14,7 @@ describe('desktop local file operations', () => {
 
   beforeEach(() => {
     vi.stubGlobal('window', {
-      __TAURI_INTERNALS__: {},
+      localMindmap: {},
     } as unknown as Window);
     setLocalFileInvokerForTests(invoke);
   });

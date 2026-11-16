@@ -189,13 +189,13 @@ describe('JSON Action workflow execution through the shared protocol', () => {
         [{
           type: 'addChildNodes',
           parentId: 'node-1',
-          nodes: Array.from({ length: 21 }, () => ({ text: 'child' })),
+          nodes: Array.from({ length: 501 }, () => ({ text: 'child' })),
         }],
         rootNode,
       ),
     ).toMatchObject({
       valid: false,
-      error: expect.stringContaining('最多 20'),
+      error: expect.stringContaining('最多 500'),
     });
   });
 
