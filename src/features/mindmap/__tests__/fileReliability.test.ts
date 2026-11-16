@@ -44,7 +44,7 @@ function installMemoryUserData() {
   const files = new Map<string, unknown>();
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { __TAURI_INTERNALS__: {} },
+    value: { localMindmap: {} },
   });
 
   setUserDataStorageInvokerForTests(async (command, args) => {

@@ -465,28 +465,12 @@ describe('Draft Release safety and notes', () => {
 });
 
 describe('release workflow contract', () => {
-  it('contains five native targets, immutable release source checkout, and unsigned macOS safeguards', () => {
+  it('builds Chromium with local services without automatically publishing', () => {
     const workflow = readFileSync(join(PROJECT_ROOT, '.github', 'workflows', 'release-multiplatform.yml'), 'utf8');
-    expect(workflow).toContain("- 'v*.*.*'");
-    expect(workflow).toContain('windows-x64');
-    expect(workflow).toContain('macos-arm64');
-    expect(workflow).toContain('macos-x64');
-    expect(workflow).toContain('uos-x64');
-    expect(workflow).toContain('uos-arm64');
-    expect(workflow).toContain('ubuntu-22.04-arm');
+    expect(workflow).toContain('npm run desktop:build');
+    expect(workflow).toContain('cargo test');
     expect(workflow).toContain('actions/upload-artifact@v7');
-    expect(workflow).toContain('actions/download-artifact@v8');
-    expect(workflow).toContain('release_ref:');
-    expect(workflow).toContain('allow_unsigned_macos:');
-    expect(workflow).toContain('resolve-release-ref.mjs');
-    expect(workflow).toContain('check-apple-signing-state.mjs');
-    expect(workflow).toContain('needs.preflight.outputs.release_commit');
-    expect(workflow).toContain('needs.preflight.outputs.workflow_commit');
-    expect(workflow).toContain('_unsigned_preview');
-    expect(workflow).toContain('notarytool submit');
-    expect(workflow).toContain("github.event_name == 'workflow_dispatch' && inputs.create_draft_release");
-    expect(workflow).toContain('--draft');
-    expect(workflow).toContain('if [ "${{ matrix.user_platform }}" = "windows" ]');
-    expect(workflow).toContain('--app-binary "$GITHUB_WORKSPACE/release-source/src-tauri/target/${{ matrix.rust_target }}/release/local-mindmap.exe"');
+    expect(workflow).not.toContain('tauri-action');
+    expect(workflow).not.toContain('contents: write');
   });
 });

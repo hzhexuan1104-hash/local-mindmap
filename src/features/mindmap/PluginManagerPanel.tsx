@@ -752,8 +752,8 @@ export function PluginManagerPanel({
           </div>
         </header>
 
-        <nav className="plugin-manager-actions" aria-label="插件管理分类">
-          {(['config', 'installed', 'gallery'] as const).map((key) => <button key={key} type="button" className="secondary-action" aria-pressed={tab === key} onClick={() => setTab(key)}>{key === 'config' ? '插件配置' : key === 'installed' ? '已安装插件' : '插件商城'}</button>)}
+        <nav className="plugin-manager-tabs" aria-label="插件管理分类">
+          {(['config', 'installed', 'gallery'] as const).map((key) => <button key={key} type="button" className="plugin-manager-tab" aria-pressed={tab === key} onClick={() => setTab(key)}>{key === 'config' ? '插件配置' : key === 'installed' ? '已安装插件' : '插件商城'}</button>)}
         </nav>
         <div className="plugin-manager-content">
           {tab === 'config' && view === 'manager' ? <section className="plugin-manager-section">
@@ -761,8 +761,7 @@ export function PluginManagerPanel({
             <p>插件安装目录：{resolveUserDataPath(userDataDir, 'plugins/installed')}</p>
             <p>日志目录：{resolveUserDataPath(userDataDir, 'logs')}</p>
             <button type="button" className="secondary-action" onClick={onOpenPluginDir}>打开插件目录</button>
-              <label className="stacked-control">
-                <span>启用实验性脚本插件运行器</span>
+              <div className="plugin-runner-setting"><label className="plugin-runner-toggle">
                 <input
                   type="checkbox"
                   checked={isScriptRunnerEnabled}
@@ -770,12 +769,13 @@ export function PluginManagerPanel({
                     onScriptRunnerEnabledChange?.(event.target.checked)
                   }
                 />
+                <span>启用实验性脚本插件运行器</span>
               </label>
               <p className="plugin-safety-note">
                 脚本插件是实验能力，默认关闭。脚本只能返回 actions，由宿主校验后执行；本批不支持 Shell、DLL、文件系统或网络访问。
               </p>
-              <label className="stacked-control">
-                <span>启用外部命令插件运行器</span>
+              </div>
+              <div className="plugin-runner-setting"><label className="plugin-runner-toggle">
                 <input
                   type="checkbox"
                   checked={isExternalRunnerEnabled}
@@ -783,12 +783,14 @@ export function PluginManagerPanel({
                     onExternalRunnerEnabledChange?.(event.target.checked)
                   }
                 />
+                <span>启用外部命令插件运行器</span>
               </label>
               <p className="plugin-safety-note">
                 外部命令插件是高风险实验功能，默认关闭。宿主不使用 Shell，
                 仅以固定参数启动 Python 或直接启动本地可执行文件；外部进程在
                 操作系统层面仍可能访问本机资源，请只运行可信插件。
               </p>
+              </div>
               <label className="stacked-control">
                 <span>Python 运行时路径</span>
                 <input

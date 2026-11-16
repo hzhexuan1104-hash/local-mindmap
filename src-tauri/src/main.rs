@@ -1,7 +1,4 @@
-#![cfg_attr(
-    all(not(debug_assertions), target_os = "windows"),
-    windows_subsystem = "windows"
-)]
+mod launch_file;
 mod node_attachments;
 
 use rfd::FileDialog;
@@ -22,7 +19,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager};
+use native_runtime::AppHandle;
+mod native_runtime;
 
 const REGISTRY_FILE_NAME: &str = "desktop-plugin-registry.json";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
@@ -201,7 +199,7 @@ const DECLARATIVE_PLUGIN_TYPES: &[&str] = &[
 const DECLARATIVE_PLUGIN_CAPABILITIES: &[&str] = &[
     "themes",
     "icons",
-    "export",
+    "export", "import",
     "nodeTypes",
     "templates",
     "tools",
@@ -2059,17 +2057,14 @@ fn remove_plugin_from_registry_at(root: &Path, plugin_id: &str) -> Result<(), St
     Ok(())
 }
 
-#[tauri::command]
 fn get_user_data_dir(app: AppHandle) -> Result<String, String> {
     Ok(ensure_user_data_root(&app)?.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 fn ensure_user_data_dirs(app: AppHandle) -> Result<String, String> {
     Ok(ensure_user_data_root(&app)?.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 fn read_user_json(
     app: AppHandle,
     relative_path: String,
@@ -2079,19 +2074,16 @@ fn read_user_json(
     read_user_json_at(&root, &relative_path, default_value)
 }
 
-#[tauri::command]
 fn write_user_json(app: AppHandle, relative_path: String, value: Value) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     write_user_json_at(&root, &relative_path, &value)
 }
 
-#[tauri::command]
 fn read_user_text(app: AppHandle, relative_path: String) -> Result<String, String> {
     let root = ensure_user_data_root(&app)?;
     read_user_text_at(&root, &relative_path)
 }
 
-#[tauri::command]
 fn delete_user_file(app: AppHandle, relative_path: String) -> Result<bool, String> {
     let root = ensure_user_data_root(&app)?;
     let target = resolve_user_relative_path(&root, &relative_path)?;
@@ -2106,7 +2098,6 @@ fn delete_user_file(app: AppHandle, relative_path: String) -> Result<bool, Strin
     Ok(true)
 }
 
-#[tauri::command]
 fn list_user_files(app: AppHandle, relative_dir: String) -> Result<Vec<String>, String> {
     let root = ensure_user_data_root(&app)?;
     let mut directory = resolve_user_relative_path(&root, &relative_dir)?;
@@ -2138,7 +2129,6 @@ fn list_user_files(app: AppHandle, relative_dir: String) -> Result<Vec<String>, 
     Ok(files)
 }
 
-#[tauri::command]
 fn install_plugin_to_user_dir(
     app: AppHandle,
     plugin_id: String,
@@ -2289,6 +2279,17 @@ fn materialize_gallery_plugin_at(
 }
 
 fn open_directory_path(path: &Path) -> Result<(), String> {
+    let path = fs::canonicalize(path).map_err(|error| format!("目录不存在：{error}"))?;
+    // Explorer does not reliably accept forward slashes or verbatim path prefixes.
+    #[cfg(target_os = "windows")]
+    let path = path.to_string_lossy().replace('/', r"\");
+    #[cfg(target_os = "windows")]
+    let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
+    };
+
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer");
     #[cfg(target_os = "macos")]
@@ -2318,12 +2319,10 @@ fn open_document_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 fn get_plugin_gallery_catalog() -> PluginGalleryCatalogResult {
     load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG)
 }
 
-#[tauri::command]
 fn install_gallery_plugin(
     app: AppHandle,
     catalog_id: String,
@@ -2340,14 +2339,12 @@ fn install_gallery_plugin(
     )
 }
 
-#[tauri::command]
 fn open_gallery_plugin_dir(app: AppHandle, catalog_id: String) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let directory = materialize_gallery_plugin_at(&root, PLUGIN_GALLERY_CATALOG, &catalog_id)?;
     open_directory_path(&directory)
 }
 
-#[tauri::command]
 fn open_plugin_development_docs(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let relative_path = format!("{PLUGIN_GALLERY_CACHE_DIR}/plugin-development.md");
@@ -2360,7 +2357,6 @@ fn open_plugin_development_docs(app: AppHandle) -> Result<(), String> {
     open_document_path(&path)
 }
 
-#[tauri::command]
 fn uninstall_plugin_from_user_dir(app: AppHandle, plugin_id: String) -> Result<(), String> {
     if !is_safe_plugin_id(&plugin_id) {
         return Err("Invalid pluginId.".to_string());
@@ -2376,13 +2372,11 @@ fn uninstall_plugin_from_user_dir(app: AppHandle, plugin_id: String) -> Result<(
     remove_plugin_from_registry_at(&root, &plugin_id)
 }
 
-#[tauri::command]
 fn open_user_data_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     open_directory_path(&root)
 }
 
-#[tauri::command]
 fn open_user_data_subdir(app: AppHandle, relative_dir: String) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let directory = resolve_user_relative_path(&root, &relative_dir)?;
@@ -2391,7 +2385,6 @@ fn open_user_data_subdir(app: AppHandle, relative_dir: String) -> Result<(), Str
     open_directory_path(&directory)
 }
 
-#[tauri::command]
 fn open_plugin_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let plugin_dir = plugin_dir_at(&root)?;
@@ -3678,7 +3671,6 @@ fn desktop_directory() -> Option<PathBuf> {
     desktop.is_dir().then_some(desktop)
 }
 
-#[tauri::command]
 fn create_dev_plugin_project(
     app: AppHandle,
     request: DevPluginProjectRequest,
@@ -3687,7 +3679,6 @@ fn create_dev_plugin_project(
     create_dev_plugin_project_at(&root, &request)
 }
 
-#[tauri::command]
 fn validate_dev_plugin_project(
     app: AppHandle,
     plugin_id: String,
@@ -3696,7 +3687,6 @@ fn validate_dev_plugin_project(
     Ok(validate_dev_plugin_project_at(&root, plugin_id.trim()))
 }
 
-#[tauri::command]
 fn build_dev_plugin_package(
     app: AppHandle,
     plugin_id: String,
@@ -3723,7 +3713,6 @@ fn build_dev_plugin_package(
     build_dev_plugin_package_at(&root, &plugin_id, &path).map(Some)
 }
 
-#[tauri::command]
 fn open_dev_plugin_project_dir(app: AppHandle, plugin_id: String) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let project_dir = dev_project_dir_at(&root, &plugin_id)?;
@@ -3733,7 +3722,6 @@ fn open_dev_plugin_project_dir(app: AppHandle, plugin_id: String) -> Result<(), 
     open_directory_path(&project_dir)
 }
 
-#[tauri::command]
 fn open_plugin_examples_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let catalog = load_plugin_gallery_catalog_from_text(PLUGIN_GALLERY_CATALOG);
@@ -4043,58 +4031,40 @@ fn create_sample_python_plugin_at(root: &Path) -> Result<SamplePluginCreationRes
     Ok(sample_python_plugin_creation_result(root, true))
 }
 
-#[tauri::command]
 fn open_plugin_dev_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let dev_dir = plugin_dev_dir_at(&root)?;
     fs::create_dir_all(&dev_dir)
         .map_err(|error| format!("Failed to create plugin development directory: {error}"))?;
 
-    #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer");
-    #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = Command::new("xdg-open");
-
-    command
-        .arg(&dev_dir)
-        .spawn()
-        .map_err(|error| format!("Failed to open plugin development directory: {error}"))?;
-    Ok(())
+    open_directory_path(&dev_dir)
 }
 
-#[tauri::command]
 fn create_sample_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_plugin_at(&root)
 }
 
-#[tauri::command]
 fn create_sample_script_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_script_plugin_at(&root)
 }
 
-#[tauri::command]
 fn create_sample_batch_script_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_batch_script_plugin_at(&root)
 }
 
-#[tauri::command]
 fn create_sample_workflow_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_workflow_plugin_at(&root)
 }
 
-#[tauri::command]
 fn create_sample_python_plugin(app: AppHandle) -> Result<SamplePluginCreationResult, String> {
     let root = ensure_user_data_root(&app)?;
     create_sample_python_plugin_at(&root)
 }
 
-#[tauri::command]
 fn open_sample_script_plugin_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     let target_dir = root
@@ -4225,7 +4195,6 @@ fn scan_installed_plugin_manifests_at(
     Ok(results)
 }
 
-#[tauri::command]
 fn scan_installed_plugin_manifests(
     app: AppHandle,
     plugin_ids: Option<Vec<String>>,
@@ -4263,7 +4232,6 @@ fn reload_plugins_from_disk_at(root: &Path) -> Result<PluginDiskSnapshot, String
     })
 }
 
-#[tauri::command]
 fn reload_plugins_from_disk(app: AppHandle) -> Result<PluginDiskSnapshot, String> {
     let root = ensure_user_data_root(&app)?;
     reload_plugins_from_disk_at(&root)
@@ -5439,7 +5407,6 @@ fn scan_plugin_diagnostics_at(
     })
 }
 
-#[tauri::command]
 fn scan_plugin_diagnostics(
     app: AppHandle,
     scope: Option<String>,
@@ -5701,7 +5668,6 @@ fn fix_plugin_diagnostics_at(
     Ok(results)
 }
 
-#[tauri::command]
 fn fix_plugin_diagnostics(
     app: AppHandle,
     request: PluginDiagnosticFixRequest,
@@ -5779,7 +5745,6 @@ fn sanitized_diagnostic_report_markdown(report: &PluginDiagnosticReport) -> Stri
     output
 }
 
-#[tauri::command]
 fn export_plugin_diagnostics_report(
     app: AppHandle,
     report: PluginDiagnosticReport,
@@ -5814,13 +5779,11 @@ fn export_plugin_diagnostics_report(
     }
 }
 
-#[tauri::command]
 fn open_plugin_registry_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     open_directory_path(&root.join("plugins"))
 }
 
-#[tauri::command]
 fn open_plugin_quarantine_dir(app: AppHandle) -> Result<(), String> {
     let root = ensure_user_data_root(&app)?;
     fs::create_dir_all(root.join(USER_PLUGIN_QUARANTINE_DIR))
@@ -5828,7 +5791,6 @@ fn open_plugin_quarantine_dir(app: AppHandle) -> Result<(), String> {
     open_directory_path(&root.join(USER_PLUGIN_QUARANTINE_DIR))
 }
 
-#[tauri::command]
 fn open_plugin_manifest_dir(app: AppHandle, plugin_id: String) -> Result<(), String> {
     if !is_safe_plugin_id(&plugin_id) {
         return Err("Invalid pluginId.".to_string());
@@ -5840,18 +5802,7 @@ fn open_plugin_manifest_dir(app: AppHandle, plugin_id: String) -> Result<(), Str
         return Err(format!("插件目录不存在：{plugin_id}"));
     }
 
-    #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer");
-    #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = Command::new("xdg-open");
-
-    command
-        .arg(&plugin_dir)
-        .spawn()
-        .map_err(|error| format!("Failed to open plugin manifest directory: {error}"))?;
-    Ok(())
+    open_directory_path(&plugin_dir)
 }
 
 #[derive(Debug, Serialize)]
@@ -5979,7 +5930,6 @@ fn read_plugin_import_at(path: &Path, file_name: &str) -> Result<OpenedPluginImp
     })
 }
 
-#[tauri::command]
 fn open_plugin_import_with_dialog() -> Result<Option<OpenedPluginImport>, String> {
     let Some(path) = FileDialog::new()
         .set_title("导入本地插件")
@@ -5995,7 +5945,6 @@ fn open_plugin_import_with_dialog() -> Result<Option<OpenedPluginImport>, String
     read_plugin_import_at(&path, &file_name).map(Some)
 }
 
-#[tauri::command]
 fn install_plugin_package(
     app: AppHandle,
     package_path: String,
@@ -6158,7 +6107,6 @@ fn export_plugin_package_at(
         .map_err(|error| format!("导出失败：无法提交插件包：{error}"))
 }
 
-#[tauri::command]
 fn export_plugin_package(app: AppHandle, plugin_id: String) -> Result<Option<String>, String> {
     let Some(mut path) = FileDialog::new()
         .set_title("导出插件包")
@@ -6180,7 +6128,6 @@ fn export_plugin_package(app: AppHandle, plugin_id: String) -> Result<Option<Str
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
-#[tauri::command]
 fn save_local_file_with_dialog(
     app: AppHandle,
     default_file_name: String,
@@ -6202,7 +6149,6 @@ fn save_local_file_with_dialog(
     write_local_file_reliable_at(Some(&root), &path, &bytes, backup_options.as_ref()).map(Some)
 }
 
-#[tauri::command]
 fn write_local_file(
     app: AppHandle,
     path: String,
@@ -6218,12 +6164,10 @@ fn write_local_file(
     )
 }
 
-#[tauri::command]
 fn read_local_file(path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|error| format!("Failed to read `{path}`: {error}"))
 }
 
-#[tauri::command]
 fn open_local_file_with_dialog(
     filter_name: String,
     extensions: Vec<String>,
@@ -6248,42 +6192,15 @@ fn open_local_file_with_dialog(
     }))
 }
 
-#[tauri::command]
 fn open_file_location(path: String) -> Result<(), String> {
     let target = PathBuf::from(&path);
-    if !target.exists() {
-        return Err(format!("File does not exist: {}", target.display()));
+    if !target.is_absolute() || !target.is_file() {
+        return Err("请提供存在的导出文件完整路径。".to_string());
     }
-
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("explorer");
-        command.arg("/select,").arg(&target);
-        command
-    };
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg("-R").arg(&target);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let parent = target
-            .parent()
-            .ok_or_else(|| "File path has no parent directory.".to_string())?;
-        let mut command = Command::new("xdg-open");
-        command.arg(parent);
-        command
-    };
-
-    command
-        .spawn()
-        .map_err(|error| format!("Failed to open file location: {error}"))?;
-    Ok(())
+    let parent = target.parent().ok_or("文件没有父目录。")?;
+    open_directory_path(parent)
 }
 
-#[tauri::command]
 fn check_local_file_health(path: String) -> Result<LocalFileHealth, String> {
     Ok(local_file_health_at(Path::new(&path)))
 }
@@ -6512,22 +6429,18 @@ fn manifest_to_json(manifest: &NativePluginManifest) -> Result<String, String> {
         .map_err(|error| format!("Failed to serialize desktop plugin manifest: {error}"))
 }
 
-#[tauri::command]
 fn get_desktop_plugin_dir(app: AppHandle) -> Result<String, String> {
     Ok(plugin_root_dir(&app)?.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 fn get_desktop_config_dir(app: AppHandle) -> Result<String, String> {
     Ok(config_root_dir(&app)?.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 fn ensure_desktop_config_dir(app: AppHandle) -> Result<String, String> {
     Ok(ensure_config_root_dir(&app)?.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 fn list_desktop_plugins(app: AppHandle) -> Result<DesktopPluginListResult, String> {
     let plugin_dir = plugin_root_dir(&app)?;
     let registry = load_registry(&plugin_dir);
@@ -6596,7 +6509,6 @@ fn list_desktop_plugins(app: AppHandle) -> Result<DesktopPluginListResult, Strin
     })
 }
 
-#[tauri::command]
 fn install_desktop_plugin_manifest(
     app: AppHandle,
     raw_manifest: String,
@@ -6626,7 +6538,6 @@ fn install_desktop_plugin_manifest(
     Ok(manifest)
 }
 
-#[tauri::command]
 fn set_desktop_plugin_enabled(
     app: AppHandle,
     plugin_id: String,
@@ -6654,7 +6565,6 @@ fn set_desktop_plugin_enabled(
     Ok(manifest)
 }
 
-#[tauri::command]
 fn uninstall_desktop_plugin(app: AppHandle, plugin_id: String) -> Result<(), String> {
     if !is_safe_plugin_id(&plugin_id) {
         return Err("Invalid pluginId.".to_string());
@@ -7096,7 +7006,7 @@ fn run_external_command_at(
         configure_python_utf8(&mut command);
         command
     } else {
-        Command::new(&entry_path)
+        Command::new(fs::canonicalize(&entry_path).map_err(|error| format!("无法解析插件入口：{error}"))?)
     };
     command.current_dir(&plugin_dir);
     run_managed_process(
@@ -7108,26 +7018,8 @@ fn run_external_command_at(
     )
 }
 
-#[tauri::command]
-async fn run_external_command_plugin(
-    app: AppHandle,
-    plugin_id: String,
-    context: Value,
-    python_path: String,
-    timeout_ms: Option<u64>,
-) -> Result<ExternalProcessResult, String> {
-    let root = ensure_user_data_root(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        run_external_command_at(
-            &root,
-            &plugin_id,
-            &context,
-            &python_path,
-            timeout_ms.unwrap_or(EXTERNAL_DEFAULT_TIMEOUT_MS),
-        )
-    })
-    .await
-    .map_err(|error| format!("外部进程任务异常：{error}"))?
+fn run_external_command_plugin(app: AppHandle, plugin_id: String, context: Value, python_path: String, timeout_ms: Option<u64>) -> Result<ExternalProcessResult, String> {
+    run_external_command_at(&ensure_user_data_root(&app)?, &plugin_id, &context, &python_path, timeout_ms.unwrap_or(EXTERNAL_DEFAULT_TIMEOUT_MS))
 }
 
 fn test_python_runtime_at(python_path: &str) -> Result<PythonTestResult, String> {
@@ -7147,76 +7039,85 @@ fn test_python_runtime_at(python_path: &str) -> Result<PythonTestResult, String>
     })
 }
 
-#[tauri::command]
-async fn test_python_runtime(python_path: String) -> Result<PythonTestResult, String> {
-    tauri::async_runtime::spawn_blocking(move || test_python_runtime_at(&python_path))
-        .await
-        .map_err(|error| format!("Python 测试任务异常：{error}"))?
+fn test_python_runtime(python_path: String) -> Result<PythonTestResult, String> {
+    test_python_runtime_at(&python_path)
 }
 
-fn main() {
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            get_user_data_dir,
-            ensure_user_data_dirs,
-            read_user_json,
-            write_user_json,
-            read_user_text,
-            delete_user_file,
-            list_user_files,
-            install_plugin_to_user_dir,
-            get_plugin_gallery_catalog,
-            install_gallery_plugin,
-            open_gallery_plugin_dir,
-            open_plugin_development_docs,
-            uninstall_plugin_from_user_dir,
-            open_user_data_dir,
-            open_plugin_dir,
-            open_plugin_dev_dir,
-            create_dev_plugin_project,
-            validate_dev_plugin_project,
-            build_dev_plugin_package,
-            open_dev_plugin_project_dir,
-            open_plugin_examples_dir,
-            create_sample_plugin,
-            create_sample_script_plugin,
-            create_sample_batch_script_plugin,
-            create_sample_workflow_plugin,
-            create_sample_python_plugin,
-            open_sample_script_plugin_dir,
-            open_plugin_manifest_dir,
-            scan_installed_plugin_manifests,
-            reload_plugins_from_disk,
-            scan_plugin_diagnostics,
-            fix_plugin_diagnostics,
-            export_plugin_diagnostics_report,
-            open_plugin_registry_dir,
-            open_plugin_quarantine_dir,
-            open_plugin_import_with_dialog,
-            install_plugin_package,
-            export_plugin_package,
-            save_local_file_with_dialog,
-            write_local_file,
-            read_local_file,
-            open_local_file_with_dialog,
-            open_file_location,
-            node_attachments::open_attachment_link,
-            node_attachments::open_embedded_attachment,
-            check_local_file_health,
-            open_user_data_subdir,
-            get_desktop_config_dir,
-            ensure_desktop_config_dir,
-            get_desktop_plugin_dir,
-            list_desktop_plugins,
-            install_desktop_plugin_manifest,
-            set_desktop_plugin_enabled,
-            uninstall_desktop_plugin,
-            run_external_command_plugin,
-            test_python_runtime
-        ])
-        .run(tauri::generate_context!())
-        .expect("failed to run local-mindmap desktop shell");
+fn select_plugin_input_file() -> Option<serde_json::Value> {
+    FileDialog::new().set_title("选择插件导入文件").pick_file().map(|path| serde_json::json!({
+        "path": path.to_string_lossy(),
+        "name": path.file_name().unwrap_or_default().to_string_lossy()
+    }))
 }
+
+fn get_launch_file() -> Option<String> {
+    launch_file::from_args(std::env::args_os().skip(1))
+}
+
+fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Value, String> {
+    match command {
+        "get_launch_file" => serde_json::to_value(get_launch_file()).map_err(|e| e.to_string()),
+        "select_plugin_input_file" => serde_json::to_value(select_plugin_input_file()).map_err(|e| e.to_string()),
+        "get_user_data_dir" => serde_json::to_value(get_user_data_dir(app.clone())?).map_err(|e| e.to_string()),
+        "ensure_user_data_dirs" => serde_json::to_value(ensure_user_data_dirs(app.clone())?).map_err(|e| e.to_string()),
+        "read_user_json" => serde_json::to_value(read_user_json(app.clone(), serde_json::from_value(args.get("relativePath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("defaultValue").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "write_user_json" => serde_json::to_value(write_user_json(app.clone(), serde_json::from_value(args.get("relativePath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("value").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "read_user_text" => serde_json::to_value(read_user_text(app.clone(), serde_json::from_value(args.get("relativePath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "delete_user_file" => serde_json::to_value(delete_user_file(app.clone(), serde_json::from_value(args.get("relativePath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "list_user_files" => serde_json::to_value(list_user_files(app.clone(), serde_json::from_value(args.get("relativeDir").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "install_plugin_to_user_dir" => serde_json::to_value(install_plugin_to_user_dir(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("manifest").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("overwrite").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("sourceManifestPath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("assets").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "get_plugin_gallery_catalog" => serde_json::to_value(get_plugin_gallery_catalog()).map_err(|e| e.to_string()),
+        "install_gallery_plugin" => serde_json::to_value(install_gallery_plugin(app.clone(), serde_json::from_value(args.get("catalogId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("overwrite").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("installedAt").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_gallery_plugin_dir" => serde_json::to_value(open_gallery_plugin_dir(app.clone(), serde_json::from_value(args.get("catalogId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_plugin_development_docs" => serde_json::to_value(open_plugin_development_docs(app.clone())?).map_err(|e| e.to_string()),
+        "uninstall_plugin_from_user_dir" => serde_json::to_value(uninstall_plugin_from_user_dir(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_user_data_dir" => serde_json::to_value(open_user_data_dir(app.clone())?).map_err(|e| e.to_string()),
+        "open_plugin_dir" => serde_json::to_value(open_plugin_dir(app.clone())?).map_err(|e| e.to_string()),
+        "open_plugin_dev_dir" => serde_json::to_value(open_plugin_dev_dir(app.clone())?).map_err(|e| e.to_string()),
+        "create_dev_plugin_project" => serde_json::to_value(create_dev_plugin_project(app.clone(), serde_json::from_value(args.get("request").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "validate_dev_plugin_project" => serde_json::to_value(validate_dev_plugin_project(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "build_dev_plugin_package" => serde_json::to_value(build_dev_plugin_package(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_dev_plugin_project_dir" => serde_json::to_value(open_dev_plugin_project_dir(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_plugin_examples_dir" => serde_json::to_value(open_plugin_examples_dir(app.clone())?).map_err(|e| e.to_string()),
+        "create_sample_plugin" => serde_json::to_value(create_sample_plugin(app.clone())?).map_err(|e| e.to_string()),
+        "create_sample_script_plugin" => serde_json::to_value(create_sample_script_plugin(app.clone())?).map_err(|e| e.to_string()),
+        "create_sample_batch_script_plugin" => serde_json::to_value(create_sample_batch_script_plugin(app.clone())?).map_err(|e| e.to_string()),
+        "create_sample_workflow_plugin" => serde_json::to_value(create_sample_workflow_plugin(app.clone())?).map_err(|e| e.to_string()),
+        "create_sample_python_plugin" => serde_json::to_value(create_sample_python_plugin(app.clone())?).map_err(|e| e.to_string()),
+        "open_sample_script_plugin_dir" => serde_json::to_value(open_sample_script_plugin_dir(app.clone())?).map_err(|e| e.to_string()),
+        "open_plugin_manifest_dir" => serde_json::to_value(open_plugin_manifest_dir(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "scan_installed_plugin_manifests" => serde_json::to_value(scan_installed_plugin_manifests(app.clone(), serde_json::from_value(args.get("pluginIds").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "reload_plugins_from_disk" => serde_json::to_value(reload_plugins_from_disk(app.clone())?).map_err(|e| e.to_string()),
+        "scan_plugin_diagnostics" => serde_json::to_value(scan_plugin_diagnostics(app.clone(), serde_json::from_value(args.get("scope").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "fix_plugin_diagnostics" => serde_json::to_value(fix_plugin_diagnostics(app.clone(), serde_json::from_value(args.get("request").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "export_plugin_diagnostics_report" => serde_json::to_value(export_plugin_diagnostics_report(app.clone(), serde_json::from_value(args.get("report").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("format").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_plugin_registry_dir" => serde_json::to_value(open_plugin_registry_dir(app.clone())?).map_err(|e| e.to_string()),
+        "open_plugin_quarantine_dir" => serde_json::to_value(open_plugin_quarantine_dir(app.clone())?).map_err(|e| e.to_string()),
+        "open_plugin_import_with_dialog" => serde_json::to_value(open_plugin_import_with_dialog()?).map_err(|e| e.to_string()),
+        "install_plugin_package" => serde_json::to_value(install_plugin_package(app.clone(), serde_json::from_value(args.get("packagePath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("manifest").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("overwrite").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "export_plugin_package" => serde_json::to_value(export_plugin_package(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "save_local_file_with_dialog" => serde_json::to_value(save_local_file_with_dialog(app.clone(), serde_json::from_value(args.get("defaultFileName").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("filterName").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("extensions").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("bytes").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("backupOptions").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "write_local_file" => serde_json::to_value(write_local_file(app.clone(), serde_json::from_value(args.get("path").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("bytes").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("backupOptions").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "read_local_file" => serde_json::to_value(read_local_file(serde_json::from_value(args.get("path").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_local_file_with_dialog" => serde_json::to_value(open_local_file_with_dialog(serde_json::from_value(args.get("filterName").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("extensions").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_file_location" => serde_json::to_value(open_file_location(serde_json::from_value(args.get("path").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_attachment_link" => serde_json::to_value(node_attachments::open_attachment_link(serde_json::from_value(args.get("url").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_embedded_attachment" => serde_json::to_value(node_attachments::open_embedded_attachment(serde_json::from_value(args.get("name").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("bytes").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "check_local_file_health" => serde_json::to_value(check_local_file_health(serde_json::from_value(args.get("path").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "open_user_data_subdir" => serde_json::to_value(open_user_data_subdir(app.clone(), serde_json::from_value(args.get("relativeDir").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "get_desktop_config_dir" => serde_json::to_value(get_desktop_config_dir(app.clone())?).map_err(|e| e.to_string()),
+        "ensure_desktop_config_dir" => serde_json::to_value(ensure_desktop_config_dir(app.clone())?).map_err(|e| e.to_string()),
+        "get_desktop_plugin_dir" => serde_json::to_value(get_desktop_plugin_dir(app.clone())?).map_err(|e| e.to_string()),
+        "list_desktop_plugins" => serde_json::to_value(list_desktop_plugins(app.clone())?).map_err(|e| e.to_string()),
+        "install_desktop_plugin_manifest" => serde_json::to_value(install_desktop_plugin_manifest(app.clone(), serde_json::from_value(args.get("rawManifest").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("overwrite").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "set_desktop_plugin_enabled" => serde_json::to_value(set_desktop_plugin_enabled(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("enabled").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "uninstall_desktop_plugin" => serde_json::to_value(uninstall_desktop_plugin(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "run_external_command_plugin" => serde_json::to_value(run_external_command_plugin(app.clone(), serde_json::from_value(args.get("pluginId").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("context").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("pythonPath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("timeoutMs").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        "test_python_runtime" => serde_json::to_value(test_python_runtime(serde_json::from_value(args.get("pythonPath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
+        _ => Err(format!("Unknown desktop command: {command}")),
+    }
+}
+fn main() { native_runtime::serve(dispatch); }
 
 #[cfg(test)]
 mod tests {

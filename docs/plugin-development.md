@@ -281,9 +281,9 @@ plugins/dev/sample-script-plugin/
 
 ### 新增 Actions
 
-- `updateNodes`：`updates` 单次最多 50 条；每条只允许修改 `text` /
+- `updateNodes`：`updates` 单次最多 500 条；每条只允许修改 `text` /
   `remark`，所有 `nodeId` 必须存在，任一非法则整批拒绝。
-- `addChildNodes`：给同一 `parentId` 一次新增最多 20 个子节点；只接受
+- `addChildNodes`：给同一 `parentId` 一次新增最多 500 个子节点；只接受
   `text` / `remark`，不接受插件指定 ID、position、children 或内部字段。
 - `appendNodeText` / `prependNodeText`：片段最多 100 字符，拼接后标题最多
   500 字符。
@@ -1147,3 +1147,23 @@ print(json.dumps({"actions": [{
 清单上限 2 MB / 1000 项，资源文件上限 20 MB，单次请求超时 15 秒。下载通过本地保存流程完成，之后使用既有导入入口校验安装，不自动执行或信任代码。
 本地商城安装与本地导入的来源保存在 `config/plugin-install-sources.json`；旧安装没有来源记录时显示“历史安装（来源未记录）”，不会根据同名插件猜测来源。
 插件日志最近 100 条保存在 `logs/plugins.json`。插件配置页显示固定的安装和日志目录，不提供任意目录迁移。
+
+## 2026-11 功能协议增量
+
+脚本和 external-command 插件声明 capabilities 中的 import 后，执行前弹出不限扩展名的文件选择器。取消选择不会执行插件。桌面宿主向 context.inputFile 提供 {path, name}。仅传本地路径与文件名，不上传文件；受控脚本仍不直接读取文件系统，需处理任意文件内容的插件使用外部命令运行器。
+
+返回 actions 可更新当前节点，或通过 createMindmap 新建导图：
+
+```json
+{"actions":[{"type":"createMindmap","rootNode":{"text":"导入结果","nodeTypeId":"task-type-id","children":[{"text":"项目一"}]}},{"type":"showMessage","message":"导入完成"}]}
+```
+
+createMindmap 是该批唯一修改操作，可附带 showMessage。最多 1000 节点、64 层；节点 ID 由宿主生成。节点字段支持 text、remark、nodeTypeId、children。新导图不覆盖原保存路径，未保存修改会先提示。
+
+addChildNode 和 addChildNodes 同样支持 nodeTypeId；已有类型自动匹配样式，未知 ID 保留并使用默认外观。updateNodes 和 addChildNodes 每个 action 最多 500 条，超过上限整批拒绝。
+
+导出插件通过 showMessage 的 exportPath 字段返回已生成文件的绝对路径。省略或空字符串仅展示消息；非空路径在关闭消息框后打开所在目录，路径无效或文件不存在时提示错误。宿主不会因此执行该文件。示例：
+
+```json
+{"actions":[{"type":"showMessage","message":"导出成功","exportPath":"C:/exports/result.txt"}]}
+```

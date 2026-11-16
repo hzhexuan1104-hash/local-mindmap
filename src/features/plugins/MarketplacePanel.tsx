@@ -1,3 +1,5 @@
+import marketplaceDocs from '../../../docs/marketplace-api.md?raw';
+import { FeedbackDialog } from './FeedbackDialog';
 import { useEffect, useState } from 'react';
 import { readUserJson, writeUserJson } from '../storage/userDataStorage';
 import { saveLocalFile } from '../mindmap/localFileOperations';
@@ -5,6 +7,7 @@ import { fetchPublicResource, parseMarketplaceCatalog, publicResourceUrl, type M
 
 const SETTINGS_PATH = 'config/marketplace.json';
 export function MarketplacePanel() {
+  const [showDocs, setShowDocs] = useState(false);
   const [address, setAddress] = useState('');
   const [items, setItems] = useState<MarketplaceItem[]>([]);
   const [query, setQuery] = useState('');
@@ -19,6 +22,8 @@ export function MarketplacePanel() {
   const run = async (work: () => Promise<void>) => { setBusy(true); setStatus(''); try { await work(); } catch (e) { setStatus(`操作失败：${e instanceof Error ? e.message : String(e)}`); } finally { setBusy(false); } };
   return <section className="plugin-manager-section">
     <h3>公共资源商城</h3>
+    <button type="button" className="secondary-action" onClick={() => setShowDocs(true)}>商城开发说明</button>
+    {showDocs ? <FeedbackDialog title="商城开发说明" content={marketplaceDocs} markdown onClose={() => setShowDocs(false)} /> : null}
     <p>地址默认留空。仅点击查询或下载时联网；不发送导图、附件或用户数据。下载后通过对应导入入口安装。</p>
     <label>商城清单地址 <input aria-label="商城清单地址" type="url" value={address} disabled={!ready || busy} onChange={(event) => { setAddress(event.target.value); setItems([]); }} placeholder="https://example.com/catalog.json" /></label>
     <div className="plugin-manager-actions">

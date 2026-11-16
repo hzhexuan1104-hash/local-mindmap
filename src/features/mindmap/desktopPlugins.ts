@@ -72,17 +72,12 @@ const isPluginCapability = (value: unknown): value is NativePluginCapability =>
 const isSafePluginId = (pluginId: string) =>
   /^[A-Za-z0-9._-]+$/.test(pluginId);
 
-export function isTauriDesktopRuntime() {
+export function isNativeDesktopRuntime() {
   if (typeof window === 'undefined') {
     return false;
   }
 
-  const runtimeWindow = window as Window & {
-    __TAURI__?: unknown;
-    __TAURI_INTERNALS__?: unknown;
-  };
-
-  return Boolean(runtimeWindow.__TAURI__ || runtimeWindow.__TAURI_INTERNALS__);
+  return Boolean((window as Window & { localMindmap?: unknown }).localMindmap);
 }
 
 function normalizeNativeAbi(value: unknown): NativeDesktopPluginManifest['abi'] {
@@ -167,7 +162,7 @@ export function normalizeNativeDesktopPluginManifest(
 const DESKTOP_PLUGIN_UNAVAILABLE_ERROR = '桌面插件仅在桌面端可用';
 
 export async function getDesktopPluginDir() {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     return '';
   }
 
@@ -177,7 +172,7 @@ export async function getDesktopPluginDir() {
 }
 
 export async function listDesktopPlugins() {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     return {
       pluginDir: '',
       plugins: [],
@@ -205,7 +200,7 @@ export async function installDesktopPluginManifest(
   rawManifest: string,
   overwrite: boolean,
 ) {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     throw new Error(DESKTOP_PLUGIN_UNAVAILABLE_ERROR);
   }
 
@@ -219,7 +214,7 @@ export async function setDesktopPluginEnabled(
   pluginId: string,
   enabled: boolean,
 ) {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     throw new Error(DESKTOP_PLUGIN_UNAVAILABLE_ERROR);
   }
 
@@ -230,7 +225,7 @@ export async function setDesktopPluginEnabled(
 }
 
 export async function uninstallDesktopPlugin(pluginId: string) {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     throw new Error(DESKTOP_PLUGIN_UNAVAILABLE_ERROR);
   }
 

@@ -42,3 +42,10 @@ describe('Tauri bundled assets', () => {
     expect(statSync('src-tauri/icons/icon-source.png').size).toBeGreaterThan(0);
   });
 });
+
+it('registers lmind documents with the installed desktop application', () => {
+  const config = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+  expect(config.bundle.fileAssociations).toContainEqual(expect.objectContaining({
+    ext: ['lmind'], role: 'Editor', mimeType: 'application/x-local-mindmap',
+  }));
+});

@@ -226,7 +226,7 @@ async function defaultCommandInvoker<T>(
   command: string,
   args?: Record<string, unknown>,
 ) {
-  const { invoke } = await import('@tauri-apps/api/core');
+  const { invoke } = await import('../../desktop/bridge');
   return invoke<T>(command, args);
 }
 
@@ -319,19 +319,7 @@ export function isDesktopRuntime() {
     return false;
   }
 
-  const runtimeGlobal = globalThis as typeof globalThis & {
-    isTauri?: boolean;
-  };
-  const runtimeWindow = window as Window & {
-    __TAURI__?: unknown;
-    __TAURI_INTERNALS__?: unknown;
-  };
-
-  return Boolean(
-    runtimeGlobal.isTauri ||
-      runtimeWindow.__TAURI__ ||
-      runtimeWindow.__TAURI_INTERNALS__,
-  );
+  return Boolean((window as Window & { localMindmap?: unknown }).localMindmap);
 }
 
 export async function getUserDataDir() {

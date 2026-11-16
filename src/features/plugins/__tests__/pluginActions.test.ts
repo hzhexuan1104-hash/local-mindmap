@@ -198,7 +198,7 @@ describe('Script Plugin Action validation', () => {
 
   it('rejects action batches over the limit', () => {
     const result = validateScriptPluginActions(
-      Array.from({ length: 21 }, (_, index) => ({
+      Array.from({ length: 501 }, (_, index) => ({
         type: 'showMessage',
         message: `message ${index}`,
       })),
@@ -255,22 +255,22 @@ describe('Script Plugin Action validation', () => {
     ).toMatchObject({ valid: false, error: expect.stringContaining('missing') });
   });
 
-  it('rejects updateNodes over 50 entries', () => {
+  it('rejects updateNodes over 500 entries', () => {
     expect(
       validateScriptPluginActions(
         [{
           type: 'updateNodes',
-          updates: Array.from({ length: 51 }, () => ({
+          updates: Array.from({ length: 501 }, () => ({
             nodeId: 'node-1',
             patch: { text: 'updated' },
           })),
         }],
         rootNode,
       ),
-    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 50') });
+    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 500') });
   });
 
-  it('accepts addChildNodes and rejects over 20 nodes', () => {
+  it('accepts addChildNodes and rejects over 500 nodes', () => {
     const valid = validateScriptPluginActions(
       [{
         type: 'addChildNodes',
@@ -294,11 +294,11 @@ describe('Script Plugin Action validation', () => {
         [{
           type: 'addChildNodes',
           parentId: 'node-1',
-          nodes: Array.from({ length: 21 }, () => ({ text: 'Child' })),
+          nodes: Array.from({ length: 501 }, () => ({ text: 'Child' })),
         }],
         rootNode,
       ),
-    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 20') });
+    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 500') });
   });
 
   it('undoes and redoes one script batch as one history step', () => {
@@ -403,5 +403,45 @@ describe('Script Plugin Action validation', () => {
         [],
       ),
     ).toEqual({ valid: true, error: null });
+  });
+});
+
+describe('Expanded plugin import and batch protocol', () => {
+  it('accepts 500 additions, retains unknown type IDs and applies atomically', () => {
+    const result = validateScriptPluginActions([{ type: 'addChildNodes', parentId: 'root', nodes: Array.from({ length: 500 }, () => ({ text: 'Imported', nodeTypeId: 'custom-type' })) }], rootNode);
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error(result.error);
+    const applied = applyScriptPluginActions(rootNode, result.actions);
+    expect(applied.rootNode.children).toHaveLength(501);
+    expect(applied.rootNode.children[500].nodeTypeId).toBe('custom-type');
+    expect(rootNode.children).toHaveLength(1);
+  });
+
+  it('accepts exactly 500 updates and rejects 501', () => {
+    const updates = Array.from({ length: 500 }, (_, index) => ({ nodeId: 'node-1', patch: { text: String(index) } }));
+    const result = validateScriptPluginActions([{ type: 'updateNodes', updates }], rootNode);
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error(result.error);
+    expect(applyScriptPluginActions(rootNode, result.actions).rootNode.children[0].text).toBe('499');
+    expect(validateScriptPluginActions([{ type: 'updateNodes', updates: [...updates, updates[0]] }], rootNode).valid).toBe(false);
+  });
+
+  it('creates a typed tree with unique IDs and returns the export location', () => {
+    const result = validateScriptPluginActions([
+      { type: 'createMindmap', rootNode: { text: 'New', nodeTypeId: 'task', children: [{ text: 'Child', nodeTypeId: 'missing' }] } },
+      { type: 'showMessage', message: 'Done', exportPath: 'C:/exports/result.txt' },
+    ], rootNode);
+    expect(result.valid).toBe(true);
+    if (!result.valid) throw new Error(result.error);
+    const applied = applyScriptPluginActions(rootNode, result.actions);
+    expect(applied.rootNode.text).toBe('New');
+    expect(applied.rootNode.children[0].nodeTypeId).toBe('missing');
+    expect(applied.rootNode.id).not.toBe(applied.rootNode.children[0].id);
+    expect(applied.messages[0].exportPath).toBe('C:/exports/result.txt');
+  });
+
+  it('rejects malformed imported trees and mixed replacement batches', () => {
+    expect(validateScriptPluginActions([{ type: 'createMindmap', rootNode: { text: 'New', children: [null] } }], rootNode).valid).toBe(false);
+    expect(validateScriptPluginActions([{ type: 'createMindmap', rootNode: { text: 'New' } }, { type: 'updateNode', nodeId: 'root', patch: { text: 'Mixed' } }], rootNode).valid).toBe(false);
   });
 });

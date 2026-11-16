@@ -78,7 +78,7 @@ function installDesktopWindow(storage: Storage = new MemoryStorage()) {
     configurable: true,
     value: {
       localStorage: storage,
-      __TAURI_INTERNALS__: {},
+      localMindmap: {},
     },
   });
 }

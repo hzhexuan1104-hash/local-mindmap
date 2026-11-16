@@ -22,6 +22,7 @@ export type NodeTypePackImportResult = {
   renamedConflictCount: number;
   invalidCount: number;
   nameConflictCount: number;
+  conflictingTypes: string[];
 };
 
 const NODE_TYPE_SHAPES: MindmapNodeType['shape'][] = [
@@ -182,6 +183,7 @@ export function importNodeTypesFromPack(
   let renamedConflictCount = 0;
   let invalidCount = 0;
   let nameConflictCount = 0;
+  const conflictingTypes: string[] = [];
 
   if (!validateNodeTypePack(pack)) {
     throw new Error('Invalid node type pack');
@@ -200,17 +202,8 @@ export function importNodeTypesFromPack(
     );
 
     if (matchedById) {
-      if (isSameNodeType(matchedById, normalizedNodeType)) {
-        skippedDuplicateCount += 1;
-        continue;
-      }
-
-      nextNodeTypes.push({
-        ...normalizedNodeType,
-        id: resolveNodeTypeIdConflict(normalizedNodeType.id, nextNodeTypes),
-      });
-      renamedConflictCount += 1;
-      importedCount += 1;
+      skippedDuplicateCount += 1;
+      conflictingTypes.push(normalizedNodeType.name + ' (' + normalizedNodeType.id + ')');
       continue;
     }
 
@@ -235,5 +228,6 @@ export function importNodeTypesFromPack(
     renamedConflictCount,
     invalidCount,
     nameConflictCount,
+    conflictingTypes,
   };
 }

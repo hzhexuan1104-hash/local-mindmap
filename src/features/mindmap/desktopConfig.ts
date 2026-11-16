@@ -1,5 +1,5 @@
 import { invokeTauriDesktopCommand } from './plugins';
-import { isTauriDesktopRuntime } from './desktopPlugins';
+import { isNativeDesktopRuntime } from './desktopPlugins';
 
 export type DesktopConfigDirResult = {
   configDir: string;
@@ -12,7 +12,7 @@ export const DESKTOP_CONFIG_COMMANDS = {
 } as const;
 
 export async function getDesktopConfigDir(): Promise<DesktopConfigDirResult> {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     return {
       configDir: '',
       isAvailable: false,
@@ -28,7 +28,7 @@ export async function getDesktopConfigDir(): Promise<DesktopConfigDirResult> {
 }
 
 export async function ensureDesktopConfigDir(): Promise<DesktopConfigDirResult> {
-  if (!isTauriDesktopRuntime()) {
+  if (!isNativeDesktopRuntime()) {
     return {
       configDir: '',
       isAvailable: false,

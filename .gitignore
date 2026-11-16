@@ -19,3 +19,7 @@ yarn-error.log*
 pnpm-debug.log*
 *.msi
 *.exe
+
+release-electron/
+
+tmp/

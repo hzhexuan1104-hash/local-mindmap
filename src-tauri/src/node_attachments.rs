@@ -2,17 +2,24 @@ use std::{fs, io::Write, path::Path, process::Command, time::{SystemTime, UNIX_E
 
 fn open_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer.exe");
+    let mut command = {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", "Start-Process -FilePath $env:LMIND_ATTACHMENT_TARGET"]);
+        command.env("LMIND_ATTACHMENT_TARGET", target);
+        command
+    };
     #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
-    command.arg(target).spawn().map_err(|error| format!("无法打开附件：{error}"))?;
+    #[cfg(not(target_os = "windows"))]
+    command.arg(target);
+    command.spawn().map_err(|error| format!("无法打开附件：{error}"))?;
     Ok(())
 }
 
-fn validate_link(url: &str) -> Result<tauri::Url, String> {
-    let parsed = tauri::Url::parse(url).map_err(|_| "附件链接格式无效。".to_string())?;
+fn validate_link(url: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(url).map_err(|_| "附件链接格式无效。".to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none()
         || !parsed.username().is_empty() || parsed.password().is_some() {
         return Err("附件链接只支持 HTTP/HTTPS。".into());
@@ -20,7 +27,6 @@ fn validate_link(url: &str) -> Result<tauri::Url, String> {
     Ok(parsed)
 }
 
-#[tauri::command]
 pub fn open_attachment_link(url: String) -> Result<(), String> {
     open_target(validate_link(&url)?.as_str())
 }
@@ -41,7 +47,6 @@ fn validate_file_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub fn open_embedded_attachment(name: String, bytes: Vec<u8>) -> Result<(), String> {
     validate_file_name(&name)?;
     if bytes.len() > 20 * 1024 * 1024 { return Err("附件不能超过 20 MB。".into()); }

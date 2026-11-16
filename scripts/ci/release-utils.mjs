@@ -84,7 +84,7 @@ export function readCargoPackageVersion(cargoToml) {
   return version;
 }
 
-export function readCargoLockPackageVersion(cargoLock, packageName = 'local-mindmap') {
+export function readCargoLockPackageVersion(cargoLock, packageName = 'local-mindmap-service') {
   const packages = readUtf8(cargoLock).split(/\r?\n\[\[package\]\]\r?\n/);
   for (const candidate of packages) {
     const name = candidate.match(/^name\s*=\s*"([^"]+)"\s*$/m)?.[1];

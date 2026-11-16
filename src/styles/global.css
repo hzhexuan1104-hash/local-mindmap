@@ -1898,6 +1898,7 @@ h3 {
 }
 
 .plugin-manager-header {
+  flex-shrink: 0;
   align-items: flex-start;
   justify-content: space-between;
 }
@@ -1927,6 +1928,8 @@ h3 {
 }
 
 .plugin-manager-content {
+  flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
   overflow: auto;
   display: grid;
@@ -7242,3 +7245,64 @@ body.is-resizing-inspector * {
 }
 .feedback-dialog .stacked-control { margin: 14px 0; }
 .feedback-dialog pre { overflow: auto; }
+
+
+/* Plugin manager: clear page tabs and closely grouped setting descriptions. */
+.plugin-manager-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #dce3ee;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.plugin-manager-tab {
+  flex-shrink: 0;
+  white-space: nowrap;
+  line-height: 1.5;
+  padding: 12px 20px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #526173;
+  cursor: pointer;
+  font: inherit;
+}
+.plugin-manager-tab[aria-pressed="true"] {
+  color: #185abd;
+  border-bottom-color: #2563eb;
+  background: #eff6ff;
+  font-weight: 700;
+}
+.plugin-manager-tab:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -3px;
+}
+.plugin-runner-setting { display: grid; gap: 4px; }
+.plugin-runner-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #171717;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plugin-runner-toggle input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; }
+.plugin-runner-setting .plugin-safety-note {
+  margin: 0 0 0 24px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.plugin-item { flex-direction: column; }
+.plugin-item-main { width: 100%; }
+.plugin-detail-panel { width: 100%; box-sizing: border-box; }
+.plugin-gallery-card:has(> .plugin-gallery-details[open]) { grid-column: 1 / -1; }
+.plugin-manager-content [hidden] { display: none; }
+
+.feedback-dialog { width: min(880px, calc(100vw - 48px)); max-height: calc(100vh - 48px); }
+.feedback-dialog .remark-preview-dialog-header { flex-shrink: 0; padding: 18px 24px; border-bottom: 1px solid #dce3ee; }
+.feedback-dialog .remark-preview-dialog-body { min-height: 0; overflow: auto; padding: 24px; line-height: 1.7; overflow-wrap: anywhere; }
+.image-preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+.image-preview-viewport { overflow: auto; height: 55vh; display: grid; place-items: center; background: #f1f5f9; }
