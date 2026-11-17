@@ -81,7 +81,7 @@
         "deb"
       ],
       "category": "Office",
-      "icon": "src-tauri/icons"
+      "icon": "src-tauri/icons/icon.png"
     },
     "mac": {
       "target": "dmg",
