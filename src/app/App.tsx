@@ -225,6 +225,8 @@ import {
   createScriptPluginContext,
   validateScriptActionPermissions,
   validateScriptPluginActions,
+  type ScriptPluginAction,
+  type ScriptPluginContext,
   type ScriptShowMessageAction,
 } from '../features/plugins/pluginScriptActions';
 import { runScriptPlugin } from '../features/plugins/pluginScriptRunner';
@@ -236,7 +238,6 @@ import {
 import {
   resolveWorkflowActions,
   requestWorkflowTrustDecision,
-  workflowHasWriteActions,
 } from '../features/plugins/pluginWorkflow';
 import {
   loadPluginSettings,
@@ -1283,6 +1284,10 @@ export function App() {
     () => ({ rootNode: mindmap, nodeTypes, themeId }),
     [mindmap, nodeTypes, themeId],
   );
+  const pluginDocumentRef = useRef({ project: currentProject, path: currentFilePath });
+  useLayoutEffect(() => {
+    pluginDocumentRef.current = { project: currentProject, path: currentFilePath };
+  }, [currentProject, currentFilePath]);
   const currentDocumentTitle = currentFileName ?? mindmap.text ?? '未命名导图';
   const currentMaskedPath = maskUserDataPath(currentFilePath, userDataDir);
   const effectiveFileSaveStatus: FileSaveStatus = currentFilePath
@@ -1873,7 +1878,7 @@ export function App() {
           return;
         case 'add-sibling':
           setHasUsedShortcutCreation(true);
-          handleAddSibling('', { startEditing: true });
+          handleAddSibling(siblingNodeTypeId, { startEditing: true });
           return;
         case 'save':
           handleSaveMindmap();
@@ -4500,7 +4505,7 @@ export function App() {
   const handleRunSearch = () => {
     setSearchHasRun(true);
     setActiveMatchIndex(0);
-    if (!searchQuery.trim()) {
+    if (!searchQuery) {
       showMessage('请输入关键词');
       return;
     }
@@ -4535,7 +4540,7 @@ export function App() {
   };
 
   const handleReplaceCurrent = () => {
-    const query = searchQuery.trim();
+    const query = searchQuery;
     const currentMatches = searchHasRun ? searchMatches : rawSearchMatches;
     const cursor = replacementCursorRef.current;
     const match = activeMatch ?? currentMatches[cursor
@@ -4572,7 +4577,7 @@ export function App() {
   };
 
   const handleReplaceAll = () => {
-    const query = searchQuery.trim();
+    const query = searchQuery;
     const currentMatches = searchHasRun ? searchMatches : rawSearchMatches;
 
     if (!query || currentMatches.length === 0) {
@@ -5648,6 +5653,45 @@ export function App() {
     if (messages.length) setFeedbackDialog({ title: '插件消息', exportPaths: messages.map(item => item.exportPath?.trim()).filter((path): path is string => Boolean(path)), content: messages.map((item) => `${item.level === 'error' ? '错误：' : item.level === 'warning' ? '提示：' : ''}${item.message}`).join('\n\n') });
   };
 
+  const selectPluginInputFile = async () => {
+    if (!isDesktopApp) throw new Error('插件文件路径导入仅支持桌面端。');
+    const { invoke } = await import('../desktop/bridge');
+    return invoke<NonNullable<ScriptPluginContext['inputFile']> | null>('select_plugin_input_file');
+  };
+
+  const commitPluginActions = (actions: ScriptPluginAction[]) => {
+    const mutatesMindmap = actions.some((action) => action.type !== 'showMessage');
+    const createsMindmap = actions.some((action) => action.type === 'createMindmap');
+    if (mutatesMindmap && (
+      pluginDocumentRef.current.project !== currentProject ||
+      pluginDocumentRef.current.path !== currentFilePath
+    )) {
+      throw new Error('导图在插件执行期间已更改，请重新运行插件。');
+    }
+    if (createsMindmap && !confirmReplaceDirtyDocument('插件新建导图')) return null;
+    const applied = applyScriptPluginActions(mindmap, actions, availableNodeTypes);
+    if (mutatesMindmap) {
+      recordHistory();
+      setMindmap(applied.rootNode);
+    }
+    if (createsMindmap) {
+      setCurrentFilePath(null);
+      setCurrentFileName(null);
+      setFileSaveStatus('draft');
+      setLastSavedAt(null);
+      setLastAutoSavedAt(null);
+      setDraftId(createDraftId());
+      lastAutoSaveSignatureRef.current = '';
+      setFocusedRootId(null);
+      setSelectedNodeId(applied.rootNode.id);
+      setSelectedNodeIds([applied.rootNode.id]);
+      setEditingNodeId(null);
+      setEditingText('');
+      setInitialCenterRequest((request) => request + 1);
+    }
+    return applied;
+  };
+
   const setScriptRunResult = (
     pluginId: string,
     result: (typeof scriptRunResults)[string],
@@ -5719,13 +5763,15 @@ export function App() {
     }
 
     const scriptPath = `plugins/installed/${plugin.pluginId}/${plugin.entry}`;
-    recordPluginLog(
-      'info',
-      'script-execution-started',
-      `script execution started: ${plugin.entry}`,
-      pluginId,
-    );
     try {
+      const inputFile = plugin.capabilities.includes('import') ? await selectPluginInputFile() : undefined;
+      if (inputFile === null) return;
+      recordPluginLog(
+        'info',
+        'script-execution-started',
+        `script execution started: ${plugin.entry}`,
+        pluginId,
+      );
       const source = await readUserText(scriptPath);
       const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
       const context = createScriptPluginContext(
@@ -5740,13 +5786,7 @@ export function App() {
         `script context built nodeCount=${context.nodes.length} truncated=${Boolean(context.truncated)}`,
         pluginId,
       );
-      if (plugin.capabilities.includes('import')) {
-        if (!isDesktopApp) throw new Error('插件文件路径导入仅支持桌面端。');
-        const { invoke } = await import('../desktop/bridge');
-        const inputFile = await invoke<{ path: string; name: string } | null>('select_plugin_input_file');
-        if (!inputFile) return;
-        context.inputFile = inputFile;
-      }
+      if (inputFile) context.inputFile = inputFile;
       const runResult = await runScriptPlugin({ source, context });
       if (!runResult.ok) {
         const isTimeout = runResult.error.includes('执行超时');
@@ -5822,21 +5862,9 @@ export function App() {
         pluginId,
       );
 
-      const mutatesMindmap = validation.actions.some(
-        (action) => action.type !== 'showMessage',
-      );
-      if (validation.actions.some(action => action.type === 'createMindmap') && !confirmReplaceDirtyDocument('插件新建导图')) return;
-      const applied = applyScriptPluginActions(mindmap, validation.actions);
-      if (mutatesMindmap) {
-        recordHistory();
-        setMindmap(applied.rootNode);
-        if (validation.actions.some(action => action.type === 'createMindmap')) {
-          setCurrentFilePath(null);
-          setCurrentFileName('未命名.lmind');
-          setSelectedNodeId(applied.rootNode.id);
-          setSelectedNodeIds([applied.rootNode.id]);
-        }
-        setIsDocumentDirty(true);
+      const applied = commitPluginActions(validation.actions);
+      if (!applied) return;
+      if (applied.mutationCount > 0) {
         recordPluginLog(
           'info',
           'script-undo-batch-created',
@@ -6099,19 +6127,9 @@ export function App() {
         }
       }
 
-      const mutatesMindmap = workflowHasWriteActions(resolution.actions);
-      if (validation.actions.some(action => action.type === 'createMindmap') && !confirmReplaceDirtyDocument('插件新建导图')) return;
-      const applied = applyScriptPluginActions(mindmap, validation.actions);
-      if (mutatesMindmap) {
-        recordHistory();
-        setMindmap(applied.rootNode);
-        if (validation.actions.some(action => action.type === 'createMindmap')) {
-          setCurrentFilePath(null);
-          setCurrentFileName('未命名.lmind');
-          setSelectedNodeId(applied.rootNode.id);
-          setSelectedNodeIds([applied.rootNode.id]);
-        }
-        setIsDocumentDirty(true);
+      const applied = commitPluginActions(validation.actions);
+      if (!applied) return;
+      if (applied.mutationCount > 0) {
         recordPluginLog(
           'info',
           'workflow-undo-batch-created',
@@ -6247,36 +6265,31 @@ export function App() {
       }
     }
 
-    const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
-    const context = createScriptPluginContext(
-      mindmap,
-      effectiveSelectedNodeId,
-      contextNodeId ? [contextNodeId] : selectedNodeIds,
-      currentFilePath,
-    );
-    recordPluginLog(
-      'info',
-      'external-execution-started',
-      `external execution started runtime=${plugin.runtime} entry=${plugin.entry}`,
-      pluginId,
-      { menuId },
-    );
-    recordPluginLog(
-      'info',
-      'external-stdin-sent',
-      `external stdin sent nodeCount=${context.nodes.length} truncated=${Boolean(context.truncated)}`,
-      pluginId,
-      { menuId },
-    );
-
     try {
-      if (plugin.capabilities.includes('import')) {
-        if (!isDesktopApp) throw new Error('插件文件路径导入仅支持桌面端。');
-        const { invoke } = await import('../desktop/bridge');
-        const inputFile = await invoke<{ path: string; name: string } | null>('select_plugin_input_file');
-        if (!inputFile) return;
-        context.inputFile = inputFile;
-      }
+      const inputFile = plugin.capabilities.includes('import') ? await selectPluginInputFile() : undefined;
+      if (inputFile === null) return;
+      const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
+      const context = createScriptPluginContext(
+        mindmap,
+        effectiveSelectedNodeId,
+        contextNodeId ? [contextNodeId] : selectedNodeIds,
+        currentFilePath,
+      );
+      if (inputFile) context.inputFile = inputFile;
+      recordPluginLog(
+        'info',
+        'external-execution-started',
+        `external execution started runtime=${plugin.runtime} entry=${plugin.entry}`,
+        pluginId,
+        { menuId },
+      );
+      recordPluginLog(
+        'info',
+        'external-stdin-sent',
+        `external stdin sent nodeCount=${context.nodes.length} truncated=${Boolean(context.truncated)}`,
+        pluginId,
+        { menuId },
+      );
       const processResult = await runExternalCommandPlugin({
         pluginId,
         context,
@@ -6436,18 +6449,9 @@ export function App() {
         return;
       }
 
-      if (validation.actions.some(action => action.type === 'createMindmap') && !confirmReplaceDirtyDocument('插件新建导图')) return;
-      const applied = applyScriptPluginActions(mindmap, validation.actions);
-      if (mutatesMindmap) {
-        recordHistory();
-        setMindmap(applied.rootNode);
-        if (validation.actions.some(action => action.type === 'createMindmap')) {
-          setCurrentFilePath(null);
-          setCurrentFileName('未命名.lmind');
-          setSelectedNodeId(applied.rootNode.id);
-          setSelectedNodeIds([applied.rootNode.id]);
-        }
-        setIsDocumentDirty(true);
+      const applied = commitPluginActions(validation.actions);
+      if (!applied) return;
+      if (applied.mutationCount > 0) {
         recordPluginLog(
           'info',
           'external-undo-batch-created',
@@ -6815,6 +6819,19 @@ export function App() {
       items: group.items.map((menu) => ({ id: menu.id, label: `${menu.label}${riskLabel}`, disabled: Boolean(disabledReason), disabledReason, execute: () => void runPluginCommand(menu.command, group.pluginId, undefined, menu.id) })),
     };
   }));
+  const pluginImportItems = isDesktopApp ? plugins.flatMap((plugin) => {
+    if (!plugin.enabled || plugin.manifestValid === false || !plugin.capabilities.includes('import')) return [];
+    if (plugin.pluginType !== 'script' && plugin.pluginType !== 'external-command') return [];
+    const isScript = plugin.pluginType === 'script';
+    const runnerEnabled = isScript ? isScriptRunnerEnabled : isExternalRunnerEnabled;
+    return [{
+      id: `plugin-import-${plugin.pluginId}`,
+      label: `通过 ${plugin.name} 导入…`,
+      disabled: !runnerEnabled,
+      disabledReason: runnerEnabled ? undefined : '请先启用对应的插件运行器',
+      execute: () => void runPluginCommand(isScript ? 'plugin.runScript' : 'plugin.runExternal', plugin.pluginId),
+    }];
+  }) : [];
   const topMenus: TopMenuGroup[] = [
     { id: 'file', label: '文件', items: [
       { id: 'new', label: '新建', children: [
@@ -6843,6 +6860,7 @@ export function App() {
       ] },
       { id: 'import', label: '导入', children: [
         { id: 'markdown', label: '导入 Markdown', execute: () => void handleImportMarkdown() }, { id: 'excel', label: '导入 Excel', execute: () => void handleImportExcel() }, { id: 'json', label: '导入 JSON', execute: () => void handleImportJson() }, { id: 'node-types', label: '导入节点类型包', execute: () => void handleImportNodeTypePack() }, { id: 'template-pack', label: '导入模板包', execute: () => void handleImportTemplatePack() },
+        ...pluginImportItems,
       ] },
       { id: 'export', label: '导出', children: [
         { id: 'selection', label: '导出选中节点…', disabled: !selectedNodeIds.length, execute: () => setExportSelectionOpen(true) }, { id: 'markdown', label: '导出 Markdown', execute: handleExportMarkdown }, { id: 'excel', label: '导出 Excel', execute: handleExportExcel }, { id: 'json', label: '导出 JSON', execute: handleExportJson }, { id: 'png', label: '导出 PNG', execute: () => void handleExportImage('png') }, { id: 'jpg', label: '导出 JPG', execute: () => void handleExportImage('jpg') }, { id: 'txt', label: canExportTxt ? '导出 TXT' : '导出 TXT（需启用插件）', disabled: !canExportTxt, disabledReason: 'TXT 导出插件未启用', execute: handleExportTxt }, { id: 'node-types', label: '导出节点类型包', execute: handleExportNodeTypePack }, { id: 'template-pack', label: '导出模板包', execute: handleExportTemplatePack },

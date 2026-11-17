@@ -258,7 +258,7 @@ describe('action-workflow manifest validation', () => {
     });
   });
 
-  it('requires workflow and a non-empty actions array with at most 20 items', () => {
+  it('requires workflow and a non-empty actions array with at most 1000 items', () => {
     expect(
       validatePluginManifest({
         ...validWorkflowManifest,
@@ -291,12 +291,19 @@ describe('action-workflow manifest validation', () => {
         message: 'workflow.actions 不能为空。',
       }),
     );
+    expect(validatePluginManifest({
+      ...validWorkflowManifest,
+      workflow: {
+        name: 'at-limit',
+        actions: Array.from({ length: 1000 }, () => ({ type: 'showMessage', message: 'hello' })),
+      },
+    }).valid).toBe(true);
     expect(
       validatePluginManifest({
         ...validWorkflowManifest,
         workflow: {
           name: 'too-many',
-          actions: Array.from({ length: 21 }, () => ({
+          actions: Array.from({ length: 1001 }, () => ({
             type: 'showMessage',
             message: 'hello',
           })),
@@ -304,7 +311,7 @@ describe('action-workflow manifest validation', () => {
       }).errors,
     ).toContainEqual(
       expect.objectContaining({
-        message: 'workflow.actions 最多 20 个 action。',
+        message: 'workflow.actions 最多 1000 个 action。',
       }),
     );
   });

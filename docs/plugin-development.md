@@ -205,7 +205,7 @@ async function run(context) {
 
 `addNode` 和 `deleteNode` 本批不执行，会返回明确的不支持错误。
 
-Action 校验采用整批拒绝策略：任一 action 非法时，本批 actions 全部不执行。单次最多 20 个 actions；`text` 最大 500 字符；`remark` 最大 5000 字符；`nodeId` 和 `parentId` 必须存在。
+Action 校验采用整批拒绝策略：任一 action 非法时，本批 actions 全部不执行。单次最多 1000 个 actions；`text` 最大 500 字符；`remark` 最大 5000 字符；`nodeId` 和 `parentId` 必须存在。
 
 ### 安全边界与限制
 
@@ -281,16 +281,16 @@ plugins/dev/sample-script-plugin/
 
 ### 新增 Actions
 
-- `updateNodes`：`updates` 单次最多 500 条；每条只允许修改 `text` /
+- `updateNodes`：`updates` 每个 action 最多 1000 条；每条只允许修改 `text` /
   `remark`，所有 `nodeId` 必须存在，任一非法则整批拒绝。
-- `addChildNodes`：给同一 `parentId` 一次新增最多 500 个子节点；只接受
-  `text` / `remark`，不接受插件指定 ID、position、children 或内部字段。
+- `addChildNode` / `addChildNodes`：在指定 `parentId` 下新增一棵或多棵子树；
+  每个 action 最多新增 1000 个节点（含后代），新增子树最多 64 层。节点 ID 由宿主生成。
 - `appendNodeText` / `prependNodeText`：片段最多 100 字符，拼接后标题最多
   500 字符。
 - `appendNodeRemark`：片段最多 1000 字符，拼接后备注最多 5000 字符。
 
 原有 `showMessage`、`updateNode`、`setNodeRemark`、`addChildNode` 保持兼容。
-单次脚本返回最多 20 个顶层 actions。`deleteNode` 明确拒绝并提示防止误删；
+单次最多 1000 个顶层 actions，所有 action 涉及的新增和修改条目合计最多 10000 条，批内按顺序生效且可一次撤销。`deleteNode` 明确拒绝并提示防止误删；
 `applyTemplate` 仅保留类型并提示当前不支持；未知 action 一律拒绝。
 
 批量新增示例：
@@ -431,7 +431,7 @@ runner 默认关闭策略保持不变。
 }
 ```
 
-`workflow` 必须是对象，`workflow.actions` 必须包含 1–20 个 action。
+`workflow` 必须是对象，`workflow.actions` 必须包含 1–1000 个 action。
 action-workflow 的菜单命令只能是 `plugin.runWorkflow`；script 插件仍只能
 使用 `plugin.runScript`。workflow 不能声明 `entry`、`runtime`、
 `commandLine`、`script` 或 `code` 等执行代码字段。
@@ -1150,17 +1150,32 @@ print(json.dumps({"actions": [{
 
 ## 2026-11 功能协议增量
 
-脚本和 external-command 插件声明 capabilities 中的 import 后，执行前弹出不限扩展名的文件选择器。取消选择不会执行插件。桌面宿主向 context.inputFile 提供 {path, name}。仅传本地路径与文件名，不上传文件；受控脚本仍不直接读取文件系统，需处理任意文件内容的插件使用外部命令运行器。
+在 `script` 或 `external-command` 插件的 manifest 中将 `"import"` 加入 `capabilities`。启用后，桌面端可从「文件 → 导入 → 通过插件名称导入」运行，也可使用插件原有的运行入口。运行前打开不限扩展名的本地文件选择器。取消选择不会执行插件。宿主只在 `context.inputFile` 提供本地绝对路径 `path` 和文件名 `name`。需要读取文件内容的插件可使用现有外部命令运行器；受控脚本没有文件系统访问接口。
 
-返回 actions 可更新当前节点，或通过 createMindmap 新建导图：
+可用 `updateNode` / `updateNodes` 按现有节点 ID 修改标题和备注，也可用 `addChildNode` / `addChildNodes` 按父节点 ID 添加多层分支。例如，以下外部命令输出会更新并扩展 `existing-node-id`（请替换为 `context.nodes` 中的实际 ID）：
 
 ```json
-{"actions":[{"type":"createMindmap","rootNode":{"text":"导入结果","nodeTypeId":"task-type-id","children":[{"text":"项目一"}]}},{"type":"showMessage","message":"导入完成"}]}
+{
+  "actions": [
+    {"type":"updateNode","nodeId":"existing-node-id","patch":{"remark":"来自本地文件"}},
+    {
+      "type":"addChildNodes",
+      "parentId":"existing-node-id",
+      "nodes":[{"text":"导入分组","type":"task-type-id","children":[{"text":"项目一"}]}]
+    }
+  ]
+}
 ```
 
-createMindmap 是该批唯一修改操作，可附带 showMessage。最多 1000 节点、64 层；节点 ID 由宿主生成。节点字段支持 text、remark、nodeTypeId、children。新导图不覆盖原保存路径，未保存修改会先提示。
+要新建独立的未保存导图，返回 `createMindmap`：
 
-addChildNode 和 addChildNodes 同样支持 nodeTypeId；已有类型自动匹配样式，未知 ID 保留并使用默认外观。updateNodes 和 addChildNodes 每个 action 最多 500 条，超过上限整批拒绝。
+```json
+{"actions":[{"type":"createMindmap","rootNode":{"text":"导入结果","type":"task-type-id","children":[{"text":"项目一"}]}}]}
+```
+
+`createMindmap` 必须是该批唯一的修改操作，可附带 `showMessage`。导图最多 1000 个节点、64 层；新导图没有原文件的保存路径，替换当前未保存导图前会提示确认。受控脚本的 `run(context)` 直接返回上述 `actions` 数组；外部命令以 UTF-8 JSON 输出包含 `actions` 的对象。
+
+三种新增操作共用节点字段：必填 `text`，可选 `remark`、`type` 和 `children`。每一层都可以使用 `type` 指定应用内已有的节点类型 ID，自动应用其样式；省略备注时继承该类型的备注模板。旧字段 `nodeTypeId` 仍可使用，同时提供时以 `type` 为准。类型未指定或 ID 不存在时使用默认样式。
 
 导出插件通过 showMessage 的 exportPath 字段返回已生成文件的绝对路径。省略或空字符串仅展示消息；非空路径在关闭消息框后打开所在目录，路径无效或文件不存在时提示错误。宿主不会因此执行该文件。示例：
 

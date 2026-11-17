@@ -1,6 +1,6 @@
-import type { ScriptPluginContext } from './pluginScriptActions';
+import { SCRIPT_ACTION_LIMIT, type ScriptPluginContext } from './pluginScriptActions';
 
-export const WORKFLOW_ACTION_LIMIT = 20;
+export const WORKFLOW_ACTION_LIMIT = SCRIPT_ACTION_LIMIT;
 
 export type ActionWorkflowDefinition = {
   name: string;

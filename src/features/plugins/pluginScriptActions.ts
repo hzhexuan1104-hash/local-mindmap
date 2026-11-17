@@ -1,9 +1,11 @@
-import type { MindmapNode } from '../mindmap/types';
+import type { MindmapNode, MindmapNodeType } from '../mindmap/types';
 
-export const SCRIPT_ACTION_LIMIT = 20;
+export const SCRIPT_ACTION_LIMIT = 1000;
 export const SCRIPT_CONTEXT_NODE_LIMIT = 1000;
-export const SCRIPT_UPDATE_NODES_LIMIT = 500;
-export const SCRIPT_ADD_CHILD_NODES_LIMIT = 500;
+export const SCRIPT_UPDATE_NODES_LIMIT = 1000;
+export const SCRIPT_ADD_CHILD_NODES_LIMIT = 1000;
+const SCRIPT_NODE_DEPTH_LIMIT = 64;
+const SCRIPT_BATCH_NODE_OPERATION_LIMIT = 10_000;
 export const SCRIPT_TEXT_MAX_LENGTH = 500;
 export const SCRIPT_REMARK_MAX_LENGTH = 5000;
 export const SCRIPT_TEXT_FRAGMENT_MAX_LENGTH = 100;
@@ -44,21 +46,13 @@ export type ScriptSetNodeRemarkAction = {
 export type ScriptAddChildNodeAction = {
   type: 'addChildNode';
   parentId: string;
-  node: {
-    text: string;
-    remark?: string;
-    nodeTypeId?: string;
-  };
+  node: ImportedPluginNode;
 };
 
 export type ScriptAddChildNodesAction = {
   type: 'addChildNodes';
   parentId: string;
-  nodes: Array<{
-    text: string;
-    remark?: string;
-    nodeTypeId?: string;
-  }>;
+  nodes: ImportedPluginNode[];
 };
 
 export type ScriptAppendNodeTextAction = {
@@ -73,7 +67,13 @@ export type ScriptAppendNodeRemarkAction = {
   text: string;
 };
 
-export type ImportedPluginNode = { text: string; remark?: string; nodeTypeId?: string; children?: ImportedPluginNode[] };
+export type ImportedPluginNode = {
+  text: string;
+  remark?: string;
+  type?: string;
+  nodeTypeId?: string;
+  children?: ImportedPluginNode[];
+};
 
 export type ScriptPluginAction =
   | { type: "createMindmap"; rootNode: ImportedPluginNode }
@@ -289,36 +289,58 @@ function validatePatch(value: unknown, field: string) {
   );
 }
 
-function validateChildNode(value: unknown, field: string) {
-  if (!isRecord(value)) {
-    return `${field} 必须是对象。`;
+function validateNodeTrees(
+  nodes: unknown[],
+  field: string,
+  budget: { remaining: number },
+) {
+  let count = 0;
+  const check = (value: unknown, path: string, depth: number): string | null => {
+    if (++count > SCRIPT_ADD_CHILD_NODES_LIMIT) {
+      return `${field} 最多 ${SCRIPT_ADD_CHILD_NODES_LIMIT} 个节点（含后代）。`;
+    }
+    if (--budget.remaining < 0) return batchLimitError;
+    if (depth > SCRIPT_NODE_DEPTH_LIMIT) return `${field} 最多 ${SCRIPT_NODE_DEPTH_LIMIT} 层。`;
+    if (!isRecord(value)) return `${path} 必须是对象。`;
+    const illegalKey = Object.keys(value).find(
+      (key) => !['text', 'remark', 'type', 'nodeTypeId', 'children'].includes(key),
+    );
+    if (illegalKey) return `${path} 不允许字段 ${illegalKey}。`;
+    const error = validateText(value.text, `${path}.text`, SCRIPT_TEXT_MAX_LENGTH, true) ??
+      (value.remark === undefined ? null : validateText(value.remark, `${path}.remark`, SCRIPT_REMARK_MAX_LENGTH));
+    if (error) return error;
+    for (const key of ['type', 'nodeTypeId'] as const) {
+      const id = value[key];
+      if (id !== undefined && (!isNonEmptyString(id) || id.length > 200)) {
+        return `${path}.${key} 必须是非空字符串且不超过 200 字符。`;
+      }
+    }
+    if (value.children !== undefined) {
+      if (!Array.isArray(value.children)) return `${path}.children 必须是数组。`;
+      for (const [index, child] of value.children.entries()) {
+        const childError = check(child, `${path}.children[${index}]`, depth + 1);
+        if (childError) return childError;
+      }
+    }
+    return null;
+  };
+
+  for (const [index, node] of nodes.entries()) {
+    const error = check(node, field === 'nodes' ? `nodes[${index}]` : field, 1);
+    if (error) return error;
   }
-  const illegalKey = Object.keys(value).find(
-    (key) => key !== 'text' && key !== 'remark' && key !== 'nodeTypeId',
-  );
-  if (illegalKey) {
-    return `${field} 不允许字段 ${illegalKey}。`;
-  }
-  if (value.nodeTypeId !== undefined && (typeof value.nodeTypeId !== "string" || !value.nodeTypeId.trim() || value.nodeTypeId.length > 200)) return "nodeTypeId 必须是非空字符串且不超过 200 字符。";
-  return (
-    validateText(value.text, `${field}.text`, SCRIPT_TEXT_MAX_LENGTH, true) ??
-    (value.remark === undefined
-      ? null
-      : validateText(
-          value.remark,
-          `${field}.remark`,
-          SCRIPT_REMARK_MAX_LENGTH,
-        ))
-  );
+  return null;
 }
 
 type ShadowNode = { text: string; remark: string };
+const batchLimitError = `单批最多修改或新增 ${SCRIPT_BATCH_NODE_OPERATION_LIMIT} 个节点条目。`;
 
 function validateSingleAction(
   value: unknown,
   index: number,
   nodeIds: Set<string>,
   shadowNodes: Map<string, ShadowNode>,
+  budget: { remaining: number },
 ): ScriptActionValidationResult {
   const fail = (message: string): ScriptActionValidationResult => ({
     valid: false,
@@ -331,24 +353,13 @@ function validateSingleAction(
   if (!isNonEmptyString(value.type)) {
     return fail('type 必须是字符串。');
   }
+  if (!['showMessage', 'createMindmap', 'addChildNode', 'addChildNodes', 'updateNodes'].includes(value.type) && --budget.remaining < 0) {
+    return fail(batchLimitError);
+  }
 
   switch (value.type) {
     case 'createMindmap': {
-      let count = 0;
-      const check = (node: unknown, depth: number): string | null => {
-        if (++count > 1000 || depth > 64) return '导入导图最多 1000 节点、64 层。';
-        if (!isRecord(node)) return '导入节点必须为对象。';
-        const { children, ...fields } = node;
-        const error = validateChildNode(fields, 'rootNode');
-        if (error) return error;
-        if (children !== undefined && !Array.isArray(children)) return 'children 必须为数组。';
-        for (const child of (children ?? []) as unknown[]) {
-          const error = check(child, depth + 1);
-          if (error) return error;
-        }
-        return null;
-      };
-      const error = check(value.rootNode, 1);
+      const error = validateNodeTrees([value.rootNode], 'rootNode', budget);
       return error ? fail(error) : { valid: true, actions: [{ type: 'createMindmap', rootNode: value.rootNode as ImportedPluginNode }], error: null };
     }
 
@@ -399,8 +410,9 @@ function validateSingleAction(
         return fail(`updates 单次最多 ${SCRIPT_UPDATE_NODES_LIMIT} 条。`);
       }
       if (value.updates.length === 0) return fail('updates 不能为空。');
+      budget.remaining -= value.updates.length;
+      if (budget.remaining < 0) return fail(batchLimitError);
       const updates: ScriptUpdateNodesAction['updates'] = [];
-      const nextShadow = new Map(shadowNodes);
       for (const [updateIndex, update] of value.updates.entries()) {
         if (!isRecord(update)) {
           return fail(`updates[${updateIndex}] 必须是对象。`);
@@ -424,14 +436,13 @@ function validateSingleAction(
         if (patchError) return fail(patchError);
         const nodeId = update.nodeId as string;
         const patch = update.patch as ScriptNodePatch;
-        const current = nextShadow.get(nodeId)!;
-        nextShadow.set(nodeId, {
+        const current = shadowNodes.get(nodeId)!;
+        shadowNodes.set(nodeId, {
           text: patch.text ?? current.text,
           remark: patch.remark ?? current.remark,
         });
         updates.push({ nodeId, patch });
       }
-      nextShadow.forEach((node, id) => shadowNodes.set(id, node));
       return {
         valid: true,
         actions: [{ type: 'updateNodes', updates }],
@@ -464,15 +475,14 @@ function validateSingleAction(
     case 'addChildNode': {
       const parentError = validateKnownNode(value.parentId, 'parentId', nodeIds);
       if (parentError) return fail(parentError);
-      const nodeError = validateChildNode(value.node, 'node');
+      const nodeError = validateNodeTrees([value.node], 'node', budget);
       if (nodeError) return fail(nodeError);
-      const node = value.node as { text: string; remark?: string; nodeTypeId?: string };
       return {
         valid: true,
         actions: [{
           type: 'addChildNode',
           parentId: value.parentId as string,
-          node: { text: node.text, remark: node.remark, nodeTypeId: node.nodeTypeId },
+          node: value.node as ImportedPluginNode,
         }],
         error: null,
       };
@@ -481,23 +491,15 @@ function validateSingleAction(
       const parentError = validateKnownNode(value.parentId, 'parentId', nodeIds);
       if (parentError) return fail(parentError);
       if (!Array.isArray(value.nodes)) return fail('nodes 必须是数组。');
-      if (value.nodes.length > SCRIPT_ADD_CHILD_NODES_LIMIT) {
-        return fail(`nodes 单次最多 ${SCRIPT_ADD_CHILD_NODES_LIMIT} 个。`);
-      }
       if (value.nodes.length === 0) return fail('nodes 不能为空。');
-      const nodes: ScriptAddChildNodesAction['nodes'] = [];
-      for (const [nodeIndex, node] of value.nodes.entries()) {
-        const nodeError = validateChildNode(node, `nodes[${nodeIndex}]`);
-        if (nodeError) return fail(nodeError);
-        const child = node as { text: string; remark?: string; nodeTypeId?: string };
-        nodes.push({ text: child.text, remark: child.remark, nodeTypeId: child.nodeTypeId });
-      }
+      const nodeError = validateNodeTrees(value.nodes, 'nodes', budget);
+      if (nodeError) return fail(nodeError);
       return {
         valid: true,
         actions: [{
           type: 'addChildNodes',
           parentId: value.parentId as string,
-          nodes,
+          nodes: value.nodes as ImportedPluginNode[],
         }],
         error: null,
       };
@@ -589,9 +591,10 @@ export function validateScriptPluginActions(
     nodes.map((node) => [node.id, { text: node.text, remark: node.remark }]),
   );
   const actions: ScriptPluginAction[] = [];
+  const budget = { remaining: SCRIPT_BATCH_NODE_OPERATION_LIMIT };
 
   for (const [index, action] of value.entries()) {
-    const result = validateSingleAction(action, index, nodeIds, shadowNodes);
+    const result = validateSingleAction(action, index, nodeIds, shadowNodes, budget);
     if (!result.valid) {
       return result;
     }
@@ -623,111 +626,111 @@ export function validateScriptActionPermissions(
   return { valid: true, error: null };
 }
 
-function updateNode(
-  node: MindmapNode,
-  nodeId: string,
-  updater: (node: MindmapNode) => MindmapNode,
-): MindmapNode {
-  if (node.id === nodeId) {
-    return updater(node);
-  }
-  return {
-    ...node,
-    children: node.children.map((child) => updateNode(child, nodeId, updater)),
-  };
-}
-
-function createScriptNodeId(ids: Set<string>, actionIndex: number, nodeIndex: number) {
-  let suffix = 1;
-  let candidate = `script-node-${Date.now()}-${actionIndex}-${nodeIndex}-${suffix}`;
-  while (ids.has(candidate)) {
-    suffix += 1;
-    candidate = `script-node-${Date.now()}-${actionIndex}-${nodeIndex}-${suffix}`;
-  }
-  ids.add(candidate);
-  return candidate;
-}
-
 export function applyScriptPluginActions(
   rootNode: MindmapNode,
   actions: ScriptPluginAction[],
+  nodeTypes: readonly MindmapNodeType[] = [],
 ) {
   let nextRoot = rootNode;
   const messages: ScriptShowMessageAction[] = [];
-  const existingNodes: ScriptContextNode[] = [];
-  collectNodes(rootNode, null, existingNodes);
-  const ids = new Set(existingNodes.map((node) => node.id));
-  let appliedCount = 0;
-  let mutationCount = 0;
-
-  const patchNode = (nodeId: string, patch: ScriptNodePatch) => {
-    nextRoot = updateNode(nextRoot, nodeId, (node) => ({
-      ...node,
-      text: patch.text ?? node.text,
-      remark: patch.remark ?? node.remark,
-    }));
+  const originalNodes = new Map<string, MindmapNode>();
+  const indexNode = (node: MindmapNode) => {
+    originalNodes.set(node.id, node);
+    node.children.forEach(indexNode);
+  };
+  indexNode(rootNode);
+  const typesById = new Map(nodeTypes.map((type) => [type.id, type]));
+  const generatedIds = new Set<string>();
+  const create = (node: ImportedPluginNode): MindmapNode => {
+    let id: string;
+    do {
+      id = crypto.randomUUID();
+    } while (originalNodes.has(id) || generatedIds.has(id));
+    generatedIds.add(id);
+    const type = typesById.get(node.type ?? node.nodeTypeId ?? '');
+    return {
+      id,
+      text: node.text,
+      remark: node.remark ?? type?.defaultRemark ?? '',
+      ...(type ? { nodeTypeId: type.id } : {}),
+      children: (node.children ?? []).map(create),
+    };
+  };
+  const patches = new Map<string, ScriptNodePatch>();
+  const additions = new Map<string, MindmapNode[]>();
+  const patchNode = (id: string, patch: ScriptNodePatch) => {
+    const previous = patches.get(id);
+    patches.set(id, {
+      text: patch.text ?? previous?.text,
+      remark: patch.remark ?? previous?.remark,
+    });
   };
 
-  actions.forEach((action, actionIndex) => {
-    if (action.type === 'showMessage') {
-      messages.push(action);
-      appliedCount += 1;
-      return;
-    }
-    if (action.type === 'updateNode') {
-      patchNode(action.nodeId, action.patch);
-    } else if (action.type === 'updateNodes') {
-      action.updates.forEach((update) => patchNode(update.nodeId, update.patch));
-    } else if (action.type === 'setNodeRemark') {
-      patchNode(action.nodeId, { remark: action.remark });
-    } else if (
-      action.type === 'appendNodeText' ||
-      action.type === 'prependNodeText'
-    ) {
-      nextRoot = updateNode(nextRoot, action.nodeId, (node) => ({
-        ...node,
-        text:
+  for (const action of actions) {
+    switch (action.type) {
+      case 'showMessage':
+        messages.push(action);
+        break;
+      case 'updateNode':
+        patchNode(action.nodeId, action.patch);
+        break;
+      case 'updateNodes':
+        action.updates.forEach((update) => patchNode(update.nodeId, update.patch));
+        break;
+      case 'setNodeRemark':
+        patchNode(action.nodeId, { remark: action.remark });
+        break;
+      case 'appendNodeText':
+      case 'prependNodeText': {
+        const text = patches.get(action.nodeId)?.text ?? originalNodes.get(action.nodeId)!.text;
+        patchNode(action.nodeId, { text:
           action.type === 'appendNodeText'
-            ? `${node.text}${action.text}`
-            : `${action.text}${node.text}`,
-      }));
-    } else if (action.type === 'createMindmap') {
-      let serial = 0;
-      const create = (node: ImportedPluginNode): MindmapNode => ({
-        id: createScriptNodeId(ids, actionIndex, serial++),
-        text: node.text, remark: node.remark ?? '', nodeTypeId: node.nodeTypeId,
-        children: (node.children ?? []).map(create),
-      });
-      nextRoot = create(action.rootNode);
-    } else if (action.type === 'appendNodeRemark') {
-      nextRoot = updateNode(nextRoot, action.nodeId, (node) => ({
-        ...node,
-        remark: `${node.remark}${action.text}`,
-      }));
-    } else if (
-      action.type === 'addChildNode' ||
-      action.type === 'addChildNodes'
-    ) {
-      const childNodes =
-        action.type === 'addChildNode' ? [action.node] : action.nodes;
-      nextRoot = updateNode(nextRoot, action.parentId, (node) => ({
-        ...node,
-        collapsed: false,
-        children: [
-          ...node.children,
-          ...childNodes.map((child, nodeIndex) => ({
-            id: createScriptNodeId(ids, actionIndex, nodeIndex),
-            text: child.text,
-            remark: child.remark ?? '',
-            nodeTypeId: child.nodeTypeId,
-            children: [],
-          })),
-        ],
-      }));
+            ? `${text}${action.text}`
+            : `${action.text}${text}`,
+        });
+        break;
+      }
+      case 'appendNodeRemark': {
+        const remark = patches.get(action.nodeId)?.remark ?? originalNodes.get(action.nodeId)!.remark;
+        patchNode(action.nodeId, { remark: `${remark}${action.text}` });
+        break;
+      }
+      case 'addChildNode':
+      case 'addChildNodes': {
+        const children = additions.get(action.parentId) ?? [];
+        const inputs = action.type === 'addChildNode' ? [action.node] : action.nodes;
+        children.push(...inputs.map(create));
+        additions.set(action.parentId, children);
+        break;
+      }
+      case 'createMindmap':
+        nextRoot = create(action.rootNode);
+        break;
     }
-    appliedCount += 1;
-    mutationCount += 1;
-  });
+  }
 
-  return { rootNode: nextRoot, messages, appliedCount, mutationCount };
+  if (patches.size || additions.size) {
+    const apply = (node: MindmapNode): MindmapNode => {
+      const patch = patches.get(node.id);
+      const added = additions.get(node.id);
+      const children = node.children.map(apply);
+      if (!patch && !added && children.every((child, index) => child === node.children[index])) {
+        return node;
+      }
+      return {
+        ...node,
+        text: patch?.text ?? node.text,
+        remark: patch?.remark ?? node.remark,
+        ...(added ? { collapsed: false } : {}),
+        children: added ? [...children, ...added] : children,
+      };
+    };
+    nextRoot = apply(rootNode);
+  }
+  return {
+    rootNode: nextRoot,
+    messages,
+    appliedCount: actions.length,
+    mutationCount: actions.length - messages.length,
+  };
 }

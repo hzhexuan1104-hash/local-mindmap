@@ -152,6 +152,21 @@ describe('search and replace', () => {
     expect(updated.remark).toBe('备注测试123测试123');
   });
 
+  it('matches leading, trailing, repeated and full-width spaces literally', () => {
+    const node = createNode('first word / first  word / last　word', ' first  word ');
+    const [match] = findMindmapMatches(node, ' first  word ', 'all');
+    expect(match).toMatchObject({ field: 'text', text: ' first  word ' });
+    expect(replaceMatchInMindmap(node, match, ' first  word ', '  X  ').text)
+      .toBe('first word /  X  / last　word');
+    expect(replaceAllInMindmap(node, ' first  word ', '', 'all')).toMatchObject({
+      text: 'first word // last　word',
+      remark: '',
+    });
+    expect(replaceAllInMindmap(node, '　', ' ', 'text').text).toContain('last word');
+    expect(replaceAllInMindmap(node, '  ', ' ', 'all').remark).toBe(' first word ');
+    expect(findMindmapMatches(node, '', 'all')).toEqual([]);
+  });
+
   it('uses explicit scope labels and neutral initial status', () => {
     expect(SEARCH_SCOPE_LABELS).toEqual({
       all: '全部节点',
