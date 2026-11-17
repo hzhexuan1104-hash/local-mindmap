@@ -6,7 +6,8 @@ import {
   validateScriptActionPermissions,
   validateScriptPluginActions,
 } from '../pluginScriptActions';
-import type { MindmapNode } from '../../mindmap/types';
+import { DEFAULT_NODE_STYLE, getEffectiveNodeStyle } from '../../mindmap/nodeStyles';
+import type { MindmapNode, MindmapNodeType } from '../../mindmap/types';
 import {
   createHistoryState,
   pushHistory,
@@ -26,6 +27,11 @@ const rootNode: MindmapNode = {
       children: [],
     },
   ],
+};
+const taskType: MindmapNodeType = {
+  id: 'task', name: '任务', icon: null, shape: 'pill',
+  backgroundColor: '#ffff00', borderColor: '#808000', textColor: '#000000',
+  fontSize: 18, bold: true, defaultText: '新任务', defaultRemark: '任务备注模板',
 };
 
 describe('Plugin Action Protocol validation', () => {
@@ -196,19 +202,25 @@ describe('Script Plugin Action validation', () => {
     });
   });
 
-  it('rejects action batches over the limit', () => {
-    const result = validateScriptPluginActions(
-      Array.from({ length: 501 }, (_, index) => ({
-        type: 'showMessage',
-        message: `message ${index}`,
-      })),
-      rootNode,
-    );
+  it('applies 1000 additions in order and rejects a 1001st action', () => {
+    const actions = Array.from({ length: 1000 }, (_, index) => ({
+      type: 'addChildNode',
+      parentId: 'node-1',
+      node: { text: `Child ${index}` },
+    }));
+    const valid = validateScriptPluginActions(actions, rootNode);
+    if (!valid.valid) throw new Error(valid.error);
+    const applied = applyScriptPluginActions(rootNode, valid.actions);
+    const children = applied.rootNode.children[0].children;
+    expect(applied).toMatchObject({ appliedCount: 1000, mutationCount: 1000 });
+    expect(children.map(({ text }) => text)).toEqual(actions.map(({ node }) => node.text));
+    expect(new Set(children.map(({ id }) => id)).size).toBe(1000);
+    expect(rootNode.children[0].children).toEqual([]);
 
-    expect(result).toEqual({
+    expect(validateScriptPluginActions([...actions, actions[0]], rootNode)).toEqual({
       valid: false,
       actions: [],
-      error: '单次最多执行 20 个 actions。',
+      error: '单次最多执行 1000 个 actions。',
     });
   });
 
@@ -255,22 +267,22 @@ describe('Script Plugin Action validation', () => {
     ).toMatchObject({ valid: false, error: expect.stringContaining('missing') });
   });
 
-  it('rejects updateNodes over 500 entries', () => {
+  it('rejects updateNodes over 1000 entries', () => {
     expect(
       validateScriptPluginActions(
         [{
           type: 'updateNodes',
-          updates: Array.from({ length: 501 }, () => ({
+          updates: Array.from({ length: 1001 }, () => ({
             nodeId: 'node-1',
             patch: { text: 'updated' },
           })),
         }],
         rootNode,
       ),
-    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 500') });
+    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 1000') });
   });
 
-  it('accepts addChildNodes and rejects over 500 nodes', () => {
+  it('accepts addChildNodes and rejects over 1000 nodes', () => {
     const valid = validateScriptPluginActions(
       [{
         type: 'addChildNodes',
@@ -294,11 +306,11 @@ describe('Script Plugin Action validation', () => {
         [{
           type: 'addChildNodes',
           parentId: 'node-1',
-          nodes: Array.from({ length: 501 }, () => ({ text: 'Child' })),
+          nodes: Array.from({ length: 1001 }, () => ({ text: 'Child' })),
         }],
         rootNode,
       ),
-    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 500') });
+    ).toMatchObject({ valid: false, error: expect.stringContaining('最多 1000') });
   });
 
   it('undoes and redoes one script batch as one history step', () => {
@@ -407,22 +419,23 @@ describe('Script Plugin Action validation', () => {
 });
 
 describe('Expanded plugin import and batch protocol', () => {
-  it('accepts 500 additions, retains unknown type IDs and applies atomically', () => {
-    const result = validateScriptPluginActions([{ type: 'addChildNodes', parentId: 'root', nodes: Array.from({ length: 500 }, () => ({ text: 'Imported', nodeTypeId: 'custom-type' })) }], rootNode);
+  it('adds 1000 nodes in a single action and falls back to the default type', () => {
+    const result = validateScriptPluginActions([{ type: 'addChildNodes', parentId: 'root', nodes: Array.from({ length: 1000 }, () => ({ text: 'Imported', type: 'missing' })) }], rootNode);
     expect(result.valid).toBe(true);
     if (!result.valid) throw new Error(result.error);
     const applied = applyScriptPluginActions(rootNode, result.actions);
-    expect(applied.rootNode.children).toHaveLength(501);
-    expect(applied.rootNode.children[500].nodeTypeId).toBe('custom-type');
+    expect(applied.rootNode.children).toHaveLength(1001);
+    expect(applied.rootNode.children[1000].nodeTypeId).toBeUndefined();
+    expect(getEffectiveNodeStyle(applied.rootNode.children[1000])).toEqual(DEFAULT_NODE_STYLE);
     expect(rootNode.children).toHaveLength(1);
   });
 
-  it('accepts exactly 500 updates and rejects 501', () => {
-    const updates = Array.from({ length: 500 }, (_, index) => ({ nodeId: 'node-1', patch: { text: String(index) } }));
+  it('accepts exactly 1000 updates and rejects 1001', () => {
+    const updates = Array.from({ length: 1000 }, (_, index) => ({ nodeId: 'node-1', patch: { text: String(index) } }));
     const result = validateScriptPluginActions([{ type: 'updateNodes', updates }], rootNode);
     expect(result.valid).toBe(true);
     if (!result.valid) throw new Error(result.error);
-    expect(applyScriptPluginActions(rootNode, result.actions).rootNode.children[0].text).toBe('499');
+    expect(applyScriptPluginActions(rootNode, result.actions).rootNode.children[0].text).toBe('999');
     expect(validateScriptPluginActions([{ type: 'updateNodes', updates: [...updates, updates[0]] }], rootNode).valid).toBe(false);
   });
 
@@ -433,11 +446,46 @@ describe('Expanded plugin import and batch protocol', () => {
     ], rootNode);
     expect(result.valid).toBe(true);
     if (!result.valid) throw new Error(result.error);
-    const applied = applyScriptPluginActions(rootNode, result.actions);
+    const applied = applyScriptPluginActions(rootNode, result.actions, [taskType]);
     expect(applied.rootNode.text).toBe('New');
-    expect(applied.rootNode.children[0].nodeTypeId).toBe('missing');
+    expect(applied.rootNode.nodeTypeId).toBe('task');
+    expect(applied.rootNode.children[0].nodeTypeId).toBeUndefined();
     expect(applied.rootNode.id).not.toBe(applied.rootNode.children[0].id);
     expect(applied.messages[0].exportPath).toBe('C:/exports/result.txt');
+  });
+
+  it('applies types at every depth and keeps ordered edits to existing nodes', () => {
+    const result = validateScriptPluginActions([
+      { type: 'updateNode', nodeId: 'node-1', patch: { text: 'Updated', remark: 'A' } },
+      { type: 'addChildNode', parentId: 'node-1', node: { text: 'Branch', type: 'task', children: [{ text: 'Nested', nodeTypeId: 'task', remark: '', children: [{ text: 'Leaf' }] }] } },
+      { type: 'appendNodeRemark', nodeId: 'node-1', text: 'B' },
+      { type: 'addChildNodes', parentId: 'node-1', nodes: [{ text: 'Second', children: [{ text: 'Other leaf' }] }] },
+      { type: 'appendNodeText', nodeId: 'node-1', text: ' title' },
+    ], rootNode);
+    if (!result.valid) throw new Error(result.error);
+    const [parent] = applyScriptPluginActions(rootNode, result.actions, [taskType]).rootNode.children;
+    expect(parent).toMatchObject({ text: 'Updated title', remark: 'AB', collapsed: false });
+    const [branch, second] = parent.children;
+    expect(branch).toMatchObject({ text: 'Branch', nodeTypeId: 'task', remark: taskType.defaultRemark });
+    expect(getEffectiveNodeStyle(branch, taskType)).toMatchObject({ backgroundColor: '#ffff00', shape: 'pill' });
+    expect(branch.children[0]).toMatchObject({ nodeTypeId: 'task', remark: '', children: [{ text: 'Leaf' }] });
+    expect(second).toMatchObject({ text: 'Second', children: [{ text: 'Other leaf' }] });
+  });
+
+  it('rejects the entire batch on malformed, oversized or too-deep descendants', () => {
+    const deep = Array.from({ length: 64 }).reduce<{ text: string; children?: unknown[] }>(
+      (child) => ({ text: 'Parent', children: [child] }), { text: 'Leaf' },
+    );
+    for (const [node, error] of [
+      [{ text: 'Branch', children: [{ text: 'Leaf', type: 123 }] }, /children\[0\]\.type/],
+      [{ text: 'Branch', children: Array.from({ length: 1000 }, () => ({ text: 'Leaf' })) }, /最多 1000/],
+      [deep, /最多 64 层/],
+    ] as const) {
+      expect(validateScriptPluginActions([
+        { type: 'updateNode', nodeId: 'root', patch: { text: 'Skipped' } },
+        { type: 'addChildNode', parentId: 'node-1', node },
+      ], rootNode)).toMatchObject({ valid: false, actions: [], error: expect.stringMatching(error) });
+    }
   });
 
   it('rejects malformed imported trees and mixed replacement batches', () => {

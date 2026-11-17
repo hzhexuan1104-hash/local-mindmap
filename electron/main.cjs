@@ -61,6 +61,16 @@ ipcMain.handle('local-mindmap:invoke', async (event,command,args) => {
   const owner = windows.get(event.sender.id);
   if (!owner || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url.split('#')[0] !== entryUrl || !commands.has(command)) throw new Error('无效的桌面请求');
   if (command === 'get_launch_file') return owner.file;
+  if (command === 'select_plugin_input_file') {
+    const { canceled, filePaths } = await dialog.showOpenDialog(owner.win, {
+      title: '选择插件导入文件',
+      properties: ['openFile'],
+    });
+    const selectedPath = filePaths[0];
+    return canceled || !selectedPath
+      ? null
+      : { path: selectedPath, name: path.basename(selectedPath) };
+  }
   if (command === 'open_attachment_link') {
     const url = new URL(args.url);
     if (!['https:','http:'].includes(url.protocol) || url.username || url.password) throw new Error('链接无效');

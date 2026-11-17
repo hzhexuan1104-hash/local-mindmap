@@ -31,7 +31,7 @@ export function getSearchPanelStatusText(options: {
   matchCount: number;
   activeIndex: number;
 }) {
-  if (!options.query.trim() || !options.hasRun) {
+  if (!options.query || !options.hasRun) {
     return '输入关键词查找节点标题和备注。';
   }
 
@@ -123,7 +123,7 @@ export function findMindmapMatches(
   options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
 ) {
   const matches: SearchMatch[] = [];
-  collectMatches(rootNode, query.trim(), scope, matches, options);
+  collectMatches(rootNode, query, scope, matches, options);
   return matches;
 }
 

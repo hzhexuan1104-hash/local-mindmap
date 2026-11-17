@@ -945,8 +945,9 @@ fn validate_action_workflow(workflow: Option<&Value>) -> Result<(), String> {
     if actions.is_empty() {
         return Err("workflow.actions 不能为空。".to_string());
     }
-    if actions.len() > 20 {
-        return Err("workflow.actions 最多 20 个 action。".to_string());
+    const WORKFLOW_ACTION_LIMIT: usize = 1000;
+    if actions.len() > WORKFLOW_ACTION_LIMIT {
+        return Err(format!("workflow.actions 最多 {WORKFLOW_ACTION_LIMIT} 个 action。"));
     }
     Ok(())
 }
@@ -7043,13 +7044,6 @@ fn test_python_runtime(python_path: String) -> Result<PythonTestResult, String> 
     test_python_runtime_at(&python_path)
 }
 
-fn select_plugin_input_file() -> Option<serde_json::Value> {
-    FileDialog::new().set_title("选择插件导入文件").pick_file().map(|path| serde_json::json!({
-        "path": path.to_string_lossy(),
-        "name": path.file_name().unwrap_or_default().to_string_lossy()
-    }))
-}
-
 fn get_launch_file() -> Option<String> {
     launch_file::from_args(std::env::args_os().skip(1))
 }
@@ -7057,7 +7051,6 @@ fn get_launch_file() -> Option<String> {
 fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Value, String> {
     match command {
         "get_launch_file" => serde_json::to_value(get_launch_file()).map_err(|e| e.to_string()),
-        "select_plugin_input_file" => serde_json::to_value(select_plugin_input_file()).map_err(|e| e.to_string()),
         "get_user_data_dir" => serde_json::to_value(get_user_data_dir(app.clone())?).map_err(|e| e.to_string()),
         "ensure_user_data_dirs" => serde_json::to_value(ensure_user_data_dirs(app.clone())?).map_err(|e| e.to_string()),
         "read_user_json" => serde_json::to_value(read_user_json(app.clone(), serde_json::from_value(args.get("relativePath").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?, serde_json::from_value(args.get("defaultValue").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?).map_err(|e| e.to_string()),
@@ -8171,6 +8164,17 @@ fn main() {
                 .expect_err("workflow runtime should fail")
                 .contains("runtime")
         );
+    }
+
+    #[test]
+    fn accepts_a_thousand_workflow_actions_but_rejects_more() {
+        let mut actions = vec![json!({ "type": "showMessage", "message": "ok" }); 1000];
+        validate_action_workflow(Some(&json!({ "actions": &actions })))
+            .expect("1000 actions should be accepted");
+        actions.push(json!({ "type": "showMessage", "message": "over limit" }));
+        assert!(validate_action_workflow(Some(&json!({ "actions": actions })))
+            .expect_err("1001 actions should be rejected")
+            .contains("最多 1000"));
     }
 
     #[cfg(target_os = "windows")]
