@@ -15,7 +15,8 @@ Local Mindmap 保留 v1.7 纯本地声明式 JSON 插件，并在 v1.8 增加默
 | `manifestVersion` | 当前仅支持 `1` |
 | `pluginId` | 全局唯一标识 |
 | `name` / `version` / `author` | 插件元数据 |
-| `pluginType` | 插件类型 |
+| `pluginType` | 文件导入插件用 `importer`；声明式 TXT 导出用 `import-export` |
+| `runtime` | `importer` 必填：`javascript`、`python` 或 `executable` |
 | `capabilities` | 声明的能力 |
 | `enabled` | 初始启用状态 |
 | `contributions` | 声明式贡献点 |
@@ -304,9 +305,14 @@ async function run(context) {
     type: "addChildNodes",
     parentId: context.selectedNode.id,
     nodes: [
-      { text: "插件生成子节点 1", remark: "由批量脚本插件生成" },
-      { text: "插件生成子节点 2", remark: "由批量脚本插件生成" },
-      { text: "插件生成子节点 3", remark: "由批量脚本插件生成" }
+      {
+        text: "项目计划",
+        children: [
+          { text: "准备阶段", children: [{ text: "收集需求", remark: "- [ ] 确认范围" }] },
+          { text: "执行阶段" }
+        ]
+      },
+      { text: "会议记录" }
     ]
   }];
 }
@@ -954,8 +960,10 @@ pluginId 建议由插件名称自动生成：转为小写、空格转短横线�
 5. `external-command / executable`：生成 `entry: "plugin.exe"` 的 manifest 和
    README 提示，不生成真实 EXE。开发者必须自行编译并放入项目目录。
 6. `theme-pack`：生成纯声明式主题贡献，不执行代码。
+7. **导入插件（JavaScript）**：生成 `pluginType: "importer"`、`runtime: "javascript"`
+   和从「文件 → 导入」解析 JSON 的 `main.js`，附带可直接测试的 `branches.json`。
 
-菜单位置支持顶部 `plugins` 和节点右键 `node-context`。运行型模板分别固定使用
+导入模板固定从「文件 → 导入」启动。其他模板的菜单位置支持顶部 `plugins` 和节点右键 `node-context`。运行型模板分别使用
 `plugin.runScript`、`plugin.runWorkflow` 或 `plugin.runExternal`。
 
 ### 校验 manifest 与项目
@@ -1150,9 +1158,108 @@ print(json.dumps({"actions": [{
 
 ## 2026-11 功能协议增量
 
-在 `script` 或 `external-command` 插件的 manifest 中将 `"import"` 加入 `capabilities`。启用后，桌面端可从「文件 → 导入 → 通过插件名称导入」运行，也可使用插件原有的运行入口。运行前打开不限扩展名的本地文件选择器。取消选择不会执行插件。宿主只在 `context.inputFile` 提供本地绝对路径 `path` 和文件名 `name`。需要读取文件内容的插件可使用现有外部命令运行器；受控脚本没有文件系统访问接口。
+### 导入插件
 
-可用 `updateNode` / `updateNodes` 按现有节点 ID 修改标题和备注，也可用 `addChildNode` / `addChildNodes` 按父节点 ID 添加多层分支。例如，以下外部命令输出会更新并扩展 `existing-node-id`（请替换为 `context.nodes` 中的实际 ID）：
+创建导入格式时，使用独立的 `pluginType: "importer"`。安装并启用插件、开启对应运行器后，
+从「文件 → 导入 → 插件名称…」选择本地文件。文件扩展名不限，取消选择不会执行插件。
+无需声明 `contributions.menus`；如需增加插件菜单或右键入口，按运行器使用
+`plugin.runScript` 或 `plugin.runExternal`，执行时同样会选择文件。
+
+| `runtime` | `entry` 示例 | 文件输入 | 输出 |
+|---|---|---|---|
+| `javascript` | `main.js` | `context.inputFile` 包含绝对路径 `path`、文件名 `name` 和文本 `text`。宿主只读用户选中的 UTF-8 文件，支持 BOM，上限 1 MiB。 | `run(context)` 返回 actions 数组。 |
+| `python` | `main.py` | 从 UTF-8 stdin 读取 context JSON；`inputFile` 包含 `path` / `name`，由程序读取文件。 | UTF-8 stdout 输出 `{"actions":[...]}`，诊断写 stderr。 |
+| `executable` | Windows：`plugin.exe` | 同 Python，可在程序内读取二进制格式或其他编码。 | 同 Python。 |
+
+JavaScript 在受控 Worker 中运行，可以解析收到的文本，没有通用文件系统接口。外部命令
+沿用各自的平台入口限制和执行权限；导入逻辑应只在本机处理数据。旧版 `script` 或
+`external-command` 若声明了 `capabilities: ["import", ...]`，仍按原样接收 `path` / `name`；
+旧 JavaScript 插件可将 `pluginType` 改为 `importer` 并加上 `runtime: "javascript"` 来读取文本。
+
+#### JavaScript：导入多层 JSON 分支
+
+把以下两个文件放在同一目录，或在开发者工作台选择「导入插件（JavaScript）」生成。
+修改 `pluginId` 为你的唯一 ID 后，可在插件管理中安装 `manifest.json`，或校验并打包为 `.lmplugin` 再安装。
+
+`manifest.json`：
+
+```json
+{
+  "manifestVersion": 1,
+  "pluginId": "example.json-branch-importer",
+  "name": "JSON 分支导入",
+  "version": "1.0.0",
+  "pluginType": "importer",
+  "runtime": "javascript",
+  "entry": "main.js",
+  "capabilities": ["import", "script"],
+  "permissions": ["mindmap:write"]
+}
+```
+
+`main.js`（完整示例也可见 [示例目录](examples/sample-import-plugin/README.md)）：
+
+```js
+function run(context) {
+  const file = context.inputFile;
+  if (typeof file?.text !== "string") throw new Error("请从「文件 → 导入」选择 UTF-8 JSON。");
+  const nodes = JSON.parse(file.text);
+  if (!Array.isArray(nodes) || !nodes.length) throw new Error("文件应包含非空节点数组。");
+  const parentId = context.selectedNode?.id ?? context.mindmap.rootNodeId;
+  return [
+    { type: "addChildNodes", parentId, nodes },
+    { type: "showMessage", message: "已导入 " + nodes.length + " 个分支。" }
+  ];
+}
+```
+
+将以下内容保存为 UTF-8 的 `branches.json`，选中画布上的目标节点后导入。返回结果中
+`nodes` 的元素是一级子节点；每个节点的 `children` 继续放下一层，顺序与数组一致。
+
+```json
+[
+  {
+    "text": "项目计划",
+    "children": [
+      { "text": "准备阶段", "children": [{ "text": "收集需求", "remark": "- [ ] 确认范围" }] },
+      { "text": "执行阶段" }
+    ]
+  },
+  { "text": "会议记录" }
+]
+```
+
+#### Python：读取所选文件并追加分支
+
+可沿用上面的 manifest，把 `runtime` 改为 `python`、`entry` 改为 `main.py`，
+`capabilities` 改为 `["import", "external-command"]`，`permissions` 改为
+`["external-command", "mindmap:write"]`。在插件配置中设置 Python 路径、测试并开启外部命令运行器。
+对同一个 `branches.json`，`main.py` 可以写成：
+
+```python
+import json
+import sys
+from pathlib import Path
+
+context = json.load(sys.stdin)
+file = context["inputFile"]
+with Path(file["path"]).open(encoding="utf-8-sig") as source:
+    nodes = json.load(source)
+if not isinstance(nodes, list) or not nodes:
+    sys.exit("文件应包含非空节点数组。")
+parent_id = (context.get("selectedNode") or {}).get("id") or context["mindmap"]["rootNodeId"]
+actions = [
+    {"type": "addChildNodes", "parentId": parent_id, "nodes": nodes},
+    {"type": "showMessage", "message": f"已导入 {len(nodes)} 个分支。"}
+]
+print(json.dumps({"actions": actions}, ensure_ascii=False))
+```
+
+#### 返回格式：更新、追加或新建
+
+可用 `updateNode` / `updateNodes` 按现有节点 ID 修改标题和备注，也可对同一批结果使用
+`addChildNode` / `addChildNodes` 添加多层分支。以下是外部命令的 stdout 示例，
+请将 `existing-node-id` 换成实际节点 ID。JavaScript 只返回对象内部的 `actions` 数组。
 
 ```json
 {
@@ -1175,7 +1282,16 @@ print(json.dumps({"actions": [{
 
 `createMindmap` 必须是该批唯一的修改操作，可附带 `showMessage`。导图最多 1000 个节点、64 层；新导图没有原文件的保存路径，替换当前未保存导图前会提示确认。受控脚本的 `run(context)` 直接返回上述 `actions` 数组；外部命令以 UTF-8 JSON 输出包含 `actions` 的对象。
 
-三种新增操作共用节点字段：必填 `text`，可选 `remark`、`type` 和 `children`。每一层都可以使用 `type` 指定应用内已有的节点类型 ID，自动应用其样式；省略备注时继承该类型的备注模板。旧字段 `nodeTypeId` 仍可使用，同时提供时以 `type` 为准。类型未指定或 ID 不存在时使用默认样式。
+三种新增操作共用节点字段：必填 `text`（最多 500 字符），可选 `remark`（Markdown，最多
+5000 字符）、`type` 和 `children`。单节点操作使用 `node` 对象，批量操作使用
+`nodes` 数组，新导图使用 `rootNode` 对象。用 `children` 数组递归表达层级，叶节点可省略；
+节点 ID 由宿主生成，无需给新节点填写 `id` 或 `parentId`。每个新增 action 最多 1000 个节点
+（含所有后代）、64 层。每一层都可以使用 `type` 指定应用内已有的节点类型 ID，自动应用其样式；
+省略备注时继承该类型的备注模板。旧字段 `nodeTypeId` 仍可使用，同时提供时以 `type` 为准。
+类型未指定或 ID 不存在时使用默认样式。整批先校验再修改；后代字段不合法时不会写入任何节点，
+成功新增后可一次撤销。
+
+### 导出结果消息
 
 导出插件通过 showMessage 的 exportPath 字段返回已生成文件的绝对路径。省略或空字符串仅展示消息；非空路径在关闭消息框后打开所在目录，路径无效或文件不存在时提示错误。宿主不会因此执行该文件。示例：
 

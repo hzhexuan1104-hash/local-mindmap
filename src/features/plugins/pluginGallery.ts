@@ -1,5 +1,6 @@
 import {
   parsePluginManifestValue,
+  SUPPORTED_PLUGIN_TYPES,
   type PluginManifest,
   type PluginType,
 } from '../mindmap/plugins';
@@ -51,23 +52,14 @@ export const PLUGIN_GALLERY_CATEGORIES = [
 
 export const PLUGIN_GALLERY_TYPES: PluginType[] = [
   'import-export',
+  'importer',
   'action-workflow',
   'script',
   'external-command',
   'theme-pack',
 ];
 
-const VALID_PLUGIN_TYPES = new Set<PluginType>([
-  'import-export',
-  'node-type-pack',
-  'template-pack',
-  'theme-pack',
-  'icon-pack',
-  'tool',
-  'script',
-  'action-workflow',
-  'external-command',
-]);
+const VALID_PLUGIN_TYPES = new Set(SUPPORTED_PLUGIN_TYPES);
 
 function normalizeGalleryItem(
   item: PluginGalleryCatalogItemData,

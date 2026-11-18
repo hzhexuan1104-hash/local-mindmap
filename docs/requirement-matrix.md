@@ -231,3 +231,28 @@ STORE-002 / UX-003：补齐安装关联声明、启动参数解析及空白导�
 | PLUGIN-005 / NODETYPE-010 | 新增节点按类型 ID 应用样式，未知类型回退默认；支持每批 1000 个顶层 actions。 |
 
 插件的字段和运行范围见[开发文档](plugin-development.md#2026-11-功能协议增量)。
+
+## 2026-11-18 导入插件与消息面板优化
+
+| 对应需求 | 本次增量 |
+|---|---|
+| PLUGIN-002 / PLUGIN-006 | 独立的 `importer` 类型可接入 JavaScript、Python 或可执行文件，通过「文件 → 导入」运行；旧导入插件保持兼容。 |
+| PLUGIN-005 / NODETYPE-010 | [示例导入插件](examples/sample-import-plugin/README.md)与开发者工作台模板使用递归 `children` 导入多层分支；整批校验，新增节点可一次撤销。 |
+| UX-003 / UX-004 | 插件消息按级别排列，正文独立滚动；帮助、插件日志、工作台及附件等共用弹窗布局同步整理。 |
+
+修改文件、测试命令和验收范围见[验收记录](plugin-import-feedback-2026-11-18.md)。
+
+## 2026-11-18 新增节点位置优化
+
+| 对应需求 | 本次增量 |
+|---|---|
+| MAP-001 / MAP-006 / MAP-007 | 新增子节点、同级节点和上级节点按实际尺寸和布局密度落位。自动布局按各自父节点的宽度计算距离；有手动坐标的导图为新节点寻找空位，保留已有手动坐标。向折叠主题新增子节点时展开该主题。 |
+| MAP-008 / MAP-009 / MAP-016 | 新节点超出视野时只平移画布并保留缩放；新增和展开状态仍可撤销与重做。 |
+
+布局与编辑入口：`src/features/mindmap/layout.ts`、`nodeInsertionLayout.ts`、`typedNodeCreation.ts`、`canvasControls.ts` 及 `src/app/App.tsx`。回归覆盖 `src/features/mindmap/__tests__` 下的 `layout.test.ts`、`nodeInsertionLayout.test.ts`、`canvasControls.test.ts`，以及 `electron/node-placement-smoke.cjs`。
+
+验证命令：`npm test`、`npm run build`、`electron electron/node-placement-smoke.cjs`、`electron electron/plugin-import-smoke.cjs`、`git diff --check`。桌面冒烟测试在 Windows 验证；本次未覆盖其他平台实机和安装包。
+
+## Windows 7 SP1 内网便携版
+
+ENV-001 / SCOPE-001 / PLATFORM-004：标准版维持 Windows 10 及以上的基线。新增 [Windows 7 SP1 便携构建及内网验收说明](windows-7-portable.md)，包含 x64、32 位两个目标，沿用 `.lmind` 文件格式。Win7 实机验收单独记录，不计入标准版 Windows 验收。

@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "pluginId": "example.json-branch-importer",
+  "name": "JSON 分支导入",
+  "version": "1.0.0",
+  "author": "Local Mindmap",
+  "description": "将 UTF-8 JSON 中的多层分支追加到当前导图。",
+  "pluginType": "importer",
+  "runtime": "javascript",
+  "entry": "main.js",
+  "capabilities": ["import", "script"],
+  "permissions": ["mindmap:read", "mindmap:write", "node:read", "node:write"]
+}

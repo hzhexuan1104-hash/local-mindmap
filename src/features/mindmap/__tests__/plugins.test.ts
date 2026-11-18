@@ -12,6 +12,7 @@ import { ensureDesktopConfigDir, getDesktopConfigDir } from '../desktopConfig';
 import samplePluginManifest from '../../../../docs/examples/sample-json-plugin/manifest.json';
 import sampleWorkflowManifest from '../../../../docs/examples/sample-json-workflow-plugin/manifest.json';
 import samplePythonManifest from '../../../../docs/examples/sample-python-plugin/manifest.json';
+import sampleImporterManifest from '../../../../docs/examples/sample-import-plugin/manifest.json';
 import {
   FORBIDDEN_PLUGIN_FIELDS,
   createPluginOverwritePrompt,
@@ -20,6 +21,7 @@ import {
   getPluginNodeTypes,
   getPersistablePluginRegistry,
   getPluginMenuGroups,
+  isFileImportPlugin,
   getScriptWritePermissions,
   getPluginTemplates,
   installPlugin,
@@ -36,6 +38,31 @@ import {
   validatePluginManifest,
   type PluginManifest,
 } from '../plugins';
+
+describe('file importer manifests', () => {
+  it('exposes a dedicated importer without requiring legacy import capability, and preserves its trust state', () => {
+    const { manifest } = validatePluginManifest({ ...sampleImporterManifest, capabilities: ['script'] });
+    expect(manifest).not.toBeNull();
+    if (!manifest) throw new Error('Importer manifest did not validate.');
+    expect(isFileImportPlugin(manifest)).toBe(true);
+    expect(manifest.capabilities).toContain('import');
+    expect(shouldConfirmScriptPluginRun(manifest)).toBe(true);
+    const [trusted] = setPluginTrusted([manifest], manifest.pluginId, true);
+    expect(shouldConfirmScriptPluginRun(trusted)).toBe(false);
+    expect(installPluginManifest([trusted], manifest)[0].trusted).toBe(true);
+  });
+
+  it('keeps existing opt-in script importers and rejects invalid importer runtimes and entries', () => {
+    const legacy = validatePluginManifest({ ...sampleImporterManifest, pluginType: 'script', runtime: undefined });
+    expect(legacy.manifest && isFileImportPlugin(legacy.manifest)).toBe(true);
+    for (const patch of [{ runtime: undefined }, { runtime: 'shell' }, { entry: '../main.js' }, { runtime: 'python' }]) {
+      expect(validatePluginManifest({ ...sampleImporterManifest, ...patch }).valid).toBe(false);
+    }
+    const external = validatePluginManifest({ ...samplePythonManifest, pluginType: 'importer' });
+    expect(external.manifest && isFileImportPlugin(external.manifest)).toBe(true);
+    expect(external.manifest && shouldConfirmExternalPluginRun(external.manifest)).toBe(true);
+  });
+});
 
 describe('external-command manifest validation', () => {
   const manifest = {
@@ -510,6 +537,7 @@ describe('declarative plugin manifest validation', () => {
       'theme-pack',
       'icon-pack',
       'import-export',
+      'importer',
       'node-type-pack',
       'template-pack',
       'tool',

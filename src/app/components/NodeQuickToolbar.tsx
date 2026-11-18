@@ -3,9 +3,9 @@ import {
   deriveSelectedNodeTags,
   getNodeTagApplicationState,
   NODE_PRIORITY_VALUES,
-  NODE_PROGRESS_VALUES,
 } from '../../features/mindmap/nodeMarkers';
 import { ChevronIcon } from './ChevronIcon';
+import { NodeProgressSelect } from './NodeProgressSelect';
 import type {
   MindmapNode,
   MindmapNodePriority,
@@ -34,19 +34,9 @@ type NodeQuickToolbarProps = {
 };
 
 const PRIORITY_OPTION_ICONS = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '🟤', '⚪', '⚫'] as const;
-const PROGRESS_OPTION_ICONS: Record<MindmapNodeProgress, string> = {
-  0: '○',
-  25: '◔',
-  50: '◑',
-  75: '◕',
-  100: '●',
-};
 
 const priorityOptionLabel = (value: MindmapNodePriority) =>
   `${PRIORITY_OPTION_ICONS[value - 1]} ${value}`;
-
-const progressOptionLabel = (value: MindmapNodeProgress) =>
-  `${PROGRESS_OPTION_ICONS[value]} ${value}%`;
 
 function stringifySelectValue(value: SelectValue<number>) {
   return String(value);
@@ -248,25 +238,7 @@ export function NodeQuickToolbar({
         </div>
 
         <div className="node-quick-toolbar-group" aria-label="完成度">
-          <label className="node-quick-select node-quick-select-progress" title="完成度">
-            <span className="node-quick-select-label">完成度</span>
-            <select
-              value={stringifySelectValue(progressValue)}
-              disabled={!hasSelection}
-              aria-label="设置完成度"
-              onChange={(event) => {
-                const value = event.target.value;
-                if (value === 'mixed') return;
-                onSetProgress(value === 'none' ? undefined : Number(value) as MindmapNodeProgress);
-              }}
-            >
-              {progressValue === 'mixed' ? <option value="mixed">混合</option> : null}
-              <option value="none">◔ 无</option>
-              {NODE_PROGRESS_VALUES.map((progress) => (
-                <option key={progress} value={progress}>{progressOptionLabel(progress)}</option>
-              ))}
-            </select>
-          </label>
+          <NodeProgressSelect key={selectedNode?.id} value={progressValue} disabled={!hasSelection} onChange={onSetProgress} />
         </div>
 
         <div className="node-quick-toolbar-group node-tag-group" aria-label="标签" ref={tagTriggerRef}>

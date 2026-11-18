@@ -15,6 +15,16 @@ const saveJson = (relativePath, data) => {
 };
 const input = saveJson('本地 输入.data', {});
 const newMapInput = saveJson('新导图.data', {});
+const treeInput = path.join(root, '多层分支.json');
+const longTreeInput = path.join(root, '多条提示.json');
+const malformedInput = saveJson('无效分支.json', [{ text: '不应添加', children: [{ children: [] }] }]);
+const invalidUtf8Input = path.join(root, '其他编码.data');
+const oversizedInput = path.join(root, '大文件.data');
+const example = path.join(__dirname, '../docs/examples/sample-import-plugin');
+fs.writeFileSync(treeInput, '\ufeff' + fs.readFileSync(path.join(example, 'branches.json'), 'utf8'));
+fs.copyFileSync(treeInput, longTreeInput);
+fs.writeFileSync(invalidUtf8Input, Buffer.from([0xc0, 0xc1]));
+fs.writeFileSync(oversizedInput, Buffer.alloc(1024 * 1024 + 1));
 const project = saveJson('original.lmind', {
   version: '1.0',
   meta: { theme: 'default-blue', createTime: new Date().toISOString(), updateTime: new Date().toISOString() },
@@ -35,14 +45,25 @@ const manifest = {
   capabilities: ['script', 'import'], permissions: ['mindmap:write'],
 };
 saveJson('config/plugin-settings.json', { scriptRunnerEnabled: true });
-saveJson('plugins/plugin-registry.json', [{ ...manifest, trusted: true }]);
+const importer = JSON.parse(fs.readFileSync(path.join(example, 'manifest.json'), 'utf8'));
+saveJson('plugins/plugin-registry.json', [{ ...manifest, trusted: true }, { ...importer, enabled: true, trusted: true }]);
 const manifestPath = saveJson(`plugins/installed/${pluginId}/manifest.json`, manifest);
+const importerPath = saveJson(`plugins/installed/${importer.pluginId}/manifest.json`, importer);
+fs.writeFileSync(path.join(path.dirname(importerPath), 'main.js'), `
+${fs.readFileSync(path.join(example, 'main.js'), 'utf8')}
+const originalRun = run;
+run = (context) => context.inputFile.name !== '多条提示.json' ? originalRun(context) : [
+  ...originalRun(context),
+  {type:"showMessage",level:"warning",message:"请核对导入层级。"},
+  {type:"showMessage",level:"error",message:"诊断示例"},
+  ...Array.from({length:16},(_, i) => ({type:"showMessage",message:"处理记录 " + (i + 1)}))
+];`);
 fs.writeFileSync(path.join(path.dirname(manifestPath), 'main.js'), `function run(context) {
   const input = context.inputFile;
   if (input.path === ${JSON.stringify(newMapInput)} && input.name === "新导图.data") {
     return [{type:"createMindmap",rootNode:{text:"全新导图",children:[{text:"新分支",type:"stats"}]}}];
   }
-  if (input.path !== ${JSON.stringify(input)} || input.name !== "本地 输入.data") throw Error("inputFile mismatch");
+  if (input.path !== ${JSON.stringify(input)} || input.name !== "本地 输入.data" || "text" in input) throw Error("inputFile mismatch");
   return [
     {type:"updateNode",nodeId:"source",patch:{text:input.name}},
     {type:"addChildNode",parentId:"source",node:{text:"导入分支",type:"stats",children:[{text:"导入后代",type:"missing"}]}}
@@ -51,7 +72,7 @@ fs.writeFileSync(path.join(path.dirname(manifestPath), 'main.js'), `function run
 process.argv.push(project);
 
 // Stub only the OS picker. Exercise real Electron IPC, plugin execution and renderer updates.
-const picks = [null, input, newMapInput];
+const picks = [null, input, newMapInput, malformedInput, invalidUtf8Input, oversizedInput, treeInput, longTreeInput];
 let pickerCalls = 0;
 dialog.showOpenDialog = async (parent, options) => {
   pickerCalls++;
@@ -74,10 +95,16 @@ app.on('browser-window-created', (_event, win) => {
     };
     const click = (selector) => js(`document.querySelector(${JSON.stringify(selector)}).click()`);
     const key = (key, extra = '') => js(`document.body.dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)},bubbles:true,cancelable:true${extra}}))`);
-    const runImport = async () => {
+    const capture = async (name) => {
+      if (!process.env.LMIND_CAPTURE_SMOKE) return;
+      const screenshot = path.join(root, name);
+      fs.writeFileSync(screenshot, (await win.webContents.capturePage()).toPNG());
+      console.log('Plugin feedback screenshot: ' + screenshot);
+    };
+    const runImport = async (id = pluginId) => {
       await click('[data-menu-item-id="file"]');
       await click('[data-menu-item-id="file/import"]');
-      await click(`[data-menu-item-id="file/import/plugin-import-${pluginId}"]`);
+      await click(`[data-menu-item-id="file/import/plugin-import-${id}"]`);
     };
     try {
       await waitFor('document.body.textContent.includes("两处  空格  示例")');
@@ -128,8 +155,45 @@ app.on('browser-window-created', (_event, win) => {
       await waitFor('document.body.textContent.includes("全新导图")');
       assert.equal(await js('document.body.textContent.includes("导入分支")'), false);
       assert.equal(fs.readFileSync(project, 'utf8'), originalContent);
-      assert.equal(pickerCalls, 3);
-      console.log('Electron import, typed Enter, and whitespace replacement smoke passed');
+      await runImport(importer.pluginId);
+      await waitFor('document.body.textContent.includes("nodes[0].children[0].text")');
+      assert.equal(await js('document.body.textContent.includes("不应添加")'), false);
+      await runImport(importer.pluginId);
+      await waitFor('document.body.textContent.includes("不是有效的 UTF-8 文本")');
+      await runImport(importer.pluginId);
+      await waitFor('document.body.textContent.includes("1 MiB 以内")');
+      assert.equal(await js('document.body.textContent.includes("Error invoking remote method")'), false);
+      await runImport(importer.pluginId);
+      await waitFor('document.querySelector(".feedback-dialog-done") && document.body.textContent.includes("收集需求")');
+      assert.equal(await js('document.querySelector(".feedback-messages li").textContent.includes("多层分支.json")'), true);
+      assert.equal(await js('document.querySelector(".feedback-dialog").offsetHeight < 280 && !document.querySelector(".top-status-message")'), true);
+      await capture('plugin-feedback.png');
+      await click('.feedback-dialog-done');
+      await key('z', ',ctrlKey:true');
+      await waitFor('!document.body.textContent.includes("收集需求")');
+
+      await runImport(importer.pluginId);
+      await waitFor('Boolean(document.querySelector(".feedback-message--error"))');
+      assert.equal(await js('document.querySelector(".feedback-message--warning")?.textContent'), '提醒请核对导入层级。');
+      assert.equal(await js('document.querySelector(".feedback-message--error")?.textContent'), '错误诊断示例');
+      win.webContents.setZoomFactor(1.6);
+      assert.equal(await js(`(() => {
+        const panel = document.querySelector('.feedback-dialog');
+        const body = panel.querySelector('.feedback-dialog-body');
+        const bounds = panel.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.width < innerWidth &&
+          body.scrollHeight > body.clientHeight &&
+          document.activeElement === panel.querySelector('.feedback-dialog-done');
+      })()`), true);
+      win.webContents.setZoomFactor(1);
+      await capture('plugin-feedback-long.png');
+      await key('Escape');
+      await waitFor('!document.querySelector(".feedback-dialog")');
+      await key('z', ',ctrlKey:true');
+      await waitFor('!document.body.textContent.includes("收集需求") && document.body.textContent.includes("全新导图")');
+      assert.equal(fs.readFileSync(project, 'utf8'), originalContent);
+      assert.equal(pickerCalls, 8);
+      console.log('Electron legacy and dedicated import, nested branches, dialog, undo, typed Enter, and whitespace replacement smoke passed');
       clearTimeout(timer);
       app.quit();
     } catch (error) {

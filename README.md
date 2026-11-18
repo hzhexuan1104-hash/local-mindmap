@@ -11,6 +11,8 @@
 
 详见 [Chromium 迁移与内网部署](docs/chromium-migration.md)。
 
+Windows 7 SP1 内网电脑使用单独的 [Win7 离线便携版](docs/windows-7-portable.md)，构建命令为 `npm run desktop:package:win7`（x64 与 32 位 ZIP）。标准版仍面向 Windows 10 及以上。
+
 ---
 
 # 本地化思维导图工具

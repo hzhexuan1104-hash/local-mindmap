@@ -1,7 +1,10 @@
 mod launch_file;
 mod node_attachments;
 
+#[cfg(not(target_vendor = "win7"))]
 use rfd::FileDialog;
+#[cfg(target_vendor = "win7")]
+use rfd_win7::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -124,6 +127,7 @@ const PLUGIN_PACKAGE_MAX_ENTRIES: usize = 1_000;
 const PLUGIN_PACKAGE_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024;
 const PLUGIN_PACKAGE_MAX_TOTAL_SIZE: u64 = 128 * 1024 * 1024;
 const DEV_PLUGIN_TEMPLATE_TYPES: &[&str] = &[
+    "importer",
     "import-export",
     "action-workflow",
     "script",
@@ -186,6 +190,7 @@ const FORBIDDEN_DECLARATIVE_FIELDS: &[&str] = &[
     "args",
 ];
 const DECLARATIVE_PLUGIN_TYPES: &[&str] = &[
+    "importer",
     "theme-pack",
     "icon-pack",
     "import-export",
@@ -796,6 +801,21 @@ fn contains_forbidden_declarative_field(value: &Value) -> Option<String> {
     }
 }
 
+fn plugin_runner_type<'a>(plugin_type: &'a str, runtime: Option<&str>) -> &'a str {
+    match (plugin_type, runtime) {
+        ("importer", Some("javascript")) => "script",
+        ("importer", Some("python" | "executable")) => "external-command",
+        _ => plugin_type,
+    }
+}
+
+fn manifest_runner_type(manifest: &Value) -> &str {
+    plugin_runner_type(
+        manifest.get("pluginType").and_then(Value::as_str).unwrap_or_default(),
+        manifest.get("runtime").and_then(Value::as_str),
+    )
+}
+
 fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<(), String> {
     if !is_safe_plugin_id(plugin_id) {
         return Err("Invalid pluginId.".to_string());
@@ -856,14 +876,19 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
         ));
     }
 
-    if plugin_type == "script" {
+    let runtime = object.get("runtime").and_then(Value::as_str);
+    let runner = plugin_runner_type(plugin_type, runtime);
+    if plugin_type == "importer" && runner == plugin_type {
+        return Err("importer 插件的 runtime 必须是 javascript、python 或 executable。".to_string());
+    }
+    if runner == "script" {
         let entry = object
             .get("entry")
             .and_then(Value::as_str)
             .map(str::trim)
             .ok_or_else(|| "pluginType=script 时 entry 必填。".to_string())?;
         validate_script_entry_path(entry)?;
-    } else if plugin_type == "external-command" {
+    } else if runner == "external-command" {
         let runtime = object
             .get("runtime")
             .and_then(Value::as_str)
@@ -917,11 +942,11 @@ fn validate_declarative_manifest(plugin_id: &str, manifest: &Value) -> Result<()
     if let Some(contributions) = object.get("contributions") {
         validate_builtin_handlers(contributions)?;
         validate_menu_command_shape(contributions)?;
-        if plugin_type == "script" {
+        if runner == "script" {
             validate_script_menu_commands(contributions)?;
         } else if plugin_type == "action-workflow" {
             validate_workflow_menu_commands(contributions)?;
-        } else if plugin_type == "external-command" {
+        } else if runner == "external-command" {
             validate_external_menu_commands(contributions)?;
         } else {
             validate_non_executable_menu_commands(contributions)?;
@@ -1931,7 +1956,7 @@ where
                     .unwrap_or_default()
             ));
         }
-        if stored_manifest.get("pluginType").and_then(Value::as_str) == Some("external-command")
+        if manifest_runner_type(&stored_manifest) == "external-command"
             && stored_manifest.get("runtime").and_then(Value::as_str) == Some("executable")
         {
             if let Err(error) = validate_executable_entry_file(&entry_path) {
@@ -2608,6 +2633,16 @@ fn create_dev_plugin_template(
         contributions,
         workflow,
     ) = match request.template_type.as_str() {
+        "importer" => (
+            "importer",
+            Some("javascript"),
+            Some("main.js"),
+            request.generate_entry.then(|| include_str!("../../docs/examples/sample-import-plugin/main.js").to_string()),
+            json!(["import", "script"]),
+            Some(json!(["mindmap:read", "mindmap:write", "node:read", "node:write"])),
+            json!({}),
+            None,
+        ),
         "import-export" => (
             "import-export",
             None,
@@ -2892,7 +2927,9 @@ if __name__ == "__main__":
     validate_declarative_manifest(plugin_id, &manifest)
         .map_err(|error| format!("生成的模板未通过 schema 校验：{error}"))?;
 
-    let executable_note = if request.template_type == "external-command-executable" {
+    let executable_note = if request.template_type == "importer" {
+        "\n## 运行示例\n\n校验、打包并安装后，启用脚本运行器。从「文件 → 导入」选择本目录下的 branches.json。脚本将其中的多层分支追加到当前选中节点（无选择时追加到中心主题）。\n".to_string()
+    } else if request.template_type == "external-command-executable" {
         format!("\n## executable 准备\n\n本向导不会生成真实原生二进制。请自行编译 `{}` 并放在本目录后再校验和打包。宿主不会通过 Shell 启动程序。\n", default_executable_plugin_entry_name())
     } else {
         String::new()
@@ -2966,6 +3003,14 @@ fn create_dev_plugin_project_at(
             fs::write(staging_dir.join(entry_name), entry_content)
                 .map_err(|error| format!("写入示例 entry `{entry_name}` 失败：{error}"))?;
             files.push(entry_name.to_string());
+        }
+        if request.template_type == "importer" {
+            fs::write(
+                staging_dir.join("branches.json"),
+                include_str!("../../docs/examples/sample-import-plugin/branches.json"),
+            )
+            .map_err(|error| format!("写入示例导入文件失败：{error}"))?;
+            files.push("branches.json".to_string());
         }
 
         if existed {
@@ -3338,7 +3383,7 @@ fn validate_dev_plugin_project_at(root: &Path, plugin_id: &str) -> DevPluginVali
     }
     validate_dev_contribution_commands(&manifest, &mut result.errors);
 
-    let plugin_type = result.plugin_type.as_deref().unwrap_or_default();
+    let plugin_type = manifest_runner_type(&manifest);
     validate_dev_permissions(
         plugin_type,
         &result.permissions,
@@ -4904,6 +4949,7 @@ fn scan_installed_diagnostics(
             .get("runtime")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let runner = manifest_runner_type(&manifest);
         if !DECLARATIVE_PLUGIN_TYPES.contains(&plugin_type) {
             push_diagnostic_item(
                 items,
@@ -4957,7 +5003,7 @@ fn scan_installed_diagnostics(
                         None,
                     );
                 }
-                if plugin_type == "external-command" && runtime == "executable" {
+                if runner == "external-command" && runtime == "executable" {
                     if let Some(error) =
                         executable_entry_path_error_for_platform(entry, cfg!(target_os = "windows"))
                     {
@@ -5003,7 +5049,7 @@ fn scan_installed_diagnostics(
                     }
                 }
             }
-        } else if plugin_type == "script" || plugin_type == "external-command" {
+        } else if runner == "script" || runner == "external-command" {
             push_diagnostic_item(
                 items,
                 PluginDiagnosticSeverity::Error,
@@ -5020,7 +5066,7 @@ fn scan_installed_diagnostics(
                 None,
             );
         }
-        if plugin_type != "external-command" && !runtime.is_empty() {
+        if plugin_type != "external-command" && plugin_type != "importer" && !runtime.is_empty() {
             push_diagnostic_item(
                 items,
                 PluginDiagnosticSeverity::Warning,
@@ -5032,7 +5078,7 @@ fn scan_installed_diagnostics(
                     manifest_plugin_id.clone()
                 }),
                 "runtime/pluginType mismatch",
-                "runtime should only be declared for pluginType=external-command.",
+                "runtime should only be declared for external-command or importer plugins.",
                 Some(relative_manifest_path.clone()),
                 None,
             );
@@ -6970,8 +7016,8 @@ fn run_external_command_at(
     let manifest = read_user_json_at(root, &relative_manifest, Value::Null)?;
     validate_declarative_manifest(plugin_id, &manifest)
         .map_err(|error| format!("installed manifest 无效：{error}"))?;
-    if manifest.get("pluginType").and_then(Value::as_str) != Some("external-command") {
-        return Err("插件不是 external-command 类型。".to_string());
+    if manifest_runner_type(&manifest) != "external-command" {
+        return Err("插件未使用外部命令运行器。".to_string());
     }
     let runtime = manifest
         .get("runtime")
@@ -7443,6 +7489,41 @@ mod tests {
             run_external_command_at(&root, plugin_id, &external_test_context(), "python", 500)
                 .is_err()
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn python_importer_can_package_install_and_read_selected_file() {
+        if !test_python_runtime_at("python").map(|result| result.ok).unwrap_or(false) {
+            return;
+        }
+        let root = test_root("python-importer");
+        ensure_user_data_dirs_at(&root).unwrap();
+        let plugin_id = "localmindmap.test.python-importer";
+        let mut manifest = test_external_python_plugin(plugin_id);
+        manifest["pluginType"] = json!("importer");
+        write_dev_test_project(&root, plugin_id, &manifest, &[
+            ("main.py", include_bytes!("../../docs/examples/sample-import-plugin/main.py")),
+        ]);
+        let package = root.join("importer.lmplugin");
+        build_dev_plugin_package_at(&root, plugin_id, &package).unwrap();
+        let inspected = inspect_plugin_package(&package).unwrap();
+        install_test_plugin_package(&root, &package, &inspected.manifest, false).unwrap();
+        write_user_json_at(&root, USER_PLUGIN_SETTINGS_PATH, &json!({
+            "externalRunnerEnabled": true, "pythonPath": "python"
+        })).unwrap();
+
+        let selected_file = root.join("示例 文件.json");
+        let branches = include_str!("../../docs/examples/sample-import-plugin/branches.json");
+        fs::write(&selected_file, format!("\u{feff}{branches}")).unwrap();
+        let mut context = external_test_context();
+        context["selectedNode"]["id"] = json!("target");
+        context["inputFile"] = json!({ "path": selected_file, "name": "示例 文件.json" });
+        let result = run_external_command_at(&root, plugin_id, &context, "python", 2000).unwrap();
+        assert_eq!(result.status, "success", "{}", result.stderr);
+        let output: Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(output["actions"][0]["parentId"], "target");
+        assert_eq!(output["actions"][0]["nodes"][0]["children"][0]["children"][0]["text"], "收集需求");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -9264,6 +9345,7 @@ fn main() {
         let root = test_root("dev-create-templates");
         ensure_user_data_dirs_at(&root).expect("user directories should exist");
         let templates = [
+            ("localmindmap.user.import", "importer", Some("main.js")),
             ("localmindmap.user.export", "import-export", None),
             ("localmindmap.user.workflow", "action-workflow", None),
             ("localmindmap.user.script", "script", Some("main.js")),
@@ -9296,6 +9378,12 @@ fn main() {
                         .is_file(),
                     "{template_type} should create {entry}"
                 );
+            }
+            if template_type == "importer" {
+                assert_eq!(created.plugin_type, "importer");
+                assert_eq!(created.runtime.as_deref(), Some("javascript"));
+                assert!(created.files.contains(&"branches.json".to_string()));
+                assert!(validate_dev_plugin_project_at(&root, plugin_id).can_package);
             }
         }
         let script = root

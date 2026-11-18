@@ -28,21 +28,19 @@ describe('NodeQuickToolbar', () => {
     expect(html).toContain('节点快捷工具栏');
     expect(html).toContain('下级');
     expect(html).toContain('<span class="node-quick-select-label">优先级</span>');
-    expect(html).toContain('<span class="node-quick-select-label">完成度</span>');
+    expect(html).toContain('>完成度</span>');
     expect(html).toContain('添加标签');
     expect(html).toContain('disabled=""');
     expect(html).toContain('node-quick-toolbar-structure-actions');
     expect(html).toContain('node-quick-action-symbol');
     expect(html).toContain('aria-label="设置优先级"');
-    expect(html).toContain('aria-label="设置完成度"');
+    expect(html).toMatch(/<button[^>]*role="combobox"[^>]*aria-label="设置完成度"[^>]*aria-expanded="false"[^>]*disabled/);
     expect(html).toContain('class="chevron-icon"');
     expect(html).toContain('data-chevron-direction="down"');
     expect(html).toContain('title="优先级"');
     expect(html).toContain('title="完成度"');
     expect(html).toContain('⚑ 无');
     expect(html).toContain('🔴 1');
-    expect(html).toContain('◔ 无');
-    expect(html).toContain('◑ 50%');
     expect(html).not.toContain('最高');
     expect(html).not.toContain('很高');
     expect(html).not.toContain('未开始');
@@ -91,6 +89,7 @@ describe('NodeQuickToolbar', () => {
     expect(html).not.toContain('高优先级');
     expect(html).toContain('node-quick-toolbar-tag-trigger');
     expect(html).toContain('value="mixed"');
+    expect(html).toMatch(/aria-label="设置完成度"[^>]*>.*?<span>混合<\/span>/);
   });
 
   it('hosts node styling at the far end of the quick-action row', () => {
@@ -124,7 +123,7 @@ describe('NodeQuickToolbar', () => {
     const css = readFileSync('src/styles/global.css', 'utf8');
 
     expect(css).toMatch(/\.node-quick-select select\s*\{[^}]*min-width:\s*104px;/);
-    expect(css).toMatch(/\.node-quick-select-progress select\s*\{[^}]*min-width:\s*104px;/);
+    expect(css).toMatch(/\.node-quick-progress-trigger\s*\{[^}]*min-width:\s*104px;/);
     expect(css).not.toContain('最高优先级');
     expect(css).toMatch(/\.node-quick-select select,\r?\n\.node-style-toolbar select/);
     expect(css).toContain('appearance: none;');

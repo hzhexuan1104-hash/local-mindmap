@@ -10,6 +10,8 @@ Windows 继续读取原 AppData/Roaming/com.localmindmap.desktop；macOS 使用 
 
 内网部署复制 release-electron/win-unpacked 整个目录（不能只复制 exe），或在联网构建机执行 npm run desktop:package 生成安装包，再通过离线介质分发。内核及本地服务都随包携带，运行不需要联网下载。当前程序没有自动更新；内核更新需要在构建环境更新锁定依赖、重新测试和分发。
 
+标准包适用于 Windows 10 及以上；Windows 7 SP1 请使用独立的 [离线便携版](windows-7-portable.md)。
+
 开发首次安装 npm/cargo 依赖及打包工具需要构建机访问源；完全离线构建需预先缓存 npm、Cargo、Electron 与 electron-builder 工具。离线运行不等于首次构建不需要依赖。
 
 ## 入口与文件关联

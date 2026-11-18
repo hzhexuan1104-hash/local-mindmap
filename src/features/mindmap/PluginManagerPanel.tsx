@@ -3,7 +3,7 @@ import { loadPluginInstallOrigins, type PluginInstallOrigin } from '../plugins/m
 import { readUserText } from '../storage/userDataStorage';
 import { FeedbackDialog } from '../plugins/FeedbackDialog';
 import { useEffect, useMemo, useState } from 'react';
-import type { PluginCategory, PluginManifest } from './plugins';
+import { getPluginRunner, isFileImportPlugin, type PluginCategory, type PluginManifest } from './plugins';
 import { resolveUserDataPath } from '../storage/userDataStorage';
 import {
   exportPluginDiagnosticsReport,
@@ -201,6 +201,7 @@ function diagnosticFixActions(report: PluginDiagnosticReport | null) {
 
 const PLUGIN_TYPE_LABELS: Record<string, string> = {
   'import-export': '导入导出',
+  importer: '导入插件',
   'node-type-pack': '节点类型',
   'template-pack': '模板',
   'theme-pack': '主题',
@@ -231,9 +232,10 @@ function getRiskPillClassName(riskLevel: string) {
 
 function getPluginRiskLevel(plugin: PluginManifest) {
   if (plugin.manifestValid === false) return 'high';
-  if (plugin.pluginType === 'external-command') return 'critical';
-  if (plugin.pluginType === 'script') return 'high';
-  if (plugin.pluginType === 'action-workflow') return 'medium';
+  const runner = getPluginRunner(plugin);
+  if (runner === 'external-command') return 'critical';
+  if (runner === 'script') return 'high';
+  if (runner === 'action-workflow') return 'medium';
   return 'low';
 }
 
@@ -691,40 +693,31 @@ export function PluginManagerPanel({
   );
 
   if (readme) return <FeedbackDialog {...readme} markdown onClose={() => setReadme(null)} />;
-  if (view === 'logs') return <FeedbackDialog title="插件日志" onClose={onClose}>
+  if (view === 'logs') return <FeedbackDialog title="插件日志" wide onClose={onClose}>
     <button type="button" className="secondary-action" onClick={onClearLogs}>清空日志</button>
     {logs.length ? <ol className="plugin-log-list">{logs.map((log) => <li key={log.id}><time>{new Date(log.timestamp).toLocaleString()}</time> <strong>{log.level}</strong> <code>{log.pluginId} {log.event}</code><p>{log.message}</p></li>)}</ol> : <p>暂无插件日志</p>}
   </FeedbackDialog>;
-  if (view === 'workbench') return <FeedbackDialog title="插件开发者工作台" onClose={onClose}>              <PluginDevWorkbench
-                isDesktopApp={isDesktopApp}
-                devRootPath={resolveUserDataPath(userDataDir, 'plugins/dev')}
-                recentProject={recentDevProject}
-                recentValidation={recentDevValidation}
-                recentPackage={recentDevPackage}
-                onCreateProject={
-                  onCreateDevProject ?? (async () => null)
-                }
-                onValidateProject={
-                  onValidateDevProject ?? (async () => null)
-                }
-                onBuildPackage={
-                  onBuildDevPackage ?? (async () => null)
-                }
-                onImportPackage={onImportDevPackage ?? onInstall}
-                onOpenDevDir={onOpenPluginDevDir}
-                onOpenProjectDir={onOpenDevProjectDir ?? (() => undefined)}
-                onOpenExamplesDir={
-                  onOpenPluginExamplesDir ?? (() => undefined)
-                }
-                onOpenDocs={
-                  onOpenPluginDevelopmentDocs ?? (() => undefined)
-                }
-                onCopyPath={onCopyPath}
-                onOpenPackageLocation={
-                  onOpenExportLocation ?? (() => undefined)
-                }
-              />
-</FeedbackDialog>;
+  if (view === 'workbench') return (
+    <FeedbackDialog title="插件开发者工作台" subtitle="在本机创建、校验、打包和安装插件。" wide onClose={onClose}>
+      <PluginDevWorkbench
+        isDesktopApp={isDesktopApp}
+        devRootPath={resolveUserDataPath(userDataDir, 'plugins/dev')}
+        recentProject={recentDevProject}
+        recentValidation={recentDevValidation}
+        recentPackage={recentDevPackage}
+        onCreateProject={onCreateDevProject ?? (async () => null)}
+        onValidateProject={onValidateDevProject ?? (async () => null)}
+        onBuildPackage={onBuildDevPackage ?? (async () => null)}
+        onImportPackage={onImportDevPackage ?? onInstall}
+        onOpenDevDir={onOpenPluginDevDir}
+        onOpenProjectDir={onOpenDevProjectDir ?? (() => undefined)}
+        onOpenExamplesDir={onOpenPluginExamplesDir ?? (() => undefined)}
+        onOpenDocs={onOpenPluginDevelopmentDocs ?? (() => undefined)}
+        onCopyPath={onCopyPath}
+        onOpenPackageLocation={onOpenExportLocation ?? (() => undefined)}
+      />
+    </FeedbackDialog>
+  );
 
   return (
     <div
@@ -1272,7 +1265,7 @@ export function PluginManagerPanel({
                     </div>
                     <p>{item.description}</p>
                     <p className="plugin-gallery-safety">
-                      {getPluginGallerySafetyText(item.pluginType)}
+                      {getPluginGallerySafetyText(getPluginRunner(item) ?? item.pluginType)}
                     </p>
                     {abnormalState ? (
                       <div className="plugin-next-steps" role="group" aria-label="异常插件下一步操作">
@@ -1371,8 +1364,8 @@ export function PluginManagerPanel({
                         <div><dt>permissions</dt><dd>{manifest?.permissions?.join(', ') || '无'}</dd></div>
                         <div><dt>capabilities</dt><dd>{manifest?.capabilities.join(', ') || '无'}</dd></div>
                         <div><dt>风险等级</dt><dd>{item.riskLevel}</dd></div>
-                        <div><dt>需要脚本运行器</dt><dd>{item.pluginType === 'script' ? '是' : '否'}</dd></div>
-                        <div><dt>需要外部命令运行器</dt><dd>{item.pluginType === 'external-command' ? '是' : '否'}</dd></div>
+                        <div><dt>需要脚本运行器</dt><dd>{getPluginRunner(item) === 'script' ? '是' : '否'}</dd></div>
+                        <div><dt>需要外部命令运行器</dt><dd>{getPluginRunner(item) === 'external-command' ? '是' : '否'}</dd></div>
                         <div><dt>安装状态</dt><dd>{getPluginGalleryStateLabel(state)}</dd></div>
                         {state.installed ? (
                           <div>
@@ -1451,6 +1444,7 @@ export function PluginManagerPanel({
                 <p className="empty-note">没有匹配的插件</p>
               ) : (
                 visiblePlugins.map((plugin) => {
+                  const runner = getPluginRunner(plugin);
                   const riskLevel = getPluginRiskLevel(plugin);
                   const statusText = getPluginUserStatus(plugin);
                   const abnormalPlugin = isPluginAbnormal(plugin);
@@ -1532,18 +1526,16 @@ export function PluginManagerPanel({
                           <dt>类型</dt>
                           <dd>{plugin.pluginType}</dd>
                         </div>
-                        {plugin.pluginType === 'script' ||
-                        plugin.pluginType === 'action-workflow' ||
-                        plugin.pluginType === 'external-command' ? (
+                        {isFileImportPlugin(plugin) ? <div><dt>运行入口</dt><dd>文件 → 导入</dd></div> : null}
+                        {runner ? (
                           <>
-                            {plugin.pluginType === 'script' ||
-                            plugin.pluginType === 'external-command' ? (
+                            {runner !== 'action-workflow' ? (
                               <div>
                                 <dt>entry</dt>
                                 <dd>{plugin.entry ?? '未声明'}</dd>
                               </div>
                             ) : null}
-                            {plugin.pluginType === 'external-command' ? (
+                            {runner === 'external-command' || plugin.pluginType === 'importer' ? (
                               <div>
                                 <dt>runtime</dt>
                                 <dd>{plugin.runtime ?? '未声明'}</dd>
@@ -1561,7 +1553,7 @@ export function PluginManagerPanel({
                               <dt>trusted</dt>
                               <dd>{String(Boolean(plugin.trusted))}</dd>
                             </div>
-                            {plugin.pluginType === 'script' ? (
+                            {runner === 'script' ? (
                               <div>
                                 <dt>script runner</dt>
                                 <dd>
@@ -1569,7 +1561,7 @@ export function PluginManagerPanel({
                                 </dd>
                               </div>
                             ) : null}
-                            {plugin.pluginType === 'external-command' ? (
+                            {runner === 'external-command' ? (
                               <>
                                 <div>
                                   <dt>external runner</dt>
@@ -1724,9 +1716,7 @@ export function PluginManagerPanel({
                           ))}
                         </div>
                       ) : null}
-                      {plugin.pluginType === 'script' ||
-                      plugin.pluginType === 'action-workflow' ||
-                      plugin.pluginType === 'external-command' ? (
+                      {runner ? (
                         <div className="plugin-validation-report">
                           <strong>权限分组</strong>
                           <p>
@@ -1802,7 +1792,7 @@ export function PluginManagerPanel({
                           ))}
                         </div>
                       ) : null}
-                      {plugin.pluginType === 'external-command' &&
+                      {runner === 'external-command' &&
                       externalRunResults[plugin.pluginId] ? (
                         <div
                           className={
@@ -1859,7 +1849,7 @@ export function PluginManagerPanel({
                           ) : null}
                         </div>
                       ) : null}
-                      {plugin.pluginType === 'script' &&
+                      {runner === 'script' &&
                       scriptRunResults[plugin.pluginId] ? (
                         <div
                           className={
@@ -1953,9 +1943,7 @@ export function PluginManagerPanel({
                       </details>
                     </div>
                     <div className="plugin-item-actions">
-                      {plugin.pluginType === 'script' ||
-                      plugin.pluginType === 'action-workflow' ||
-                      plugin.pluginType === 'external-command' ? (
+                      {runner ? (
                         <button
                           type="button"
                           className="secondary-action"

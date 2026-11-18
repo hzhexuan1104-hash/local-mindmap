@@ -321,37 +321,39 @@ function collectVisibleNodes(node: MindmapNode, nodes: MindmapNode[] = []) {
   return nodes;
 }
 
-function measureSubtreeHeight(
+function measureSubtree(
   node: MindmapNode,
   sizeById: Map<string, NodeContentSize>,
+  subtreeById: Map<string, { height: number; childrenHeight: number }>,
   density: LayoutDensity,
 ): number {
   const children = getVisibleChildren(node);
-  const nodeHeight = sizeById.get(node.id)?.height ?? POSITIONED_LAYOUT.nodeHeight;
-  if (children.length === 0) return nodeHeight;
-  const childrenHeight = children.reduce((sum, child) => sum + measureSubtreeHeight(child, sizeById, density), 0);
-  return Math.max(nodeHeight, childrenHeight + LAYOUT_DENSITY_CONFIG[density].subtreeGap * (children.length - 1));
+  const childrenHeight = children.reduce(
+    (sum, child) => sum + measureSubtree(child, sizeById, subtreeById, density), 0,
+  ) + LAYOUT_DENSITY_CONFIG[density].subtreeGap * Math.max(0, children.length - 1);
+  const height = Math.max(sizeById.get(node.id)!.height, childrenHeight);
+  subtreeById.set(node.id, { height, childrenHeight });
+  return height;
 }
 
 function buildAutoLayout(
   node: MindmapNode,
-  depth: number,
+  x: number,
   top: number,
   entries: AutoLayoutEntry[],
   sizeById: Map<string, NodeContentSize>,
-  depthOffsets: number[],
+  subtreeById: Map<string, { height: number; childrenHeight: number }>,
   density: LayoutDensity,
-): number {
-  const nodeHeight = sizeById.get(node.id)?.height ?? POSITIONED_LAYOUT.nodeHeight;
-  const subtreeHeight = measureSubtreeHeight(node, sizeById, density);
-  entries.push({ id: node.id, x: depthOffsets[depth] ?? 0, y: top + subtreeHeight / 2 - nodeHeight / 2 });
-  let nextTop = top;
+) {
+  const size = sizeById.get(node.id)!;
+  const { height, childrenHeight } = subtreeById.get(node.id)!;
+  const { levelGap, siblingGap } = LAYOUT_DENSITY_CONFIG[density];
+  entries.push({ id: node.id, x, y: top + (height - size.height) / 2 });
+  let nextTop = top + (height - childrenHeight) / 2;
   getVisibleChildren(node).forEach((child) => {
-    const childHeight = measureSubtreeHeight(child, sizeById, density);
-    buildAutoLayout(child, depth + 1, nextTop, entries, sizeById, depthOffsets, density);
-    nextTop += childHeight + LAYOUT_DENSITY_CONFIG[density].siblingGap;
+    buildAutoLayout(child, x + size.width + levelGap, nextTop, entries, sizeById, subtreeById, density);
+    nextTop += subtreeById.get(child.id)!.height + siblingGap;
   });
-  return subtreeHeight;
 }
 
 function getRectCenter(rect: AnchorRect): AnchorPoint {
@@ -381,18 +383,10 @@ export function createMindmapLayout(
 ): MindmapLayoutResult {
   const visibleNodes = collectVisibleNodes(rootNode);
   const sizeById = new Map(visibleNodes.map((node) => [node.id, getNodeContentSize(node, nodeTypes, node.id === rootNode.id)]));
-  const maxWidthByDepth: number[] = [];
-  const collectDepthWidths = (node: MindmapNode, depth = 0) => {
-    maxWidthByDepth[depth] = Math.max(maxWidthByDepth[depth] ?? 0, sizeById.get(node.id)?.width ?? 0);
-    getVisibleChildren(node).forEach((child) => collectDepthWidths(child, depth + 1));
-  };
-  collectDepthWidths(rootNode);
-  const depthOffsets = maxWidthByDepth.reduce<number[]>((offsets, width, depth) => {
-    offsets[depth] = depth === 0 ? 0 : offsets[depth - 1] + maxWidthByDepth[depth - 1] + LAYOUT_DENSITY_CONFIG[density].levelGap;
-    return offsets;
-  }, []);
+  const subtreeById = new Map<string, { height: number; childrenHeight: number }>();
+  measureSubtree(rootNode, sizeById, subtreeById, density);
   const entries: AutoLayoutEntry[] = [];
-  buildAutoLayout(rootNode, 0, 0, entries, sizeById, depthOffsets, density);
+  buildAutoLayout(rootNode, 0, 0, entries, sizeById, subtreeById, density);
   const autoPositionById = new Map(entries.map((entry) => [entry.id, { x: entry.x, y: entry.y }]));
   const nodes = visibleNodes.map((node) => {
     const size = sizeById.get(node.id)!;
