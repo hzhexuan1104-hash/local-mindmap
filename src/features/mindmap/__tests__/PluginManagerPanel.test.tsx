@@ -338,7 +338,7 @@ describe('PluginManagerPanel installation errors', () => {
       />,
     );
 
-    expect(html).toContain('aria-label="插件开发者工作台"');
+    expect(html).toMatch(/role="dialog"[^>]*aria-labelledby="([^"]+)"[\s\S]*?<h2 id="\1">插件开发者工作台<\/h2>/);
     expect(html).toContain('新建插件项目');
     expect(html).toContain('校验插件项目');
     expect(html).toContain('打包为 .lmplugin');

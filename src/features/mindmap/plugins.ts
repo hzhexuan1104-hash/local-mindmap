@@ -38,6 +38,7 @@ export type PluginCategory =
 
 export type PluginType =
   | 'import-export'
+  | 'importer'
   | 'node-type-pack'
   | 'template-pack'
   | 'theme-pack'
@@ -133,7 +134,7 @@ export type PluginManifest = {
   enabled: boolean;
   installedAt: string;
   entry?: string;
-  runtime?: 'python' | 'executable';
+  runtime?: 'javascript' | 'python' | 'executable';
   workflow?: ActionWorkflowDefinition;
   permissions?: PluginPermission[];
   trusted?: boolean;
@@ -191,6 +192,7 @@ export const SUPPORTED_PLUGIN_TYPES: readonly PluginType[] = [
   'theme-pack',
   'icon-pack',
   'import-export',
+  'importer',
   'node-type-pack',
   'template-pack',
   'tool',
@@ -512,9 +514,28 @@ function findWorkflowExecutionField(value: unknown): string | null {
   return null;
 }
 
+export function getPluginRunner(plugin?: { pluginType: PluginType | null; runtime?: unknown }) {
+  if (plugin?.pluginType === 'importer') {
+    if (plugin.runtime === 'javascript') return 'script';
+    if (plugin.runtime === 'python' || plugin.runtime === 'executable') return 'external-command';
+    return null;
+  }
+  if (plugin?.pluginType === 'script' || plugin?.pluginType === 'external-command' || plugin?.pluginType === 'action-workflow') {
+    return plugin.pluginType;
+  }
+  return null;
+}
+
+export function isFileImportPlugin(plugin: PluginManifest) {
+  const runner = getPluginRunner(plugin);
+  return (runner === 'script' || runner === 'external-command') &&
+    (plugin.pluginType === 'importer' || plugin.capabilities.includes('import'));
+}
+
 function categoryForPluginType(pluginType: PluginType): PluginCategory {
   const categories: Record<PluginType, PluginCategory> = {
     'import-export': 'import-export',
+    importer: 'import-export',
     'node-type-pack': 'node-type',
     'template-pack': 'template',
     'theme-pack': 'theme',
@@ -1136,7 +1157,17 @@ function validatePluginManifestInternal(
 
   let entry: string | undefined;
   let runtime: PluginManifest['runtime'];
-  if (pluginType === 'script') {
+  const runner = getPluginRunner({ pluginType, runtime: value.runtime });
+  if (pluginType === 'importer' && !runner) {
+    errors.push({
+      code: value.runtime === undefined ? 'missing-required-field' : 'invalid-external-entry',
+      field: 'runtime',
+      value: value.runtime,
+      message: 'importer 插件的 runtime 必须是 javascript、python 或 executable。',
+    });
+  }
+  if (runner === 'script') {
+    if (pluginType === 'importer') runtime = 'javascript';
     const entryError = validateScriptEntryPath(value.entry);
     if (entryError) {
       errors.push({
@@ -1151,7 +1182,7 @@ function validatePluginManifestInternal(
     } else {
       entry = asString(value.entry).trim().replace(/\\/g, '/');
     }
-  } else if (pluginType === 'external-command') {
+  } else if (runner === 'external-command') {
     if (value.runtime !== 'python' && value.runtime !== 'executable') {
       errors.push({
         code:
@@ -1190,14 +1221,15 @@ function validatePluginManifestInternal(
       message: 'action-workflow 插件不允许声明 entry。',
     });
   } else if (value.entry !== undefined) {
-    warnings.push('entry 仅在 pluginType=script 或 external-command 时生效。');
+    warnings.push('entry 仅在 script、external-command 或 importer 插件中生效。');
   }
   if (
     pluginType !== 'external-command' &&
+    pluginType !== 'importer' &&
     value.runtime !== undefined &&
     pluginType !== 'action-workflow'
   ) {
-    warnings.push('runtime 仅在 pluginType=external-command 时生效。');
+    warnings.push('runtime 仅在 external-command 或 importer 插件中生效。');
   }
 
   let workflow: ActionWorkflowDefinition | undefined;
@@ -1313,7 +1345,7 @@ function validatePluginManifestInternal(
     errors,
     warnings,
   );
-  if (pluginType === 'script') {
+  if (runner === 'script') {
     if (!permissions || permissions.length === 0) {
       warnings.push('script 插件未声明 permissions。');
     }
@@ -1358,7 +1390,7 @@ function validatePluginManifestInternal(
         });
       }
     }
-  } else if (pluginType === 'external-command') {
+  } else if (runner === 'external-command') {
     if (!permissions?.includes('external-command')) {
       warnings.push('external-command 插件 permissions 缺少 external-command。');
     }
@@ -1426,19 +1458,16 @@ function validatePluginManifestInternal(
     description: asString(value.description).trim(),
     pluginType,
     category: categoryForPluginType(pluginType),
-    capabilities,
+    capabilities: pluginType === 'importer' && !capabilities.includes('import')
+      ? [...capabilities, 'import']
+      : capabilities,
     enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
     installedAt: normalizeInstalledAt(value.installedAt),
     entry,
     runtime,
     workflow,
     permissions,
-    trusted:
-      pluginType === 'script' ||
-      pluginType === 'action-workflow' ||
-      pluginType === 'external-command'
-        ? false
-        : undefined,
+    trusted: runner ? false : undefined,
     builtIn: Boolean(value.builtIn),
     config: isRecord(value.config) ? value.config : undefined,
     contributions,
@@ -1506,9 +1535,7 @@ export async function loadPluginRegistry(options?: {
         .map((plugin) => ({
           ...plugin,
           trusted:
-            plugin.pluginType === 'script' ||
-            plugin.pluginType === 'action-workflow' ||
-            plugin.pluginType === 'external-command'
+            getPluginRunner(plugin)
               ? storedTrustById.get(plugin.pluginId) ?? false
               : undefined,
         }))
@@ -1733,9 +1760,7 @@ export function setPluginTrusted(
 ) {
   return plugins.map((plugin) =>
     plugin.pluginId === pluginId &&
-    (plugin.pluginType === 'script' ||
-      plugin.pluginType === 'action-workflow' ||
-      plugin.pluginType === 'external-command')
+    getPluginRunner(plugin)
       ? { ...plugin, trusted }
       : plugin,
   );
@@ -1752,7 +1777,7 @@ export const getPluginWritePermissions = getScriptWritePermissions;
 
 export function shouldConfirmScriptPluginRun(plugin: PluginManifest) {
   return (
-    plugin.pluginType === 'script' &&
+    getPluginRunner(plugin) === 'script' &&
     !plugin.trusted &&
     getScriptWritePermissions(plugin).length > 0
   );
@@ -1768,7 +1793,7 @@ export function shouldConfirmWorkflowPluginRun(plugin: PluginManifest) {
 
 export function shouldConfirmExternalPluginRun(plugin: PluginManifest) {
   return (
-    plugin.pluginType === 'external-command' &&
+    getPluginRunner(plugin) === 'external-command' &&
     !plugin.trusted &&
     getPluginWritePermissions(plugin).length > 0
   );
@@ -1792,9 +1817,7 @@ export function installPluginManifest(
     builtIn: false,
     enabled: existingPlugin?.enabled ?? manifest.enabled,
     trusted:
-      manifest.pluginType === 'script' ||
-      manifest.pluginType === 'action-workflow' ||
-      manifest.pluginType === 'external-command'
+      getPluginRunner(manifest)
         ? existingPlugin?.trusted ?? false
         : undefined,
     installedAt: new Date().toISOString(),
@@ -2001,14 +2024,14 @@ function localManifestPackage(
     };
   }
   const scriptEntry =
-    manifest.pluginType === 'script' && manifest.entry
+    getPluginRunner(manifest) === 'script' && manifest.entry
       ? {
           relativePath: manifest.entry,
           sourcePath: resolveSiblingEntryPath(manifestPath, manifest.entry),
         }
       : undefined;
   const externalEntry =
-    manifest.pluginType === 'external-command' && manifest.entry
+    getPluginRunner(manifest) === 'external-command' && manifest.entry
       ? {
           relativePath: manifest.entry,
           sourcePath: resolveSiblingEntryPath(manifestPath, manifest.entry),

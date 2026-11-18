@@ -150,16 +150,8 @@ export function PluginDevWorkbench({
   };
 
   return (
-    <section className="plugin-dev-workbench" aria-labelledby="plugin-dev-title">
-      <div className="plugin-section-heading">
-        <div>
-          <h3 id="plugin-dev-title">插件开发者工作台</h3>
-          <p>创建模板、校验、打包和本地导入验证；不会联网，也不会执行未安装插件代码。</p>
-        </div>
-        <span className="plugin-dev-badge">v1.11 MVP</span>
-      </div>
-
-      <details className="plugin-manager-section" open><summary>支持的插件类型与实现示例</summary>
+    <div className="plugin-dev-workbench">
+      <details className="plugin-manager-section"><summary>支持的插件类型与实现示例</summary>
         {DEV_PLUGIN_TEMPLATE_OPTIONS.map((option) => <div key={option.value}><strong>{option.label}</strong><p>{option.description}</p></div>)}
         <p>选择“新建插件项目”可生成对应 manifest、入口代码和 README；完整协议见开发文档。</p>
         <pre>{'import json, sys\ncontext = json.load(sys.stdin)\npath = context["mindmap"]["filePath"]\ntags = context["selectedNode"]["tags"] if context["selectedNode"] else []\nprint(json.dumps({"actions": [{"type": "showMessage", "message": path or "未保存"}]}))'}</pre>
@@ -346,18 +338,22 @@ export function PluginDevWorkbench({
             </label>
             <label className="stacked-control">
               <span>菜单位置</span>
-              <select
-                value={draft.menuLocation}
-                onChange={(event) =>
-                  updateDraft(
-                    'menuLocation',
-                    event.target.value as DevPluginProjectRequest['menuLocation'],
-                  )
-                }
-              >
-                <option value="plugins">plugins</option>
-                <option value="node-context">node-context</option>
-              </select>
+              {draft.templateType === 'importer' ? (
+                <span>文件 → 导入</span>
+              ) : (
+                <select
+                  value={draft.menuLocation}
+                  onChange={(event) =>
+                    updateDraft(
+                      'menuLocation',
+                      event.target.value as DevPluginProjectRequest['menuLocation'],
+                    )
+                  }
+                >
+                  <option value="plugins">plugins</option>
+                  <option value="node-context">node-context</option>
+                </select>
+              )}
             </label>
           </div>
           <p className="plugin-safety-note">
@@ -489,6 +485,6 @@ export function PluginDevWorkbench({
           </div>
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }

@@ -98,7 +98,7 @@ export type ScriptContextNode = {
 
 export type ScriptPluginContext = {
   contextVersion: 1;
-  inputFile?: { path: string; name: string };
+  inputFile?: { path: string; name: string; text?: string };
   app: {
     version: string;
     platform: 'desktop';

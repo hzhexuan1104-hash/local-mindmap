@@ -406,6 +406,20 @@ describe('mindmap layout positions', () => {
     expect(comfortableB.y - comfortableA.y).toBeGreaterThan(compactB.y - compactA.y);
   });
 
+  it('places children by their own parent width and centers them on a tall parent', () => {
+    const leaf = { id: 'short-child', text: '子节点', remark: '', children: [] };
+    const layout = createMindmapLayout({
+      id: 'root', text: '中心', remark: '', children: [
+        { ...leaf, id: 'wide', text: '比另一个分支宽的节点'.repeat(5) },
+        { ...leaf, id: 'short', text: '短\n短\n短\n短', children: [leaf] },
+      ],
+    });
+    const parent = layout.nodes.find(({ id }) => id === 'short')!;
+    const child = layout.nodes.find(({ id }) => id === leaf.id)!;
+    expect(child.x - parent.x - parent.width).toBe(LAYOUT_DENSITY_CONFIG.compact.levelGap);
+    expect(child.y + child.height / 2).toBe(parent.y + parent.height / 2);
+  });
+
   it('uses real long-text and marker bounds while keeping compact layout boxes separate', () => {
     const source: MindmapNode = {
       id: 'root', text: '中心主题', remark: '', children: [

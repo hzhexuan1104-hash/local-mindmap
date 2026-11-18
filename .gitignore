@@ -21,5 +21,6 @@ pnpm-debug.log*
 *.exe
 
 release-electron/
+release-win7/
 
 tmp/

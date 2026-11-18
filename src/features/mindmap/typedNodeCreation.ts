@@ -138,6 +138,7 @@ export function addTypedChildNode(
       inserted = true;
       return {
         ...node,
+        ...(node.collapsed ? { collapsed: false } : {}),
         children: [...node.children, createdNode],
       };
     }

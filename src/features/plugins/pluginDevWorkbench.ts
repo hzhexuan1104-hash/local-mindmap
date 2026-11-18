@@ -14,6 +14,7 @@ export const PLUGIN_DEV_COMMANDS = {
 
 export type DevPluginTemplateType =
   | 'import-export'
+  | 'importer'
   | 'action-workflow'
   | 'script'
   | 'external-command-python'
@@ -86,6 +87,11 @@ export const DEV_PLUGIN_TEMPLATE_OPTIONS: ReadonlyArray<{
     value: 'import-export',
     label: 'import-export',
     description: '声明式 TXT 导出，不生成可执行代码。',
+  },
+  {
+    value: 'importer',
+    label: '导入插件（JavaScript）',
+    description: '从文件 → 导入读取 UTF-8 JSON，生成多层子节点。',
   },
   {
     value: 'action-workflow',

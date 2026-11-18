@@ -62,7 +62,8 @@
 - `template-pack`
 - `tool`
 
-`exporter` 仅作为旧 registry 的兼容读取别名；新导入插件必须使用 `import-export`。
+`exporter` 仅作为旧 registry 的兼容读取别名；新建声明式 TXT 导出插件使用 `import-export`。
+要编写读取文件的导入脚本，请使用 `importer`，见[导入插件开发文档](plugin-development.md#导入插件)。
 
 支持的 `capabilities`：
 

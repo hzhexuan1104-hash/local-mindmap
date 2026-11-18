@@ -1,6 +1,6 @@
 {
   "name": "local-mindmap",
-  "version": "1.24.6",
+  "version": "1.24.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,6 +14,7 @@
     "desktop:dev": "npm run build && npm run native:build && electron .",
     "desktop:build": "npm run build && npm run native:build && electron-builder --dir",
     "desktop:package": "npm run build && npm run native:build && electron-builder",
+    "desktop:package:win7": "node scripts/build-win7.mjs",
     "desktop:smoke": "electron electron/smoke.cjs"
   },
   "dependencies": {

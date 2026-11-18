@@ -11,6 +11,7 @@ export function AttachmentDialog({ attachment, onSave, onClose }: { attachment?:
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   return <FeedbackDialog title={attachment ? '修改附件' : '添加附件'} onClose={onClose}>
+    <div className="attachment-form">
     <p>每个节点保存一个附件，文件和图片随导图保存（最大 20 MB）。</p>
     <label>附件类型 <select value={kind} onChange={(event) => { setKind(event.target.value as NodeAttachment['kind']); setError(''); }}><option value="file">文件</option><option value="image">图片</option><option value="link">链接</option></select></label>
     {kind === 'link' ? <div className="stacked-control">
@@ -30,5 +31,6 @@ export function AttachmentDialog({ attachment, onSave, onClose }: { attachment?:
       }}>另存附件</button> : null}
     </p> : null}
     {error ? <p role="alert">{error}</p> : null}
+    </div>
   </FeedbackDialog>;
 }

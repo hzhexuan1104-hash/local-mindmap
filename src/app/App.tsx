@@ -60,6 +60,7 @@ import {
   centerNodeInCanvasView,
   DEFAULT_CANVAS_VIEW,
   panCanvasView,
+  revealNodeInCanvasView,
   zoomCanvasView,
   type CanvasViewState,
 } from '../features/mindmap/canvasControls';
@@ -151,6 +152,7 @@ import {
   mergeNodeStyle,
 } from '../features/mindmap/nodeStyles';
 import { updateNodePositionsById } from '../features/mindmap/nodePositions';
+import { placeInsertedNodes, type NodeInsertionKind } from '../features/mindmap/nodeInsertionLayout';
 import {
   resolveCommittedNodeText,
   resolveEditingNodeId,
@@ -173,6 +175,8 @@ import {
   getPluginIcons,
   getPluginMenuGroups,
   getPluginWritePermissions,
+  getPluginRunner,
+  isFileImportPlugin,
   getScriptWritePermissions,
   getPluginNodeTypes,
   getPluginTemplates,
@@ -880,6 +884,7 @@ export function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [pendingLocateNodeId, setPendingLocateNodeId] = useState<string | null>(null);
+  const [pendingRevealNodeId, setPendingRevealNodeId] = useState<string | null>(null);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [editingNodeSize, setEditingNodeSize] = useState<{
@@ -986,7 +991,11 @@ export function App() {
   const [exportSelectionOpen, setExportSelectionOpen] = useState(false);
   const [pluginManagerInitialTab, setPluginManagerInitialTab] = useState<'config' | 'installed' | 'gallery'>('installed');
   const [pluginPanelView, setPluginPanelView] = useState<'manager' | 'workbench' | 'logs' | 'diagnostics'>('manager');
-  const [feedbackDialog, setFeedbackDialog] = useState<{ title: string; content: string; markdown?: boolean; exportPaths?: string[] } | null>(null);
+  const [feedbackDialog, setFeedbackDialog] = useState<
+    | { title: string; content: string; markdown?: boolean }
+    | { title: string; subtitle: string; messages: ScriptShowMessageAction[] }
+    | null
+  >(null);
   const [isPluginManagerVisible, setIsPluginManagerVisible] = useState(false);
   const [performanceResult, setPerformanceResult] =
     useState<PerformanceBenchmarkResult | null>(null);
@@ -1363,6 +1372,12 @@ export function App() {
     }));
     setPendingLocateNodeId(null);
   }, [pendingLocateNodeId, layoutNodeById]);
+  useLayoutEffect(() => {
+    if (!pendingRevealNodeId || !canvasViewport.width || !canvasViewport.height) return;
+    const node = layoutNodeById.get(pendingRevealNodeId);
+    if (node) setCanvasView((view) => revealNodeInCanvasView(view, node, canvasViewport));
+    setPendingRevealNodeId(null);
+  }, [pendingRevealNodeId, layoutNodeById, canvasViewport]);
   const templateCategories = useMemo(
     () => getTemplateCategories([...availableOfficialTemplates, ...templates]),
     [availableOfficialTemplates, templates],
@@ -2902,7 +2917,8 @@ export function App() {
         return;
       }
       const { manifest } = pluginPackage;
-      if (manifest.pluginType === 'script' && !pluginPackage.packagePath) {
+      const runner = getPluginRunner(manifest);
+      if (runner === 'script' && !pluginPackage.packagePath) {
         if (!manifest.entry || !pluginPackage.scriptEntry?.sourcePath) {
           throw new Error(
             `导入失败：脚本入口文件不存在：${manifest.entry ?? 'main.js'}。`,
@@ -2910,7 +2926,7 @@ export function App() {
         }
       }
       if (
-        manifest.pluginType === 'external-command' &&
+        runner === 'external-command' &&
         !pluginPackage.packagePath
       ) {
         if (!manifest.entry || !pluginPackage.externalEntry?.sourcePath) {
@@ -2989,11 +3005,11 @@ export function App() {
       const warningCount = installedManifest.validationWarnings?.length ?? 0;
       recordPluginLog(
         'info',
-        installedManifest.pluginType === 'script'
+        runner === 'script'
           ? 'script-plugin-imported'
-          : installedManifest.pluginType === 'external-command'
+          : runner === 'external-command'
             ? 'external-plugin-imported'
-          : installedManifest.pluginType === 'action-workflow'
+          : runner === 'action-workflow'
             ? 'workflow-imported'
           : 'import-success',
         `${exists ? '覆盖安装' : '导入'}成功：${installedManifest.name}`,
@@ -3041,7 +3057,8 @@ export function App() {
       showMessage(errorMessage);
       return;
     }
-    const warning = getPluginGalleryInstallWarning(item.pluginType);
+    const runner = getPluginRunner(item);
+    const warning = getPluginGalleryInstallWarning(runner ?? item.pluginType);
     if (warning && !window.confirm(`${warning}\n\n是否继续安装？`)) {
       return;
     }
@@ -3068,11 +3085,11 @@ export function App() {
       setLastPluginInstallError('');
       recordPluginLog(
         'info',
-        item.pluginType === 'script'
+        runner === 'script'
           ? 'script-plugin-imported'
-          : item.pluginType === 'external-command'
+          : runner === 'external-command'
             ? 'external-plugin-imported'
-            : item.pluginType === 'action-workflow'
+          : runner === 'action-workflow'
               ? 'workflow-imported'
               : 'import-success',
         `已从本地插件中心${existing ? '重新安装' : '安装'}：${result.name}`,
@@ -3137,7 +3154,7 @@ export function App() {
   ) => {
     const targetPlugin = plugins.find((plugin) => plugin.pluginId === pluginId);
     const isWorkflow = targetPlugin?.pluginType === 'action-workflow';
-    const isExternal = targetPlugin?.pluginType === 'external-command';
+    const isExternal = getPluginRunner(targetPlugin) === 'external-command';
     const nextPlugins = setPluginTrusted(plugins, pluginId, trusted);
     try {
       await savePluginRegistry(nextPlugins);
@@ -3827,14 +3844,21 @@ export function App() {
 
   const applyTypedNodeBatchCreation = (
     result: TypedNodeBatchCreationResult,
+    kind: NodeInsertionKind,
     options: { startEditing?: boolean } = {},
   ) => {
     const shouldStartEditing = Boolean(options.startEditing);
     const editingNode = result.createdNodes[result.createdNodes.length - 1]!;
 
-    setMindmap(result.rootNode);
+    const focused = focusedRootId ? findNodeById(result.rootNode, focusedRootId) : null;
+    const visibleRoot = focused && findNodeById(focused, result.selectedNodeId) ? focused : result.rootNode;
+    if (focusedRootId && visibleRoot === result.rootNode) setFocusedRootId(null);
+    setMindmap(placeInsertedNodes(
+      result.rootNode, visibleRoot, result.selectedNodeIds, kind, availableNodeTypes, layoutDensity,
+    ));
     setSelectedNodeId(result.selectedNodeId);
     setSelectedNodeIds(result.selectedNodeIds);
+    setPendingRevealNodeId(result.selectedNodeId);
     editingSessionRef.current = shouldStartEditing
       ? { nodeId: editingNode.id }
       : null;
@@ -3853,13 +3877,6 @@ export function App() {
       parentNodeIds,
       availableNodeTypes,
       nodeTypeId,
-      (parentNode, childIndex) =>
-        parentNode.position
-          ? {
-              x: parentNode.position.x + POSITIONED_LAYOUT.nodeWidth + 80,
-              y: parentNode.position.y + childIndex * 96,
-            }
-          : undefined,
     );
 
     if (!result) {
@@ -3868,7 +3885,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeBatchCreation(result, options);
+    applyTypedNodeBatchCreation(result, 'child', options);
     showMessage('已新增下级主题');
   };
 
@@ -3895,18 +3912,6 @@ export function App() {
       selectedNodeIds,
       availableNodeTypes,
       nodeTypeId,
-      (siblingNode) => {
-        const parentNode = findParentNodeById(mindmap, siblingNode.id);
-        const siblingLayoutNode = layoutNodeById.get(siblingNode.id);
-
-        return parentNode?.position && siblingLayoutNode
-          ? {
-              x: parentNode.position.x,
-              y:
-                siblingLayoutNode.y - POSITIONED_LAYOUT.canvasPadding + 96,
-            }
-          : undefined;
-      },
     );
 
     if (!result) {
@@ -3915,7 +3920,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeBatchCreation(result, options);
+    applyTypedNodeBatchCreation(result, 'sibling', options);
     showMessage('已新增同级主题');
   };
 
@@ -3942,13 +3947,6 @@ export function App() {
       selectedNodeIds,
       availableNodeTypes,
       nodeTypeId,
-      (selected) =>
-        selected.position
-          ? {
-              x: selected.position.x - POSITIONED_LAYOUT.horizontalGap - 88,
-              y: selected.position.y,
-            }
-          : undefined,
     );
 
     if (!result) {
@@ -3957,7 +3955,7 @@ export function App() {
     }
 
     recordHistory();
-    applyTypedNodeBatchCreation(result, options);
+    applyTypedNodeBatchCreation(result, 'parent', options);
     showMessage('已新增上级主题');
   };
 
@@ -5649,14 +5647,22 @@ export function App() {
     }
   };
 
-  const showScriptMessages = (messages: ScriptShowMessageAction[]) => {
-    if (messages.length) setFeedbackDialog({ title: '插件消息', exportPaths: messages.map(item => item.exportPath?.trim()).filter((path): path is string => Boolean(path)), content: messages.map((item) => `${item.level === 'error' ? '错误：' : item.level === 'warning' ? '提示：' : ''}${item.message}`).join('\n\n') });
+  const showScriptMessages = (plugin: PluginManifest, messages: ScriptShowMessageAction[]) => {
+    if (!messages.length) return;
+    window.clearTimeout(messageTimerRef.current);
+    setMessage('');
+    setFeedbackDialog({ title: '插件消息', subtitle: plugin.name, messages });
   };
 
-  const selectPluginInputFile = async () => {
+  const selectPluginInputFile = async (readText = false) => {
     if (!isDesktopApp) throw new Error('插件文件路径导入仅支持桌面端。');
     const { invoke } = await import('../desktop/bridge');
-    return invoke<NonNullable<ScriptPluginContext['inputFile']> | null>('select_plugin_input_file');
+    const result = await invoke<ScriptPluginContext['inputFile'] | { error: string } | null>(
+      'select_plugin_input_file',
+      { readText },
+    );
+    if (result && 'error' in result) throw new Error(result.error);
+    return result ?? null;
   };
 
   const commitPluginActions = (actions: ScriptPluginAction[]) => {
@@ -5719,7 +5725,7 @@ export function App() {
       showMessage(`插件 manifest 无效：${pluginId}`);
       return;
     }
-    if (plugin.pluginType !== 'script') {
+    if (getPluginRunner(plugin) !== 'script') {
       showMessage(`插件不是 script 类型：${pluginId}`);
       return;
     }
@@ -5764,7 +5770,9 @@ export function App() {
 
     const scriptPath = `plugins/installed/${plugin.pluginId}/${plugin.entry}`;
     try {
-      const inputFile = plugin.capabilities.includes('import') ? await selectPluginInputFile() : undefined;
+      const inputFile = isFileImportPlugin(plugin)
+        ? await selectPluginInputFile(plugin.pluginType === 'importer')
+        : undefined;
       if (inputFile === null) return;
       recordPluginLog(
         'info',
@@ -5872,7 +5880,7 @@ export function App() {
           pluginId,
         );
       }
-      showScriptMessages(applied.messages);
+      showScriptMessages(plugin, applied.messages);
       setScriptRunResult(pluginId, {
         status: 'success',
         message: `已执行 ${applied.appliedCount} 个 actions。`,
@@ -6138,7 +6146,7 @@ export function App() {
           { menuId, actionCount: validation.actions.length, durationMs: duration() },
         );
       }
-      showScriptMessages(applied.messages);
+      showScriptMessages(plugin, applied.messages);
       const durationMs = duration();
       setWorkflowRunResult(pluginId, {
         status: 'success',
@@ -6217,8 +6225,8 @@ export function App() {
       return;
     }
     if (
-      plugin.pluginType !== 'external-command' ||
-      !plugin.runtime ||
+      getPluginRunner(plugin) !== 'external-command' ||
+      (plugin.runtime !== 'python' && plugin.runtime !== 'executable') ||
       !plugin.entry
     ) {
       showMessage(`插件不是有效的 external-command：${pluginId}`);
@@ -6266,7 +6274,7 @@ export function App() {
     }
 
     try {
-      const inputFile = plugin.capabilities.includes('import') ? await selectPluginInputFile() : undefined;
+      const inputFile = isFileImportPlugin(plugin) ? await selectPluginInputFile() : undefined;
       if (inputFile === null) return;
       const effectiveSelectedNodeId = contextNodeId ?? selectedNodeId;
       const context = createScriptPluginContext(
@@ -6460,7 +6468,7 @@ export function App() {
           { menuId, actionCount: validation.actions.length },
         );
       }
-      showScriptMessages(applied.messages);
+      showScriptMessages(plugin, applied.messages);
       setExternalRunResult(pluginId, {
         status: 'success',
         message: `已执行 ${applied.appliedCount} 个 actions。`,
@@ -6803,14 +6811,15 @@ export function App() {
   );
   const pluginCommandMenu = buildPluginCommandMenu(pluginMenuGroups.map((group) => {
     const plugin = plugins.find((candidate) => candidate.pluginId === group.pluginId);
-    const disabledReason = plugin?.pluginType === 'script' && !isScriptRunnerEnabled
+    const runner = getPluginRunner(plugin);
+    const disabledReason = runner === 'script' && !isScriptRunnerEnabled
       ? 'Script runner 未启用'
-      : plugin?.pluginType === 'external-command' && !isExternalRunnerEnabled
+      : runner === 'external-command' && !isExternalRunnerEnabled
         ? '外部命令 runner 未启用'
         : undefined;
-    const riskLabel = plugin?.pluginType === 'external-command'
+    const riskLabel = runner === 'external-command'
       ? '（严重风险）'
-      : plugin?.pluginType === 'script' && getPluginWritePermissions(plugin).length
+      : runner === 'script' && plugin && getPluginWritePermissions(plugin).length
         ? '（高风险）'
         : '';
     return {
@@ -6820,13 +6829,12 @@ export function App() {
     };
   }));
   const pluginImportItems = isDesktopApp ? plugins.flatMap((plugin) => {
-    if (!plugin.enabled || plugin.manifestValid === false || !plugin.capabilities.includes('import')) return [];
-    if (plugin.pluginType !== 'script' && plugin.pluginType !== 'external-command') return [];
-    const isScript = plugin.pluginType === 'script';
+    if (!plugin.enabled || plugin.manifestValid === false || !isFileImportPlugin(plugin)) return [];
+    const isScript = getPluginRunner(plugin) === 'script';
     const runnerEnabled = isScript ? isScriptRunnerEnabled : isExternalRunnerEnabled;
     return [{
       id: `plugin-import-${plugin.pluginId}`,
-      label: `通过 ${plugin.name} 导入…`,
+      label: plugin.pluginType === 'importer' ? `${plugin.name}…` : `通过 ${plugin.name} 导入…`,
       disabled: !runnerEnabled,
       disabledReason: runnerEnabled ? undefined : '请先启用对应的插件运行器',
       execute: () => void runPluginCommand(isScript ? 'plugin.runScript' : 'plugin.runExternal', plugin.pluginId),
@@ -7888,12 +7896,14 @@ export function App() {
       ) : null}
 
       {attachmentNodeId ? <AttachmentDialog key={attachmentNodeId} attachment={mindmapIndex.nodeById.get(attachmentNodeId)?.attachment} onSave={saveNodeAttachment} onClose={() => setAttachmentNodeId(null)} /> : null}
-      {imageAttachment?.kind === 'image' ? <FeedbackDialog title={imageAttachment.name} onClose={() => setImageAttachment(null)}><ImageAttachmentPreview key={imageAttachment.dataUrl} src={imageAttachment.dataUrl} name={imageAttachment.name} /></FeedbackDialog> : null}
+      {imageAttachment?.kind === 'image' ? <FeedbackDialog title={imageAttachment.name} wide onClose={() => setImageAttachment(null)}><ImageAttachmentPreview key={imageAttachment.dataUrl} src={imageAttachment.dataUrl} name={imageAttachment.name} /></FeedbackDialog> : null}
       {exportSelectionOpen ? <FeedbackDialog title="导出选中节点" onClose={() => setExportSelectionOpen(false)}><p>导出选中节点及其子节点；父子重复选择只导出一次。多个独立分支将放在同一中心主题下。</p><div className="plugin-manager-actions">{(['lmind', 'md', 'xlsx'] as const).map((format) => <button key={format} type="button" onClick={() => void handleExportSelection(format)}>导出 {format === 'lmind' ? 'LMIND（含附件）' : format === 'md' ? 'Markdown' : 'Excel'}</button>)}</div></FeedbackDialog> : null}
       {feedbackDialog ? <FeedbackDialog {...feedbackDialog} onClose={() => {
-        const paths = feedbackDialog.exportPaths ?? [];
         setFeedbackDialog(null);
-        for (const path of paths) void handleOpenExportedPluginLocation(path);
+        if ('messages' in feedbackDialog) {
+          const paths = new Set(feedbackDialog.messages.map((item) => item.exportPath?.trim()).filter(Boolean));
+          for (const path of paths) if (path) void handleOpenExportedPluginLocation(path);
+        }
       }} /> : null}
 
       {isShortcutHelpVisible ? (
