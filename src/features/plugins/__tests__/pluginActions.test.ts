@@ -419,6 +419,28 @@ describe('Script Plugin Action validation', () => {
 });
 
 describe('Expanded plugin import and batch protocol', () => {
+  it.each(['', ' \t', '\u00a0\u3000'])('resolves Excel type IDs with surrounding whitespace %j throughout addChildNodes trees', (padding) => {
+    const specialType = { ...taskType, id: '190ccefd-c339-447e-955d-86e95d52012f' };
+    const result = validateScriptPluginActions([{
+      type: 'addChildNodes', parentId: 'root', nodes: [
+        { text: 'Imported title', type: `${padding}${specialType.id}${padding}`, children: [
+          { text: 'Nested title', nodeTypeId: `\u00a0${specialType.id}\u3000`, remark: '' },
+          { text: 'Unknown', type: ' missing ', nodeTypeId: specialType.id },
+          { text: 'Default' },
+        ] },
+      ],
+    }], rootNode);
+    if (!result.valid) throw new Error(result.error);
+    const added = applyScriptPluginActions(rootNode, result.actions, [specialType]).rootNode.children[1];
+    expect(added).toMatchObject({ text: 'Imported title', nodeTypeId: specialType.id, remark: specialType.defaultRemark });
+    expect(getEffectiveNodeStyle(added, specialType)).toMatchObject({ backgroundColor: '#ffff00', shape: 'pill' });
+    expect(added.children[0]).toMatchObject({ text: 'Nested title', nodeTypeId: specialType.id, remark: '' });
+    for (const child of added.children.slice(1)) {
+      expect(child.nodeTypeId).toBeUndefined();
+      expect(getEffectiveNodeStyle(child)).toEqual(DEFAULT_NODE_STYLE);
+    }
+  });
+
   it('adds 1000 nodes in a single action and falls back to the default type', () => {
     const result = validateScriptPluginActions([{ type: 'addChildNodes', parentId: 'root', nodes: Array.from({ length: 1000 }, () => ({ text: 'Imported', type: 'missing' })) }], rootNode);
     expect(result.valid).toBe(true);

@@ -647,7 +647,9 @@ export function applyScriptPluginActions(
       id = crypto.randomUUID();
     } while (originalNodes.has(id) || generatedIds.has(id));
     generatedIds.add(id);
-    const type = typesById.get(node.type ?? node.nodeTypeId ?? '');
+    // Spreadsheet cells and copied IDs can contain surrounding whitespace.
+    // Keep type's precedence over the legacy field, including unknown IDs.
+    const type = typesById.get((node.type ?? node.nodeTypeId ?? '').trim());
     return {
       id,
       text: node.text,
