@@ -66,7 +66,7 @@ fs.writeFileSync(path.join(path.dirname(manifestPath), 'main.js'), `function run
   if (input.path !== ${JSON.stringify(input)} || input.name !== "本地 输入.data" || "text" in input) throw Error("inputFile mismatch");
   return [
     {type:"updateNode",nodeId:"source",patch:{text:input.name}},
-    {type:"addChildNode",parentId:"source",node:{text:"导入分支",type:"stats",children:[{text:"导入后代",type:"missing"}]}}
+    {type:"addChildNodes",parentId:"source",nodes:[{text:"导入分支",type:" stats ",children:[{text:"导入后代",type:"missing"},{text:"指定类型后代",nodeTypeId:" stats "}]}]}
   ];
 }`);
 process.argv.push(project);
@@ -150,6 +150,10 @@ app.on('browser-window-created', (_event, win) => {
       assert.equal(await js('document.body.textContent.includes("本地 输入.data")'), true);
       assert.equal(await js(`Array.from(document.querySelectorAll('.mindmap-node')).find(node =>
         node.textContent.includes('导入分支')).style.getPropertyValue('--node-bg')`), '#ffff00');
+      assert.equal(await js(`Array.from(document.querySelectorAll('.mindmap-node')).find(node =>
+        node.textContent.includes('指定类型后代')).style.getPropertyValue('--node-bg')`), '#ffff00');
+      assert.equal(await js(`Array.from(document.querySelectorAll('.mindmap-node')).find(node =>
+        node.textContent.includes('导入后代')).style.getPropertyValue('--node-bg')`), '#edf4f7');
 
       await runImport();
       await waitFor('document.body.textContent.includes("全新导图")');

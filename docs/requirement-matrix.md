@@ -256,3 +256,11 @@ STORE-002 / UX-003：补齐安装关联声明、启动参数解析及空白导�
 ## Windows 7 SP1 内网便携版
 
 ENV-001 / SCOPE-001 / PLATFORM-004：标准版维持 Windows 10 及以上的基线。新增 [Windows 7 SP1 便携构建及内网验收说明](windows-7-portable.md)，包含 x64、32 位两个目标，沿用 `.lmind` 文件格式。Win7 实机验收单独记录，不计入标准版 Windows 验收。
+
+## 2026-11-19 插件导入节点类型匹配修复
+
+PLUGIN-005 / PLUGIN-006 / NODETYPE-010：插件新增节点的 `type`（兼容 `nodeTypeId`）在查找类型前去除首尾空白，避免 Excel 单元格或复制的 ID 带空白时错误回退默认类型。递归子节点共用此规则；未知 ID 仍回退默认类型，`type` 优先级与备注继承规则保持不变。
+
+修改文件：`src/features/plugins/pluginScriptActions.ts`、`src/features/plugins/__tests__/pluginActions.test.ts`、`electron/plugin-import-smoke.cjs`、`docs/plugin-development.md`、本矩阵。
+
+验证命令：`npm test`、`npm run build`、`.\node_modules\.bin\electron.cmd electron/plugin-import-smoke.cjs`、`git diff --check`。回归覆盖完整 UUID、首尾空白、多层类型应用、默认回退，以及桌面实际导入后的颜色和撤销。尚未取得用户 Excel 插件的实际返回节点对象，不能据此确认用户报告的具体故障一定由空白导致；本次未进行安装包及 macOS/信创实机验证。
